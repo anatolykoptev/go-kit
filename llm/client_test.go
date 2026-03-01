@@ -520,3 +520,217 @@ func TestStream_Error(t *testing.T) {
 		t.Fatal("expected error for 400 status")
 	}
 }
+
+func TestExtract_Success(t *testing.T) {
+	srv := newTestServer(t, chatHandler(`{"name":"Alice","age":30}`, nil, "stop"))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	var result struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	err := c.Extract(context.Background(),
+		[]llm.Message{{Role: "user", Content: "info"}},
+		&result,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Name != "Alice" || result.Age != 30 {
+		t.Errorf("got %+v, want Alice/30", result)
+	}
+}
+
+func TestExtract_ValidationRetry(t *testing.T) {
+	type person struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	var calls atomic.Int32
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			chatHandler(`{"name":"","age":0}`, nil, "stop")(w, r)
+		} else {
+			chatHandler(`{"name":"Alice","age":30}`, nil, "stop")(w, r)
+		}
+	})
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	var result person
+	err := c.Extract(context.Background(),
+		[]llm.Message{{Role: "user", Content: "info"}},
+		&result,
+		llm.WithValidator(func(v any) error {
+			p := v.(*person)
+			if p.Name == "" {
+				return fmt.Errorf("name is required")
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Name != "Alice" {
+		t.Errorf("Name = %q, want Alice", result.Name)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("calls = %d, want 2 (retry on validation)", calls.Load())
+	}
+}
+
+func TestExtract_ExhaustedRetries(t *testing.T) {
+	srv := newTestServer(t, chatHandler(`{"name":""}`, nil, "stop"))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	type person struct {
+		Name string `json:"name"`
+	}
+	var result person
+	err := c.Extract(context.Background(),
+		[]llm.Message{{Role: "user", Content: "info"}},
+		&result,
+		llm.WithValidator(func(v any) error {
+			p := v.(*person)
+			if p.Name == "" {
+				return fmt.Errorf("name is required")
+			}
+			return nil
+		}),
+		llm.WithExtractRetries(2),
+	)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("error = %q, want to contain 'validation failed'", err)
+	}
+}
+
+func TestEndpoints_Fallback(t *testing.T) {
+	primary := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	fallback := newTestServer(t, chatHandler("from fallback", nil, "stop"))
+
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: primary.URL, Key: "key1", Model: "fast"},
+			{URL: fallback.URL, Key: "key2", Model: "big"},
+		}),
+		llm.WithMaxRetries(1),
+	)
+
+	result, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "from fallback" {
+		t.Errorf("result = %q, want %q", result, "from fallback")
+	}
+}
+
+func TestEndpoints_ModelOverride(t *testing.T) {
+	var capturedModel string
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		capturedModel, _ = req["model"].(string)
+		chatHandler("ok", nil, "stop")(w, r)
+	})
+
+	c := llm.NewClient("", "", "default-model",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: srv.URL, Key: "key", Model: "custom-model"},
+		}),
+	)
+
+	_, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedModel != "custom-model" {
+		t.Errorf("model = %q, want %q", capturedModel, "custom-model")
+	}
+}
+
+func TestEndpoints_StreamFallback(t *testing.T) {
+	primary := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	fallback := newTestServer(t, sseHandler([]string{
+		`{"choices":[{"delta":{"content":"Hi"},"finish_reason":""}]}`,
+	}))
+
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: primary.URL, Key: "key1", Model: "fast"},
+			{URL: fallback.URL, Key: "key2", Model: "big"},
+		}),
+	)
+
+	stream, err := c.Stream(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, ok := stream.Next()
+	if !ok {
+		t.Fatal("expected at least one chunk")
+	}
+	if chunk.Delta != "Hi" {
+		t.Errorf("delta = %q, want Hi", chunk.Delta)
+	}
+}
+
+func TestMiddleware_Called(t *testing.T) {
+	srv := newTestServer(t, chatHandler("ok", nil, "stop"))
+
+	var called bool
+	c := llm.NewClient(srv.URL, "key", "model",
+		llm.WithMiddleware(func(ctx context.Context, req *llm.ChatRequest, next func(context.Context, *llm.ChatRequest) (*llm.ChatResponse, error)) (*llm.ChatResponse, error) {
+			called = true
+			return next(ctx, req)
+		}),
+	)
+
+	_, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("middleware should have been called")
+	}
+}
+
+func TestMiddleware_Chain(t *testing.T) {
+	srv := newTestServer(t, chatHandler("ok", nil, "stop"))
+
+	var order []string
+	mw := func(name string) llm.Middleware {
+		return func(ctx context.Context, req *llm.ChatRequest, next func(context.Context, *llm.ChatRequest) (*llm.ChatResponse, error)) (*llm.ChatResponse, error) {
+			order = append(order, name+":before")
+			resp, err := next(ctx, req)
+			order = append(order, name+":after")
+			return resp, err
+		}
+	}
+
+	c := llm.NewClient(srv.URL, "key", "model",
+		llm.WithMiddleware(mw("first")),
+		llm.WithMiddleware(mw("second")),
+	)
+
+	_, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "first:before,second:before,second:after,first:after"
+	got := strings.Join(order, ",")
+	if got != want {
+		t.Errorf("order = %q, want %q", got, want)
+	}
+}
