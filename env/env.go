@@ -112,6 +112,52 @@ func FloatE(key string, def float64) (float64, error) {
 	return f, nil
 }
 
+// Uint returns the environment variable as a uint, or def if not set or invalid.
+func Uint(key string, def uint) uint {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseUint(v, 10, strconv.IntSize); err == nil {
+			return uint(n)
+		}
+	}
+	return def
+}
+
+// UintE is like Uint but returns a ParseError if the variable is set but not a valid uint.
+func UintE(key string, def uint) (uint, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseUint(v, 10, strconv.IntSize)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "uint", Err: err}
+	}
+	return uint(n), nil
+}
+
+// Uint64 returns the environment variable as uint64, or def if not set or invalid.
+func Uint64(key string, def uint64) uint64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// Uint64E is like Uint64 but returns a ParseError if the variable is set but not a valid uint64.
+func Uint64E(key string, def uint64) (uint64, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "uint64", Err: err}
+	}
+	return n, nil
+}
+
 // Bool returns the environment variable as a bool, or def if not set.
 // Truthy: "true", "1", "yes" (case-insensitive).
 // Falsy: "false", "0", "no" (case-insensitive).

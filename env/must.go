@@ -39,6 +39,24 @@ func MustFloat(key string, def float64) float64 {
 	return v
 }
 
+// MustUint is like Uint but panics if the variable is set to an invalid uint.
+func MustUint(key string, def uint) uint {
+	v, err := UintE(key, def)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// MustUint64 is like Uint64 but panics if the variable is set to an invalid uint64.
+func MustUint64(key string, def uint64) uint64 {
+	v, err := Uint64E(key, def)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 // MustBool is like Bool but panics if the variable is set to an unrecognized value.
 func MustBool(key string, def bool) bool {
 	v, err := BoolE(key, def)
