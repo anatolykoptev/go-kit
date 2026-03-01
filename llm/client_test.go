@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -239,5 +240,249 @@ func TestComplete_NoSystemPrompt(t *testing.T) {
 	_, err := c.Complete(context.Background(), "", "user only")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// chatHandler returns a handler that sends a full ChatResponse JSON.
+func chatHandler(content string, toolCalls []llm.ToolCall, finishReason string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		msg := map[string]any{"content": content}
+		if len(toolCalls) > 0 {
+			msg["tool_calls"] = toolCalls
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": msg, "finish_reason": finishReason},
+			},
+			"usage": map[string]int{
+				"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
+			},
+		})
+	}
+}
+
+// sseHandler returns a handler that streams SSE chunks.
+func sseHandler(chunks []string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func TestChat_Usage(t *testing.T) {
+	srv := newTestServer(t, chatHandler("hello", nil, "stop"))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	resp, err := c.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("Usage should not be nil")
+	}
+	if resp.Usage.TotalTokens != 30 {
+		t.Errorf("TotalTokens = %d, want 30", resp.Usage.TotalTokens)
+	}
+	if resp.Usage.PromptTokens != 10 {
+		t.Errorf("PromptTokens = %d, want 10", resp.Usage.PromptTokens)
+	}
+}
+
+func TestChat_ToolCalls(t *testing.T) {
+	calls := []llm.ToolCall{{
+		ID:   "call_1",
+		Type: "function",
+		Function: llm.FunctionCall{
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}}
+	srv := newTestServer(t, chatHandler("", calls, "tool_calls"))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	resp, err := c.Chat(context.Background(), []llm.Message{{Role: "user", Content: "weather?"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls len = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("function name = %q, want %q", resp.ToolCalls[0].Function.Name, "get_weather")
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "tool_calls")
+	}
+}
+
+func TestChat_WithTools(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		tools, ok := req["tools"].([]any)
+		if !ok || len(tools) != 1 {
+			t.Errorf("tools len = %v, want 1", req["tools"])
+		}
+		chatHandler("ok", nil, "stop")(w, r)
+	})
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	tool := llm.NewTool("search", "Search the web", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+	})
+	_, err := c.Chat(context.Background(),
+		[]llm.Message{{Role: "user", Content: "search"}},
+		llm.WithTools([]llm.Tool{tool}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestChat_FinishReason(t *testing.T) {
+	srv := newTestServer(t, chatHandler("done", nil, "length"))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	resp, err := c.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+}
+
+func TestChatTyped(t *testing.T) {
+	srv := newTestServer(t, chatHandler(`{"name":"Alice","age":30}`, nil, "stop"))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	var result struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	err := c.ChatTyped(context.Background(), []llm.Message{{Role: "user", Content: "info"}}, &result)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Name != "Alice" {
+		t.Errorf("Name = %q, want %q", result.Name, "Alice")
+	}
+	if result.Age != 30 {
+		t.Errorf("Age = %d, want 30", result.Age)
+	}
+}
+
+func TestSchemaOf(t *testing.T) {
+	type Example struct {
+		Name    string   `json:"name"`
+		Age     int      `json:"age"`
+		Tags    []string `json:"tags"`
+		Score   float64  `json:"score,omitempty"`
+		Address *string  `json:"address"`
+	}
+
+	schema := llm.SchemaOf(Example{})
+	if schema["type"] != "object" {
+		t.Errorf("type = %v, want object", schema["type"])
+	}
+	props := schema["properties"].(map[string]any)
+	if props["name"].(map[string]any)["type"] != "string" {
+		t.Error("name should be string")
+	}
+	if props["age"].(map[string]any)["type"] != "integer" {
+		t.Error("age should be integer")
+	}
+	tags := props["tags"].(map[string]any)
+	if tags["type"] != "array" {
+		t.Error("tags should be array")
+	}
+	required := schema["required"].([]string)
+	// "score" has omitempty, "address" is pointer — both should be optional.
+	for _, r := range required {
+		if r == "score" {
+			t.Error("score (omitempty) should not be required")
+		}
+		if r == "address" {
+			t.Error("address (pointer) should not be required")
+		}
+	}
+}
+
+func TestStream_Basic(t *testing.T) {
+	chunks := []string{
+		`{"choices":[{"delta":{"content":"Hello"},"finish_reason":""}]}`,
+		`{"choices":[{"delta":{"content":" World"},"finish_reason":""}]}`,
+		`{"choices":[{"delta":{"content":""},"finish_reason":"stop"}]}`,
+	}
+	srv := newTestServer(t, sseHandler(chunks))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	stream, err := c.Stream(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer stream.Close()
+
+	var content string
+	for chunk, ok := stream.Next(); ok; chunk, ok = stream.Next() {
+		content += chunk.Delta
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if content != "Hello World" {
+		t.Errorf("content = %q, want %q", content, "Hello World")
+	}
+}
+
+func TestStream_Usage(t *testing.T) {
+	chunks := []string{
+		`{"choices":[{"delta":{"content":"hi"},"finish_reason":""}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}`,
+	}
+	srv := newTestServer(t, sseHandler(chunks))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	stream, err := c.Stream(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer stream.Close()
+
+	for _, ok := stream.Next(); ok; _, ok = stream.Next() {
+	}
+	usage := stream.Usage()
+	if usage == nil {
+		t.Fatal("Usage should not be nil after streaming")
+	}
+	if usage.TotalTokens != 6 {
+		t.Errorf("TotalTokens = %d, want 6", usage.TotalTokens)
+	}
+}
+
+func TestStream_Error(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("bad request"))
+	})
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	_, err := c.Stream(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err == nil {
+		t.Fatal("expected error for 400 status")
 	}
 }
