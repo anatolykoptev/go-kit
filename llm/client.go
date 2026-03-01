@@ -34,6 +34,8 @@ type Client struct {
 	httpClient   *http.Client
 	fallbackKeys []string
 	maxRetries   int
+	endpoints    []Endpoint
+	middleware   []Middleware
 }
 
 // Option configures the Client.
@@ -62,6 +64,30 @@ func WithTemperature(t float64) Option {
 // WithMaxRetries sets how many times to retry on retryable errors.
 func WithMaxRetries(n int) Option {
 	return func(c *Client) { c.maxRetries = n }
+}
+
+// Endpoint defines a complete API endpoint for fallback chains.
+// Each endpoint can have its own URL, API key, and model.
+type Endpoint struct {
+	URL   string
+	Key   string
+	Model string
+}
+
+// WithEndpoints sets fallback endpoint chains. Each endpoint is tried
+// in order on retryable errors. Overrides the base URL/key/model when set.
+func WithEndpoints(endpoints []Endpoint) Option {
+	return func(c *Client) { c.endpoints = endpoints }
+}
+
+// Middleware wraps chat completion calls. Use for logging, metrics, caching.
+// The next function sends the request to the API (or the next middleware).
+// First added middleware is the outermost wrapper.
+type Middleware func(ctx context.Context, req *ChatRequest, next func(context.Context, *ChatRequest) (*ChatResponse, error)) (*ChatResponse, error)
+
+// WithMiddleware adds a middleware to the execution pipeline.
+func WithMiddleware(m Middleware) Option {
+	return func(c *Client) { c.middleware = append(c.middleware, m) }
 }
 
 // NewClient creates a new LLM client.
@@ -107,7 +133,8 @@ type ImagePart struct {
 	MIMEType string // optional
 }
 
-type chatRequest struct {
+// ChatRequest is a chat completion request. Exported for use with Middleware.
+type ChatRequest struct {
 	Model          string    `json:"model"`
 	Messages       []Message `json:"messages"`
 	Temperature    float64   `json:"temperature"`
@@ -174,8 +201,8 @@ func (c *Client) CompleteRaw(ctx context.Context, messages []Message, opts ...Ch
 	return resp.Content, nil
 }
 
-func (c *Client) newRequest(messages []Message) *chatRequest {
-	return &chatRequest{
+func (c *Client) newRequest(messages []Message) *ChatRequest {
+	return &ChatRequest{
 		Model:       c.model,
 		Messages:    messages,
 		Temperature: c.temperature,
@@ -183,8 +210,43 @@ func (c *Client) newRequest(messages []Message) *chatRequest {
 	}
 }
 
-func (c *Client) execute(ctx context.Context, req *chatRequest) (*ChatResponse, error) {
-	result, err := c.doWithRetry(ctx, c.apiKey, req)
+func (c *Client) execute(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	if len(c.middleware) == 0 {
+		return c.executeInner(ctx, req)
+	}
+	return c.buildChain(0)(ctx, req)
+}
+
+func (c *Client) buildChain(i int) func(context.Context, *ChatRequest) (*ChatResponse, error) {
+	if i >= len(c.middleware) {
+		return c.executeInner
+	}
+	return func(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+		return c.middleware[i](ctx, req, c.buildChain(i+1))
+	}
+}
+
+func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	if len(c.endpoints) > 0 {
+		var lastErr error
+		for _, ep := range c.endpoints {
+			epReq := *req
+			if ep.Model != "" {
+				epReq.Model = ep.Model
+			}
+			result, err := c.doWithRetry(ctx, ep.URL, ep.Key, &epReq)
+			if err == nil {
+				return result, nil
+			}
+			lastErr = err
+			var re *retryableError
+			if !asRetryable(err, &re) {
+				return nil, err
+			}
+		}
+		return nil, lastErr
+	}
+	result, err := c.doWithRetry(ctx, c.baseURL, c.apiKey, req)
 	if err == nil {
 		return result, nil
 	}
@@ -192,7 +254,7 @@ func (c *Client) execute(ctx context.Context, req *chatRequest) (*ChatResponse, 
 		if key == "" {
 			continue
 		}
-		result, err = c.doWithRetry(ctx, key, req)
+		result, err = c.doWithRetry(ctx, c.baseURL, key, req)
 		if err == nil {
 			return result, nil
 		}
@@ -200,7 +262,7 @@ func (c *Client) execute(ctx context.Context, req *chatRequest) (*ChatResponse, 
 	return nil, err
 }
 
-func (c *Client) doWithRetry(ctx context.Context, apiKey string, req *chatRequest) (*ChatResponse, error) {
+func (c *Client) doWithRetry(ctx context.Context, baseURL, apiKey string, req *ChatRequest) (*ChatResponse, error) {
 	delay := retryDelay
 	var lastErr error
 
@@ -214,7 +276,7 @@ func (c *Client) doWithRetry(ctx context.Context, apiKey string, req *chatReques
 			delay = min(delay*2, maxRetryDelay)
 		}
 
-		result, err := c.doRequest(ctx, apiKey, req)
+		result, err := c.doRequest(ctx, baseURL, apiKey, req)
 		if err == nil {
 			return result, nil
 		}
@@ -229,13 +291,13 @@ func (c *Client) doWithRetry(ctx context.Context, apiKey string, req *chatReques
 	return nil, lastErr
 }
 
-func (c *Client) doRequest(ctx context.Context, apiKey string, req *chatRequest) (*ChatResponse, error) {
+func (c *Client) doRequest(ctx context.Context, baseURL, apiKey string, req *ChatRequest) (*ChatResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
