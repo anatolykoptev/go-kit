@@ -67,7 +67,7 @@ type chatConfig struct {
 	maxTokens      *int
 }
 
-func (cfg *chatConfig) apply(req *chatRequest) {
+func (cfg *chatConfig) apply(req *ChatRequest) {
 	if cfg.tools != nil {
 		req.Tools = cfg.tools
 	}

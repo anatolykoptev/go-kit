@@ -98,7 +98,26 @@ func (c *Client) Stream(ctx context.Context, messages []Message, opts ...ChatOpt
 	req.Stream = true
 	cfg.apply(req)
 
-	// Try primary key, then fallbacks.
+	if len(c.endpoints) > 0 {
+		var lastErr error
+		for _, ep := range c.endpoints {
+			epReq := *req
+			if ep.Model != "" {
+				epReq.Model = ep.Model
+			}
+			sr, err := c.doStreamRequest(ctx, ep.URL, ep.Key, &epReq)
+			if err == nil {
+				return sr, nil
+			}
+			lastErr = err
+			var re *retryableError
+			if !asRetryable(err, &re) {
+				return nil, err
+			}
+		}
+		return nil, lastErr
+	}
+
 	keys := make([]string, 0, 1+len(c.fallbackKeys))
 	keys = append(keys, c.apiKey)
 	keys = append(keys, c.fallbackKeys...)
@@ -108,7 +127,7 @@ func (c *Client) Stream(ctx context.Context, messages []Message, opts ...ChatOpt
 		if key == "" {
 			continue
 		}
-		sr, err := c.doStreamRequest(ctx, key, req)
+		sr, err := c.doStreamRequest(ctx, c.baseURL, key, req)
 		if err == nil {
 			return sr, nil
 		}
@@ -121,13 +140,13 @@ func (c *Client) Stream(ctx context.Context, messages []Message, opts ...ChatOpt
 	return nil, lastErr
 }
 
-func (c *Client) doStreamRequest(ctx context.Context, apiKey string, req *chatRequest) (*StreamResponse, error) {
+func (c *Client) doStreamRequest(ctx context.Context, baseURL, apiKey string, req *ChatRequest) (*StreamResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
