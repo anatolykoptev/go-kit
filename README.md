@@ -12,7 +12,7 @@ go get github.com/anatolykoptev/go-kit
 |---------|------|------|
 | [`env`](#env) | Environment variable parsing | stdlib |
 | [`llm`](#llm) | OpenAI-compatible LLM client with streaming, tool calling, structured output | stdlib |
-| [`cache`](#cache) | L1 memory cache with S3-FIFO eviction | stdlib |
+| [`cache`](#cache) | L1 memory + L2 Redis tiered cache with S3-FIFO eviction | stdlib (L2: redis) |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks, rates, histograms, TTL | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
@@ -164,11 +164,26 @@ client = llm.NewClient(baseURL, apiKey, model,
 ```go
 import "github.com/anatolykoptev/go-kit/cache"
 
+// L1-only (no Redis dependency at runtime)
 c := cache.New(cache.Config{
-    L1MaxItems:    1000,
-    L1TTL:         30 * time.Minute,
-    JitterPercent: 0.1,  // ±10% TTL jitter prevents stampedes
+    L1MaxItems: 1000,
+    L1TTL:      30 * time.Minute,
 })
+
+// L1 + L2 Redis (read-through, write-through)
+c := cache.New(cache.Config{
+    L1MaxItems: 1000,
+    L1TTL:      30 * time.Minute,
+    RedisURL:   "redis://localhost:6379",
+    RedisDB:    0,
+    Prefix:     "myapp:",
+    L2TTL:      24 * time.Hour,
+})
+
+// Custom L2 store (testing or alternative backends)
+c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute})
+c.WithL2(myCustomStore)
+
 defer c.Close()
 
 c.Set(ctx, "key", data)
@@ -184,11 +199,15 @@ stats := c.Stats()
 fmt.Printf("Hit ratio: %.1f%%, Evictions: %d\n", stats.HitRatio*100, stats.Evictions)
 ```
 
+- L1 memory cache with S3-FIFO eviction for high hit rates
+- L2 Redis: optional, graceful degradation (L1-only if Redis unreachable)
+- Read-through: L1 miss → L2 hit → automatic L1 promotion
+- Write-through: Set/Delete propagate to both tiers
+- L2 interface: plug in custom backends for testing or alternatives
 - GetOrLoad with inline singleflight (prevents thundering herd)
 - TTL jitter (prevents cache stampedes)
 - Evictions counter + HitRatio in Stats
-- L1 memory cache with S3-FIFO eviction for high hit rates
-- Background cleanup, TTL expiry. L2 Redis planned.
+- Background cleanup, TTL expiry
 
 ### retry
 

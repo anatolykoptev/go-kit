@@ -147,7 +147,7 @@ func ExtractJSON(s string) string   // strip markdown fences, find { }
 
 ## Phase 3: cache — Tiered Cache (Priority: HIGH)
 
-**Status**: DONE (L1 only, L2 Redis TODO)
+**Status**: DONE
 
 **Problem**: 7 repos implement L1 (sync.Map + TTL) + L2 (Redis) caching. go-search/go-job/go-startup are near-identical (~300 LOC each).
 
@@ -367,7 +367,7 @@ of env, llm, cache, fetch, detect, prompts. One migration removes ~1,000 LOC of 
 |-------|---------|--------|----------|---------|-------|
 | 1 | env | **DONE** | HIGH | ~500 LOC | 8 |
 | 2 | llm | **DONE** | HIGH | ~950 LOC | 6 |
-| 3 | cache | **DONE** (L1) | HIGH | ~800 LOC | 7 |
+| 3 | cache | **DONE** | HIGH | ~800 LOC | 7 |
 | 4 | retry | **DONE** | MEDIUM | ~100 LOC | 2+ |
 | 5 | metrics | **DONE** | MEDIUM | ~300 LOC | 7 |
 | 6 | strutil | **DONE** | LOW | ~100 LOC | 4+ |
@@ -636,7 +636,7 @@ type Stats struct {
 
 ### Phase C: L2 Redis Integration
 
-**Status**: Not started (planned from initial roadmap)
+**Status**: DONE
 
 #### C1. Store Interface
 
