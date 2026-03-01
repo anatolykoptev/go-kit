@@ -415,3 +415,19 @@ func TestDurationE_Invalid(t *testing.T) {
 		t.Errorf("Type = %q, want %q", pe.Type, "duration")
 	}
 }
+
+func TestDuration_GoFormat(t *testing.T) {
+	t.Setenv("TEST_DUR_GO", "5s")
+	want := 5 * time.Second
+	if got := env.Duration("TEST_DUR_GO", 0); got != want {
+		t.Errorf("Duration = %v, want %v", got, want)
+	}
+}
+
+func TestDuration_GoFormatComplex(t *testing.T) {
+	t.Setenv("TEST_DUR_GO2", "2m30s")
+	want := 2*time.Minute + 30*time.Second
+	if got := env.Duration("TEST_DUR_GO2", 0); got != want {
+		t.Errorf("Duration = %v, want %v", got, want)
+	}
+}
