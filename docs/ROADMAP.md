@@ -680,7 +680,7 @@ func URL(key string, def string) *url.URL
 
 ### Phase C: Power Features (P2)
 
-**Status**: Not started
+**Status**: DONE
 
 ```go
 // Testability — decouple from os.Getenv
