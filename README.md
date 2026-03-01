@@ -298,9 +298,22 @@ s = strutil.ToCamelCase("my_variable")     // "myVariable"
 s = strutil.ToKebabCase("myVariableName")  // "my-variable-name"
 s = strutil.ToPascalCase("my_variable")    // "MyVariable"
 
+// Word wrap
+wrapped := strutil.WordWrap("long text here...", 80)
+
+// Clean invalid UTF-8
+clean := strutil.Scrub(untrustedInput)
+
+// Check all substrings present
+strutil.ContainsAll(s, []string{"foo", "bar"})
+
 ok := strutil.Contains([]string{"a", "b"}, "a")    // true
 ok = strutil.ContainsAny("hello world", []string{"world"}) // true
 ```
+
+- WordWrap: wrap text at word boundaries
+- Scrub: replace invalid UTF-8 with U+FFFD
+- ContainsAll: check all substrings present
 
 ## Consumers
 
