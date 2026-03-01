@@ -14,7 +14,7 @@ go get github.com/anatolykoptev/go-kit
 | [`llm`](#llm) | OpenAI-compatible LLM client with streaming, tool calling, structured output | stdlib |
 | [`cache`](#cache) | L1 memory cache with S3-FIFO eviction | stdlib |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
-| [`metrics`](#metrics) | Atomic operation counters | stdlib |
+| [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
 
 All packages are independent — no internal cross-imports. Import only what you need.
@@ -150,16 +150,36 @@ return "", retry.RetryAfter(5*time.Second, err)
 import "github.com/anatolykoptev/go-kit/metrics"
 
 reg := metrics.NewRegistry()
+
+// Counters (unchanged)
 reg.Incr("requests")
-reg.Add("bytes_sent", 1024)
+reg.Add("bytes", 1024)
 
-snap := reg.Snapshot()  // map[string]int64
-fmt.Print(reg.Format()) // "bytes_sent=1024\nrequests=1\n"
+// Gauges — track current values
+reg.Gauge("connections").Inc()
+reg.Gauge("cpu").Set(45.2)
+reg.Gauge("queue").Dec()
 
-err := reg.TrackOperation("api_calls", "api_errors", func() error {
-    return callAPI()
-})
+// Timer — one-liner duration tracking
+defer reg.StartTimer("api.latency").Stop()
+
+// Labels — dimensional metrics
+reg.Incr(metrics.Label("requests", "method", "GET"))
+reg.Incr(metrics.Label("requests", "method", "POST"))
+
+// Snapshot and reset (for periodic reporting)
+snap := reg.SnapshotAndReset() // reads + zeros atomically
+
+// Output formatting
+reg.WriteTo(os.Stdout, metrics.TextSink{})  // key=value lines
+reg.WriteTo(os.Stdout, metrics.JSONSink{})  // JSON object
 ```
+
+- Gauge type with lock-free float64 (Set/Add/Inc/Dec)
+- StartTimer/Stop for one-liner latency tracking
+- Label() for dimensional metric keys
+- SnapshotAndReset for atomic read-and-zero
+- Sink interface with TextSink and JSONSink
 
 ### strutil
 
