@@ -93,6 +93,41 @@ defer stream.Close()
 for chunk, ok := stream.Next(); ok; chunk, ok = stream.Next() {
     fmt.Print(chunk.Delta)
 }
+
+// Structured extraction with validation retry (Instructor-style)
+type Recipe struct {
+    Name        string   `json:"name"`
+    Ingredients []string `json:"ingredients"`
+}
+var recipe Recipe
+err := client.Extract(ctx, messages, &recipe,
+    llm.WithValidator(func(v any) error {
+        r := v.(*Recipe)
+        if len(r.Ingredients) == 0 {
+            return errors.New("need at least one ingredient")
+        }
+        return nil
+    }),
+)
+
+// Model-level fallback chains
+client = llm.NewClient("", "", "",
+    llm.WithEndpoints([]llm.Endpoint{
+        {URL: geminiURL, Key: key1, Model: "gemini-2.5-flash"},
+        {URL: openaiURL, Key: key2, Model: "gpt-4o"},
+    }),
+)
+
+// Request/response middleware
+client = llm.NewClient(baseURL, apiKey, model,
+    llm.WithMiddleware(func(ctx context.Context, req *llm.ChatRequest,
+        next func(context.Context, *llm.ChatRequest) (*llm.ChatResponse, error)) (*llm.ChatResponse, error) {
+        start := time.Now()
+        resp, err := next(ctx, req)
+        log.Printf("LLM call took %v", time.Since(start))
+        return resp, err
+    }),
+)
 ```
 
 - Retry on 429/5xx with exponential backoff
@@ -100,6 +135,9 @@ for chunk, ok := stream.Next(); ok; chunk, ok = stream.Next() {
 - SSE streaming via `Stream`/`Next`
 - Tool/function calling via `Chat` + `WithTools`
 - Structured output via `ChatTyped` + auto JSON Schema
+- Extract with validation retry (Instructor-style, no Go library does this)
+- Model-level endpoint fallback chains
+- Request/response middleware for logging, metrics, caching
 - Token usage reporting in `ChatResponse`
 - Multimodal support via `CompleteMultimodal`
 - JSON extraction from LLM output via `ExtractJSON`

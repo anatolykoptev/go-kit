@@ -453,9 +453,9 @@ fmt.Printf("Tokens: %d prompt, %d completion, %d cached\n",
 
 ### Phase B: Differentiators
 
-**Status**: Not started
+**Status**: DONE (B1 Extract, B2 Endpoints, B3 Middleware)
 
-#### B1. Instructor-Style Typed Extraction with Retry
+#### B1. Instructor-Style Typed Extraction with Retry — DONE
 
 ```go
 var result MyStruct
@@ -469,7 +469,7 @@ err := client.Extract(ctx, prompt, &result,
 - **No Go library does this well** (Python Instructor is the gold standard)
 - Killer feature that justifies the library's existence
 
-#### B2. Model-Level Fallback Chains
+#### B2. Model-Level Fallback Chains — DONE
 
 ```go
 client := llm.NewClient(
@@ -485,7 +485,7 @@ client := llm.NewClient(
 - Each endpoint can have its own base URL, key, model
 - Natural evolution of our existing `WithFallbackKeys`
 
-#### B3. Request/Response Middleware
+#### B3. Request/Response Middleware — DONE
 
 ```go
 client := llm.NewClient(baseURL, key, model,
