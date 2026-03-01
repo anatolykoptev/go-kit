@@ -549,9 +549,9 @@ Replace `crypto/sha256` with `hash/maphash` (stdlib, zero deps) or `hash/fnv`.
 
 ### Phase B: Modern API
 
-**Status**: Not started
+**Status**: DONE (B2 GetOrLoad/singleflight, B3 TTL jitter, B4 enhanced stats; B1 generics deferred — all consumers use []byte)
 
-#### B1. Generics
+#### B1. Generics — DEFERRED
 
 ```go
 type Cache[K comparable, V any] struct { ... }
@@ -563,29 +563,33 @@ func (c *Cache[K, V]) Set(key K, value V)
 - Every modern competitor uses generics
 - Eliminates `[]byte` serialization for in-memory use cases
 - Keep a `ByteCache = Cache[string, []byte]` alias for backward compat
+- **Deferred**: all 7 consumers use `[]byte` — generics add complexity without current benefit
 
-#### B2. GetOrLoad with Singleflight
+#### B2. GetOrLoad with Singleflight — DONE
 
 ```go
-func (c *Cache[K, V]) GetOrLoad(key K, loader func(K) (V, error)) (V, error)
+func (c *Cache) GetOrLoad(ctx context.Context, key string, loader func(ctx context.Context) ([]byte, error)) ([]byte, error)
 ```
 
 - Prevents thundering herd — 100 goroutines same key = 1 backend call
-- Single dep: `golang.org/x/sync/singleflight`
+- Inline singleflight (no external dependency)
 - Reference: otter, ttlcache, gocache all have this
 
-#### B3. TTL Jitter
+#### B3. TTL Jitter — DONE
 
 ```go
-func New[K, V](cfg Config) *Cache[K, V]  // cfg.JitterPercent float64 (default 0.1)
+c := cache.New(cache.Config{
+    L1TTL:         30 * time.Minute,
+    JitterPercent: 0.1,  // ±10% random jitter on each entry's TTL
+})
 ```
 
 - Many entries same TTL → all expire at once → cache stampede
-- Add 10% random jitter to each entry's TTL
+- Add configurable random jitter (default 10%) to each entry's TTL
 - Trivial implementation, prevents coordinated expiration spikes
 - Reference: samber/hot
 
-#### B4. Statistics
+#### B4. Statistics — DONE
 
 ```go
 type Stats struct {
@@ -596,7 +600,7 @@ type Stats struct {
 }
 ```
 
-- Track: hits, misses, hit ratio, evictions (by reason), current size
+- Track: hits, misses, hit ratio, evictions, current size
 - Use `atomic.Int64` counters (lock-free)
 - Reference: ristretto (comprehensive), otter
 
