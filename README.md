@@ -11,7 +11,7 @@ go get github.com/anatolykoptev/go-kit
 | Package | What | Deps |
 |---------|------|------|
 | [`env`](#env) | Environment variable parsing | stdlib |
-| [`llm`](#llm) | OpenAI-compatible LLM client with retry + fallback keys | stdlib |
+| [`llm`](#llm) | OpenAI-compatible LLM client with streaming, tool calling, structured output | stdlib |
 | [`cache`](#cache) | L1 memory cache with S3-FIFO eviction | stdlib |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic operation counters | stdlib |
@@ -71,11 +71,36 @@ client := llm.NewClient(baseURL, apiKey, model,
     llm.WithTemperature(0.1),
 )
 
+// Simple text completion (unchanged)
 response, err := client.Complete(ctx, systemPrompt, userPrompt)
+
+// Full chat with tool calling
+resp, err := client.Chat(ctx, messages,
+    llm.WithTools([]llm.Tool{
+        llm.NewTool("get_weather", "Get weather for a city", params),
+    }),
+)
+for _, call := range resp.ToolCalls { ... }
+fmt.Printf("Tokens: %d\n", resp.Usage.TotalTokens)
+
+// Structured output — auto-generates JSON Schema from struct
+var recipe Recipe
+err := client.ChatTyped(ctx, messages, &recipe)
+
+// SSE streaming
+stream, err := client.Stream(ctx, messages)
+defer stream.Close()
+for chunk, ok := stream.Next(); ok; chunk, ok = stream.Next() {
+    fmt.Print(chunk.Delta)
+}
 ```
 
 - Retry on 429/5xx with exponential backoff
 - Automatic fallback key cycling
+- SSE streaming via `Stream`/`Next`
+- Tool/function calling via `Chat` + `WithTools`
+- Structured output via `ChatTyped` + auto JSON Schema
+- Token usage reporting in `ChatResponse`
 - Multimodal support via `CompleteMultimodal`
 - JSON extraction from LLM output via `ExtractJSON`
 
