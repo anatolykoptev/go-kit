@@ -3,26 +3,28 @@
 > **Module**: `github.com/anatolykoptev/go-kit`
 >
 > **Goal**: Extract duplicated infrastructure code from 8 Go MCP servers into a single reusable module.
-> Estimated savings: ~3,150 LOC of copy-paste across repos.
+> Estimated savings: ~3,790 LOC of copy-paste across repos.
+> **Current version**: v0.3.0 | **Migrated**: 4/8 repos (go-search, go-job, go-wp, go-code)
 
 ## Organization
 
 **Monorepo** — один `go.mod`, один CI, один `go get`.
-Мелкие пакеты (env, retry, metrics, strutil, mcpboot) живут в go-kit навсегда.
+Мелкие пакеты (env, retry, metrics, strutil) живут в go-kit навсегда.
+mcpserver → отдельный репо (go-mcpserver), т.к. тянет зависимость mcp-go.
 Если llm или cache вырастут в сложности — выносим в отдельный репо (как go-stealth, go-imagefy).
 
 ## Consumers
 
-| Repo | Port | Duplication hotspots |
-|------|------|---------------------|
-| go-search | 8890 | env, llm, cache, retry, metrics, strutil |
-| go-job | 8891 | env, llm, cache, metrics, strutil |
-| go-hully | 8892 | env, cache, metrics |
-| go-startup | 8893 | env, llm, cache, metrics, strutil |
-| go-wp | 8894 | env (envutil), llm, cache, metrics |
-| go-content | 8895 | env, metrics |
-| gigiena-teksta | 8896 | env, llm, cache, metrics |
-| go-code | 8897 | env, llm, cache, retry, metrics |
+| Repo | Port | go-kit v0.3.0 | Migrated packages | Remaining |
+|------|------|:---:|---|---|
+| go-search | 8890 | **yes** | env, llm, metrics, retry, strutil | cache |
+| go-job | 8891 | **yes** | env, llm, metrics, strutil | cache |
+| go-wp | 8894 | **yes** | env, llm, metrics, strutil | cache |
+| go-code | 8897 | **yes** | env, llm, metrics | cache, retry |
+| go-hully | 8892 | no | — | env, cache, metrics |
+| go-startup | 8893 | no | — | env, llm, cache, metrics, strutil |
+| go-content | 8895 | no | — | env, metrics |
+| gigiena-teksta | 8896 | no | — | env, llm, cache, metrics |
 
 ## Already Extracted (reference)
 
@@ -45,12 +47,11 @@ go-kit/                         github.com/anatolykoptev/go-kit
   retry/                        — generic retry with exponential backoff (zero deps)
   metrics/                      — atomic operation counters (zero deps)
   strutil/                      — unicode-aware string helpers (zero deps)
-  mcpboot/                      — MCP server bootstrap (mcp-go dep)
   docs/
     ROADMAP.md                  — this file
 ```
 
-**Dependencies**: `redis/go-redis` (only for cache/), `mcp-go` (only for mcpboot/).
+**Dependencies**: `redis/go-redis` (only for cache/).
 Go module pruning ensures consumers that don't use cache/ won't pull redis.
 
 ---
@@ -284,30 +285,15 @@ func Slugify(s string) string                          // safe URL slugs
 
 ---
 
-## Phase 7: mcpboot — MCP Server Bootstrap (Priority: LOW)
+## Phase 7: mcpserver — MCP Server Bootstrap (Priority: HIGH)
 
-**Status**: Not started
+**Status**: Separate repo (`go-mcpserver`), handled by another agent.
 
-**Problem**: Every repo has similar `main()` with MCP server setup, stdio/HTTP transport, recovery middleware, graceful shutdown. ~30% overlap.
+**Reason for separation**: mcpserver pulls `mcp-go` dependency which is heavy and evolves
+independently. Keeping it in go-kit would force all consumers to pull mcp-go transitively.
+Separate repo allows independent versioning and release cycle.
 
-**Best source**: go-code `cmd/go-code/main.go` (cleanest separation)
-
-**Package API**:
-```go
-package mcpboot
-
-type ServerConfig struct {
-    Name    string
-    Version string
-    Port    string
-}
-
-func Run(cfg ServerConfig, setup func(server *mcp.Server)) error
-// Handles: stdio detection, HTTP/SSE transport, recovery middleware,
-// signal handling, graceful shutdown, slog configuration.
-```
-
-**Estimated savings**: ~400 LOC (but requires careful per-repo adaptation)
+**Estimated savings**: ~560 LOC → ~120 LOC shared
 
 ---
 
@@ -322,9 +308,9 @@ func Run(cfg ServerConfig, setup func(server *mcp.Server)) error
 
 ### Dependency direction:
 ```
-go-kit (stdlib + redis + mcp-go)
+go-kit (stdlib + redis), go-mcpserver (mcp-go)
   ↑
-go-stealth, go-imagefy, go-enriche (domain libs)
+go-stealth, go-imagefy, go-enriche, go-engine (domain libs)
   ↑
 go-search, go-code, go-wp, go-job, go-startup, go-hully, go-content, gigiena-teksta (services)
 ```
@@ -343,20 +329,64 @@ backward compat during transition.
 
 ---
 
+## Phases 8-10: Domain-Specific — Not go-kit Scope
+
+**Status**: Out of scope. These are domain-specific and belong in their respective repos.
+
+| Phase | Feature | Why not go-kit | Where it belongs |
+|-------|---------|----------------|------------------|
+| 8 | llm extensions (BuildSourcesText, SearchResult, StripFences) | SearchResult is search-engine domain logic; StripFences already covered by `llm.ExtractJSON` | `go-engine` |
+| 9 | strutil extensions (CleanHTML, UserAgentChrome) | CleanHTML is web scraping logic; UserAgentChrome is stealth/anti-bot | `go-enriche` (CleanHTML), `go-stealth` (UserAgent) |
+| 10 | metrics extensions (TrackOperation with slog) | Mixes metrics + logging concerns; current `Registry.TrackOperation` already covers metrics part | Not needed — consumers use existing API |
+
+**Principle**: go-kit = pure infrastructure with zero business logic.
+Domain-specific helpers belong in domain libraries (go-engine, go-enriche, go-stealth).
+
+---
+
+## Cross-Project Deduplication (not go-kit)
+
+These duplications are better solved by importing existing libraries, not by adding to go-kit:
+
+| Duplicate | Projects | Solution |
+|-----------|----------|----------|
+| `fetch_html.go` — trafilatura→goquery→regex content extraction (~180 LOC) | go-job, go-startup | Import `go-engine/fetch` (used by go-search) |
+| `DetectQueryType` — query classification (~66 LOC) | go-job, go-startup | Import `go-engine/text` |
+| `promptBase`, `promptDeep`, `TypeInstructions` — LLM prompt templates (~72 LOC) | go-job, go-startup | Import `go-engine/llm` |
+| Local `env()`/`envInt()` helpers (~40 LOC) | go-startup, go-hully | Import `go-kit/env` (already exists) |
+| SearXNG client (~132 LOC) | go-code (duplicate of go-engine) | Import `go-engine/search` or extract to go-kit |
+
+**go-startup is the biggest offender** — doesn't import go-kit or go-engine, has full inline copies
+of env, llm, cache, fetch, detect, prompts. One migration removes ~1,000 LOC of duplication.
+
+---
+
 ## Summary
 
-| Phase | Package | Priority | Savings | Repos affected |
-|-------|---------|----------|---------|----------------|
-| 1 | env | HIGH | ~500 LOC | 8 |
-| 2 | llm | HIGH | ~950 LOC | 6 |
-| 3 | cache | HIGH | ~800 LOC | 7 |
-| 4 | retry | MEDIUM | ~100 LOC | 2+ |
-| 5 | metrics | MEDIUM | ~300 LOC | 7 |
-| 6 | strutil | LOW | ~100 LOC | 4+ |
-| 7 | mcpboot | LOW | ~400 LOC | 8 |
-| **Total** | | | **~3,150 LOC** | **8 repos** |
+| Phase | Package | Status | Priority | Savings | Repos |
+|-------|---------|--------|----------|---------|-------|
+| 1 | env | **DONE** | HIGH | ~500 LOC | 8 |
+| 2 | llm | **DONE** | HIGH | ~950 LOC | 6 |
+| 3 | cache | **DONE** (L1) | HIGH | ~800 LOC | 7 |
+| 4 | retry | **DONE** | MEDIUM | ~100 LOC | 2+ |
+| 5 | metrics | **DONE** | MEDIUM | ~300 LOC | 7 |
+| 6 | strutil | **DONE** | LOW | ~100 LOC | 4+ |
+| 7 | mcpserver | **Separate repo** (go-mcpserver) | HIGH | ~560 LOC | 7 |
+| 8-10 | domain-specific | **Out of scope** → go-engine, go-enriche, go-stealth | — | ~480 LOC | — |
+| **Total (go-kit)** | | | | **~3,310 LOC** | **8 repos** |
 
-Special case: **go-startup + go-job** share 7+ identical engine files. After phases 2-3 (llm + cache), their `internal/engine/` overlap drops from ~1,300 LOC to ~400 LOC.
+### Migration rollout (go-kit v0.3.0):
+
+| Repo | Status | Migrated | Remaining |
+|------|--------|----------|-----------|
+| go-search | **done** | env, llm, metrics, retry, strutil | cache |
+| go-job | **done** | env, llm, metrics, strutil | cache |
+| go-wp | **done** | env, llm, metrics, strutil | cache |
+| go-code | **done** | env, llm, metrics | cache, retry |
+| go-hully | pending | — | env, cache, metrics |
+| go-startup | pending | — | env, llm, cache, metrics, strutil |
+| go-content | pending | — | env, metrics |
+| gigiena-teksta | pending | — | env, llm, cache, metrics |
 
 ---
 
