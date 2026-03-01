@@ -151,3 +151,46 @@ func TestInt64List_Empty(t *testing.T) {
 		t.Errorf("Int64List = %v, want nil", got)
 	}
 }
+
+func TestLookup_Set(t *testing.T) {
+	t.Setenv("TEST_LOOKUP", "value")
+	val, ok := env.Lookup("TEST_LOOKUP")
+	if !ok || val != "value" {
+		t.Errorf("Lookup = (%q, %v), want (%q, true)", val, ok, "value")
+	}
+}
+
+func TestLookup_SetEmpty(t *testing.T) {
+	t.Setenv("TEST_LOOKUP_EMPTY", "")
+	val, ok := env.Lookup("TEST_LOOKUP_EMPTY")
+	if !ok || val != "" {
+		t.Errorf("Lookup = (%q, %v), want (%q, true)", val, ok, "")
+	}
+}
+
+func TestLookup_NotSet(t *testing.T) {
+	_, ok := env.Lookup("TEST_LOOKUP_MISSING_XYZ")
+	if ok {
+		t.Error("Lookup should return false for unset variable")
+	}
+}
+
+func TestExists_True(t *testing.T) {
+	t.Setenv("TEST_EXISTS", "x")
+	if !env.Exists("TEST_EXISTS") {
+		t.Error("Exists should return true for set variable")
+	}
+}
+
+func TestExists_False(t *testing.T) {
+	if env.Exists("TEST_EXISTS_MISSING_XYZ") {
+		t.Error("Exists should return false for unset variable")
+	}
+}
+
+func TestExists_Empty(t *testing.T) {
+	t.Setenv("TEST_EXISTS_EMPTY", "")
+	if !env.Exists("TEST_EXISTS_EMPTY") {
+		t.Error("Exists should return true for set-but-empty variable")
+	}
+}
