@@ -163,3 +163,150 @@ func TestOptions_Defaults(t *testing.T) {
 		t.Errorf("result = %q, want %q", result, "ok")
 	}
 }
+
+// instantTimer implements retry.Timer for deterministic tests.
+// It records requested delays and returns immediately.
+type instantTimer struct {
+	delays []time.Duration
+}
+
+func (t *instantTimer) After(d time.Duration) <-chan time.Time {
+	t.delays = append(t.delays, d)
+	ch := make(chan time.Time, 1)
+	ch <- time.Now()
+	return ch
+}
+
+func TestDo_RetryAfter(t *testing.T) {
+	timer := &instantTimer{}
+	calls := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: time.Second,
+		Timer:        timer,
+	}, func() (string, error) {
+		calls++
+		if calls < 3 {
+			return "", retry.RetryAfter(5*time.Second, errors.New("rate limited"))
+		}
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// First retry should use RetryAfter duration (5s), not InitialDelay (1s).
+	if len(timer.delays) < 1 || timer.delays[0] != 5*time.Second {
+		t.Errorf("first delay = %v, want 5s (from RetryAfter)", timer.delays[0])
+	}
+}
+
+func TestRetryAfterError_Unwrap(t *testing.T) {
+	inner := errors.New("rate limited")
+	err := retry.RetryAfter(time.Second, inner)
+	if !errors.Is(err, inner) {
+		t.Error("RetryAfter error should unwrap to inner error")
+	}
+	var ra *retry.RetryAfterError
+	if !errors.As(err, &ra) {
+		t.Fatal("should be RetryAfterError")
+	}
+	if ra.Delay != time.Second {
+		t.Errorf("Delay = %v, want 1s", ra.Delay)
+	}
+}
+
+func TestDo_MaxElapsedTime(t *testing.T) {
+	calls := 0
+	start := time.Now()
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:    100,
+		InitialDelay:  10 * time.Millisecond,
+		MaxElapsedTime: 50 * time.Millisecond,
+	}, func() (string, error) {
+		calls++
+		return "", errors.New("fail")
+	})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if calls >= 100 {
+		t.Errorf("MaxElapsedTime should have stopped retries before 100 attempts, got %d", calls)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("elapsed %v, MaxElapsedTime should have capped it", elapsed)
+	}
+}
+
+func TestDo_Jitter(t *testing.T) {
+	timer := &instantTimer{}
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  5,
+		InitialDelay: 100 * time.Millisecond,
+		MaxDelay:     time.Second,
+		Jitter:       true,
+		Timer:        timer,
+	}, func() (string, error) {
+		return "", errors.New("fail")
+	})
+	if len(timer.delays) < 2 {
+		t.Fatal("expected at least 2 delays")
+	}
+	// With jitter, delays should be within ±25% of computed backoff.
+	// 100ms ±25% = [75ms, 125ms]
+	d := timer.delays[0]
+	if d < 75*time.Millisecond || d > 125*time.Millisecond {
+		t.Errorf("first delay %v not in jitter range [75ms, 125ms]", d)
+	}
+}
+
+func TestDo_Timer(t *testing.T) {
+	timer := &instantTimer{}
+	calls := 0
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: time.Second,
+		Timer:        timer,
+	}, func() (string, error) {
+		calls++
+		return "", errors.New("fail")
+	})
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3", calls)
+	}
+	// Timer should have been called twice (between attempt 1-2 and 2-3).
+	if len(timer.delays) != 2 {
+		t.Errorf("timer called %d times, want 2", len(timer.delays))
+	}
+}
+
+func TestHTTP_RetryAfterHeader(t *testing.T) {
+	timer := &instantTimer{}
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls < 2 {
+			w.Header().Set("Retry-After", "3")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	resp, err := retry.HTTP(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: 100 * time.Millisecond,
+		Timer:        timer,
+	}, func() (*http.Response, error) {
+		return http.Get(srv.URL) //nolint:noctx // test only
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+	// Timer should have received 3s delay (from Retry-After header), not 100ms.
+	if len(timer.delays) < 1 || timer.delays[0] != 3*time.Second {
+		t.Errorf("delay = %v, want 3s (from Retry-After header)", timer.delays[0])
+	}
+}
