@@ -131,6 +131,23 @@ func Bool(key string, def bool) bool {
 	}
 }
 
+// BoolE is like Bool but returns a ParseError if the variable is set
+// to an unrecognized value (not true/1/yes/false/0/no).
+func BoolE(key string, def bool) (bool, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	switch strings.ToLower(v) {
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return def, &ParseError{Key: key, Value: v, Type: "bool"}
+	}
+}
+
 // Duration returns the environment variable parsed as seconds (float),
 // or def if not set or invalid. E.g. "3.5" → 3.5s.
 func Duration(key string, def time.Duration) time.Duration {
@@ -140,6 +157,25 @@ func Duration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// DurationE is like Duration but returns a ParseError if the variable is set
+// but cannot be parsed. Accepts Go duration strings ("5s", "100ms", "2m30s")
+// and falls back to float seconds ("3.5" -> 3.5s) for backward compatibility.
+func DurationE(key string, def time.Duration) (time.Duration, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	// Try Go duration format first ("5s", "100ms", "2m30s").
+	if d, err := time.ParseDuration(v); err == nil {
+		return d, nil
+	}
+	// Fall back to float seconds for backward compat ("3.5" -> 3.5s).
+	if secs, err := strconv.ParseFloat(v, 64); err == nil {
+		return time.Duration(secs * float64(time.Second)), nil
+	}
+	return def, &ParseError{Key: key, Value: v, Type: "duration"}
 }
 
 // List returns a comma-separated environment variable as a trimmed string slice.
