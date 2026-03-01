@@ -210,7 +210,20 @@ resp, err := retry.HTTP(ctx, retry.Options{Jitter: true}, doRequest)
 
 // Override backoff from fn:
 return "", retry.RetryAfter(5*time.Second, err)
+
+// Abort on specific errors (never retry)
+retry.Do(ctx, retry.Options{
+    AbortOn: []error{context.DeadlineExceeded},
+}, fn)
+
+// Opt-in retry: only marked errors are retried
+retry.Do(ctx, retry.Options{RetryableOnly: true}, func() (T, error) {
+    return result, retry.MarkRetryable(err) // will retry
+})
 ```
+
+- AbortOn: never retry specific errors (e.g. context.DeadlineExceeded)
+- RetryableOnly + MarkRetryable: opt-in retry mode for production safety
 
 ### metrics
 
