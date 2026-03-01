@@ -98,3 +98,11 @@ func TestMustUint64_Panics(t *testing.T) {
 		env.MustUint64("TEST_MUSTUINT64_BAD", 0)
 	})
 }
+
+func TestMustURL_Valid(t *testing.T) {
+	t.Setenv("TEST_MUSTURL", "https://ok.com")
+	got := env.MustURL("TEST_MUSTURL", "")
+	if got == nil || got.Host != "ok.com" {
+		t.Errorf("MustURL = %v, want host ok.com", got)
+	}
+}

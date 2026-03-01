@@ -4,6 +4,7 @@
 package env
 
 import (
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -293,4 +294,41 @@ func Map(key, def string) map[string]string {
 		return nil
 	}
 	return m
+}
+
+// URL returns the environment variable parsed as a URL.
+// Returns the parsed def if the variable is not set or invalid.
+// Returns nil if both the variable and def are empty.
+func URL(key string, def string) *url.URL {
+	v := Str(key, def)
+	if v == "" {
+		return nil
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		if def != "" {
+			u, _ = url.Parse(def)
+			return u
+		}
+		return nil
+	}
+	return u
+}
+
+// URLE is like URL but returns a ParseError if the variable is set but not a valid URL.
+// If the variable is not set, returns the parsed def.
+func URLE(key string, def string) (*url.URL, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		if def == "" {
+			return nil, nil
+		}
+		u, _ := url.Parse(def)
+		return u, nil
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		return nil, &ParseError{Key: key, Value: v, Type: "url", Err: err}
+	}
+	return u, nil
 }
