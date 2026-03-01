@@ -1,6 +1,9 @@
 package env
 
-import "time"
+import (
+	"net/url"
+	"time"
+)
 
 // MustRequired returns the value of the environment variable named by key.
 // Panics if the variable is not set or empty. Intended for fail-fast startup validation.
@@ -69,6 +72,15 @@ func MustBool(key string, def bool) bool {
 // MustDuration is like Duration but panics if the variable is set to an invalid duration.
 func MustDuration(key string, def time.Duration) time.Duration {
 	v, err := DurationE(key, def)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// MustURL is like URL but panics if the variable is set to an invalid URL.
+func MustURL(key string, def string) *url.URL {
+	v, err := URLE(key, def)
 	if err != nil {
 		panic(err)
 	}

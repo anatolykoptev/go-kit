@@ -552,3 +552,65 @@ func TestMap_EmptyValue(t *testing.T) {
 		t.Errorf("key value = %q, want empty", got["key"])
 	}
 }
+
+func TestURL(t *testing.T) {
+	t.Setenv("TEST_URL", "https://example.com/path?q=1")
+	got := env.URL("TEST_URL", "")
+	if got == nil {
+		t.Fatal("URL returned nil")
+	}
+	if got.Host != "example.com" {
+		t.Errorf("Host = %q, want %q", got.Host, "example.com")
+	}
+	if got.Path != "/path" {
+		t.Errorf("Path = %q, want %q", got.Path, "/path")
+	}
+}
+
+func TestURL_Default(t *testing.T) {
+	got := env.URL("TEST_URL_MISSING", "https://default.com")
+	if got == nil {
+		t.Fatal("URL returned nil")
+	}
+	if got.Host != "default.com" {
+		t.Errorf("Host = %q, want %q", got.Host, "default.com")
+	}
+}
+
+func TestURL_Empty(t *testing.T) {
+	got := env.URL("TEST_URL_MISSING2", "")
+	if got != nil {
+		t.Errorf("URL = %v, want nil", got)
+	}
+}
+
+func TestURLE_Valid(t *testing.T) {
+	t.Setenv("TEST_URLE", "https://api.example.com/v1")
+	u, err := env.URLE("TEST_URLE", "")
+	if err != nil {
+		t.Fatalf("URLE error: %v", err)
+	}
+	if u.Host != "api.example.com" {
+		t.Errorf("Host = %q, want %q", u.Host, "api.example.com")
+	}
+}
+
+func TestURLE_NotSet(t *testing.T) {
+	u, err := env.URLE("TEST_URLE_MISSING", "https://fallback.com")
+	if err != nil {
+		t.Fatalf("URLE error: %v", err)
+	}
+	if u.Host != "fallback.com" {
+		t.Errorf("Host = %q, want %q", u.Host, "fallback.com")
+	}
+}
+
+func TestURLE_Empty(t *testing.T) {
+	u, err := env.URLE("TEST_URLE_EMPTY", "")
+	if err != nil {
+		t.Fatalf("URLE error: %v", err)
+	}
+	if u != nil {
+		t.Errorf("URLE = %v, want nil", u)
+	}
+}
