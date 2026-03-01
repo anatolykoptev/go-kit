@@ -2,6 +2,7 @@ package env_test
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -612,5 +613,143 @@ func TestURLE_Empty(t *testing.T) {
 	}
 	if u != nil {
 		t.Errorf("URLE = %v, want nil", u)
+	}
+}
+
+func TestMapSource(t *testing.T) {
+	orig := env.DefaultSource
+	t.Cleanup(func() { env.DefaultSource = orig })
+
+	env.DefaultSource = env.MapSource(map[string]string{
+		"KEY":  "value",
+		"PORT": "8080",
+	})
+
+	if got := env.Str("KEY", ""); got != "value" {
+		t.Errorf("Str = %q, want %q", got, "value")
+	}
+	if got := env.Int("PORT", 0); got != 8080 {
+		t.Errorf("Int = %d, want 8080", got)
+	}
+	if got := env.Str("MISSING", "def"); got != "def" {
+		t.Errorf("Str = %q, want %q", got, "def")
+	}
+}
+
+func TestMapSource_Lookup(t *testing.T) {
+	orig := env.DefaultSource
+	t.Cleanup(func() { env.DefaultSource = orig })
+
+	env.DefaultSource = env.MapSource(map[string]string{
+		"EMPTY": "",
+	})
+
+	v, ok := env.Lookup("EMPTY")
+	if !ok || v != "" {
+		t.Errorf("Lookup = (%q, %v), want (%q, true)", v, ok, "")
+	}
+	_, ok = env.Lookup("NOPE")
+	if ok {
+		t.Error("Lookup should return false for missing key")
+	}
+}
+
+func TestFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := tmp + "/secret"
+	if err := os.WriteFile(path, []byte("secret_value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SECRET_FILE", path)
+	got := env.File("SECRET_FILE", "")
+	if got != "secret_value" {
+		t.Errorf("File = %q, want %q", got, "secret_value")
+	}
+}
+
+func TestFile_Default(t *testing.T) {
+	got := env.File("FILE_MISSING_XYZ", "fallback")
+	if got != "fallback" {
+		t.Errorf("File = %q, want %q", got, "fallback")
+	}
+}
+
+func TestFileE_NotSet(t *testing.T) {
+	_, err := env.FileE("FILE_E_MISSING_XYZ")
+	if err == nil {
+		t.Fatal("FileE should return error when not set")
+	}
+	var notSet *env.NotSetError
+	if !errors.As(err, &notSet) {
+		t.Fatalf("error type = %T, want *NotSetError", err)
+	}
+}
+
+func TestExpand(t *testing.T) {
+	t.Setenv("HOST", "localhost")
+	t.Setenv("PORT", "5432")
+	t.Setenv("DB_URL", "postgres://${HOST}:${PORT}/mydb")
+
+	got := env.Expand("DB_URL", "")
+	want := "postgres://localhost:5432/mydb"
+	if got != want {
+		t.Errorf("Expand = %q, want %q", got, want)
+	}
+}
+
+func TestExpand_Default(t *testing.T) {
+	t.Setenv("EXPAND_HOST", "example.com")
+	got := env.Expand("EXPAND_MISSING_XYZ", "https://${EXPAND_HOST}")
+	if got != "https://example.com" {
+		t.Errorf("Expand = %q, want %q", got, "https://example.com")
+	}
+}
+
+func TestBase64(t *testing.T) {
+	// "hello world" = "aGVsbG8gd29ybGQ="
+	t.Setenv("B64_DATA", "aGVsbG8gd29ybGQ=")
+	got := env.Base64("B64_DATA", nil)
+	if string(got) != "hello world" {
+		t.Errorf("Base64 = %q, want %q", got, "hello world")
+	}
+}
+
+func TestBase64E_Invalid(t *testing.T) {
+	t.Setenv("B64_BAD", "not-valid-base64!!!")
+	_, err := env.Base64E("B64_BAD", nil)
+	if err == nil {
+		t.Fatal("Base64E should return error for invalid base64")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *ParseError", err)
+	}
+	if pe.Type != "base64" {
+		t.Errorf("Type = %q, want %q", pe.Type, "base64")
+	}
+}
+
+func TestHex(t *testing.T) {
+	// "hello" = "68656c6c6f"
+	t.Setenv("HEX_DATA", "68656c6c6f")
+	got := env.Hex("HEX_DATA", nil)
+	if string(got) != "hello" {
+		t.Errorf("Hex = %q, want %q", got, "hello")
+	}
+}
+
+func TestHexE_Invalid(t *testing.T) {
+	t.Setenv("HEX_BAD", "xyz")
+	_, err := env.HexE("HEX_BAD", nil)
+	if err == nil {
+		t.Fatal("HexE should return error for invalid hex")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *ParseError", err)
+	}
+	if pe.Type != "hex" {
+		t.Errorf("Type = %q, want %q", pe.Type, "hex")
 	}
 }
