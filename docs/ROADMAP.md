@@ -749,7 +749,7 @@ err := config.Parse(&cfg)
 
 ### Planned Additions
 
-**Status**: Not started
+**Status**: DONE (items 1-5: SnapshotAndReset, Gauge, Timer, Labels, Sink)
 
 | # | Feature | Reference | Effort |
 |---|---------|-----------|--------|
