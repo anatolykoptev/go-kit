@@ -386,7 +386,7 @@ Special case: **go-startup + go-job** share 7+ identical engine files. After pha
 
 ### Phase A: Table Stakes (must-have for 2026)
 
-**Status**: Not started
+**Status**: DONE (A1 streaming, A2 tool calling, A3 structured output, A4 usage tracking)
 
 #### A1. SSE Streaming
 
