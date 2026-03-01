@@ -4,6 +4,8 @@
 package env
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"net/url"
 	"os"
 	"strconv"
@@ -11,15 +13,50 @@ import (
 	"time"
 )
 
+// Source provides environment variable lookups. Replace DefaultSource
+// for testing or to read from alternative sources.
+type Source interface {
+	Lookup(key string) (string, bool)
+}
+
+type osSource struct{}
+
+func (osSource) Lookup(key string) (string, bool) { return os.LookupEnv(key) }
+
+// DefaultSource is the global source for all env functions.
+// Defaults to OSSource (reads from os.LookupEnv).
+// Replace with MapSource in tests for parallel-safe, isolated testing.
+var DefaultSource Source = osSource{}
+
+type mapSource map[string]string
+
+// MapSource returns a Source backed by a map. Use in tests:
+//
+//	env.DefaultSource = env.MapSource(map[string]string{"KEY": "value"})
+func MapSource(m map[string]string) Source {
+	return mapSource(m)
+}
+
+func (ms mapSource) Lookup(key string) (string, bool) {
+	v, ok := ms[key]
+	return v, ok
+}
+
+// getenv returns the value from DefaultSource, or "" if not set.
+func getenv(key string) string {
+	v, _ := DefaultSource.Lookup(key)
+	return v
+}
+
 // Lookup returns the value of the environment variable and whether it was set.
 // Unlike Str, it distinguishes between "not set" and "set to empty string".
 func Lookup(key string) (string, bool) {
-	return os.LookupEnv(key)
+	return DefaultSource.Lookup(key)
 }
 
 // Exists reports whether the environment variable is set (even if empty).
 func Exists(key string) bool {
-	_, ok := os.LookupEnv(key)
+	_, ok := DefaultSource.Lookup(key)
 	return ok
 }
 
@@ -27,7 +64,7 @@ func Exists(key string) bool {
 // Returns NotSetError if the variable is not set or is empty.
 // Use this for variables that must be configured (e.g. DATABASE_URL).
 func Required(key string) (string, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return "", &NotSetError{Key: key}
 	}
@@ -37,7 +74,7 @@ func Required(key string) (string, error) {
 // Str returns the value of the environment variable named by key,
 // or def if the variable is not set or empty.
 func Str(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		return v
 	}
 	return def
@@ -45,7 +82,7 @@ func Str(key, def string) string {
 
 // Int returns the environment variable as an int, or def if not set or invalid.
 func Int(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
@@ -56,7 +93,7 @@ func Int(key string, def int) int {
 // IntE is like Int but returns a ParseError if the variable is set but not a valid integer.
 // If the variable is not set, returns (def, nil).
 func IntE(key string, def int) (int, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -69,7 +106,7 @@ func IntE(key string, def int) (int, error) {
 
 // Int64 returns the environment variable as int64, or def if not set or invalid.
 func Int64(key string, def int64) int64 {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return n
 		}
@@ -79,7 +116,7 @@ func Int64(key string, def int64) int64 {
 
 // Int64E is like Int64 but returns a ParseError if the variable is set but not a valid int64.
 func Int64E(key string, def int64) (int64, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -92,7 +129,7 @@ func Int64E(key string, def int64) (int64, error) {
 
 // Float returns the environment variable as float64, or def if not set or invalid.
 func Float(key string, def float64) float64 {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return f
 		}
@@ -102,7 +139,7 @@ func Float(key string, def float64) float64 {
 
 // FloatE is like Float but returns a ParseError if the variable is set but not a valid float64.
 func FloatE(key string, def float64) (float64, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -115,7 +152,7 @@ func FloatE(key string, def float64) (float64, error) {
 
 // Uint returns the environment variable as a uint, or def if not set or invalid.
 func Uint(key string, def uint) uint {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		if n, err := strconv.ParseUint(v, 10, strconv.IntSize); err == nil {
 			return uint(n)
 		}
@@ -125,7 +162,7 @@ func Uint(key string, def uint) uint {
 
 // UintE is like Uint but returns a ParseError if the variable is set but not a valid uint.
 func UintE(key string, def uint) (uint, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -138,7 +175,7 @@ func UintE(key string, def uint) (uint, error) {
 
 // Uint64 returns the environment variable as uint64, or def if not set or invalid.
 func Uint64(key string, def uint64) uint64 {
-	if v := os.Getenv(key); v != "" {
+	if v := getenv(key); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 			return n
 		}
@@ -148,7 +185,7 @@ func Uint64(key string, def uint64) uint64 {
 
 // Uint64E is like Uint64 but returns a ParseError if the variable is set but not a valid uint64.
 func Uint64E(key string, def uint64) (uint64, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -164,7 +201,7 @@ func Uint64E(key string, def uint64) (uint64, error) {
 // Falsy: "false", "0", "no" (case-insensitive).
 // Anything else returns def.
 func Bool(key string, def bool) bool {
-	v := os.Getenv(key)
+	v := getenv(key)
 	if v == "" {
 		return def
 	}
@@ -181,7 +218,7 @@ func Bool(key string, def bool) bool {
 // BoolE is like Bool but returns a ParseError if the variable is set
 // to an unrecognized value (not true/1/yes/false/0/no).
 func BoolE(key string, def bool) (bool, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -199,7 +236,7 @@ func BoolE(key string, def bool) (bool, error) {
 // Accepts Go duration strings ("5s", "100ms", "2m30s") and float seconds ("3.5" -> 3.5s).
 // Returns def if not set or invalid.
 func Duration(key string, def time.Duration) time.Duration {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def
 	}
@@ -218,7 +255,7 @@ func Duration(key string, def time.Duration) time.Duration {
 // but cannot be parsed. Accepts Go duration strings ("5s", "100ms", "2m30s")
 // and falls back to float seconds ("3.5" -> 3.5s) for backward compatibility.
 func DurationE(key string, def time.Duration) (time.Duration, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		return def, nil
 	}
@@ -256,7 +293,7 @@ func List(key, def string) []string {
 // Int64List returns a comma-separated list of int64 values.
 // Non-numeric entries are silently skipped. Returns nil if not set.
 func Int64List(key string) []int64 {
-	v := os.Getenv(key)
+	v := getenv(key)
 	if v == "" {
 		return nil
 	}
@@ -318,7 +355,7 @@ func URL(key string, def string) *url.URL {
 // URLE is like URL but returns a ParseError if the variable is set but not a valid URL.
 // If the variable is not set, returns the parsed def.
 func URLE(key string, def string) (*url.URL, error) {
-	v, ok := os.LookupEnv(key)
+	v, ok := DefaultSource.Lookup(key)
 	if !ok || v == "" {
 		if def == "" {
 			return nil, nil
@@ -331,4 +368,98 @@ func URLE(key string, def string) (*url.URL, error) {
 		return nil, &ParseError{Key: key, Value: v, Type: "url", Err: err}
 	}
 	return u, nil
+}
+
+// File reads a file path from the environment variable and returns its contents.
+// Trailing newlines are trimmed. Returns def if not set or file cannot be read.
+// Useful for Docker secrets (/run/secrets/) and Kubernetes secret volumes.
+func File(key, def string) string {
+	path := getenv(key)
+	if path == "" {
+		return def
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return def
+	}
+	return strings.TrimRight(string(data), "\n")
+}
+
+// FileE is like File but returns an error if the variable is not set
+// or the file cannot be read.
+func FileE(key string) (string, error) {
+	v, ok := DefaultSource.Lookup(key)
+	if !ok || v == "" {
+		return "", &NotSetError{Key: key}
+	}
+	data, err := os.ReadFile(v)
+	if err != nil {
+		return "", &ParseError{Key: key, Value: v, Type: "file", Err: err}
+	}
+	return strings.TrimRight(string(data), "\n"), nil
+}
+
+// Expand returns the environment variable with ${VAR} references expanded.
+// Uses os.Expand with the current DefaultSource for variable resolution.
+// Returns def if the variable is not set.
+func Expand(key, def string) string {
+	v := Str(key, def)
+	if v == "" {
+		return ""
+	}
+	return os.Expand(v, getenv)
+}
+
+// Base64 returns the environment variable decoded from standard base64.
+// Returns def if not set or invalid.
+func Base64(key string, def []byte) []byte {
+	v := getenv(key)
+	if v == "" {
+		return def
+	}
+	data, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		return def
+	}
+	return data
+}
+
+// Base64E is like Base64 but returns a ParseError on invalid base64.
+func Base64E(key string, def []byte) ([]byte, error) {
+	v, ok := DefaultSource.Lookup(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "base64", Err: err}
+	}
+	return data, nil
+}
+
+// Hex returns the environment variable decoded from hex.
+// Returns def if not set or invalid.
+func Hex(key string, def []byte) []byte {
+	v := getenv(key)
+	if v == "" {
+		return def
+	}
+	data, err := hex.DecodeString(v)
+	if err != nil {
+		return def
+	}
+	return data
+}
+
+// HexE is like Hex but returns a ParseError on invalid hex.
+func HexE(key string, def []byte) ([]byte, error) {
+	v, ok := DefaultSource.Lookup(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	data, err := hex.DecodeString(v)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "hex", Err: err}
+	}
+	return data, nil
 }
