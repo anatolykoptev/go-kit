@@ -35,6 +35,25 @@ hosts := env.List("ALLOWED_HOSTS", "localhost")  // comma-separated
 
 Functions: `Str`, `Int`, `Int64`, `Float`, `Bool`, `Duration`, `List`, `Int64List`.
 
+#### Error handling
+
+```go
+// Error-returning variants — return ParseError on invalid values
+port, err := env.IntE("PORT", 8080)        // err if PORT="abc"
+debug, err := env.BoolE("DEBUG", false)     // err if DEBUG="maybe"
+timeout, err := env.DurationE("TIMEOUT", 30*time.Second) // accepts "5s", "100ms", "2m30s"
+
+// Required — must be set, returns NotSetError if missing
+dbURL, err := env.Required("DATABASE_URL")
+
+// Lookup — distinguish "not set" from "set to empty"
+val, ok := env.Lookup("OPTIONAL_VAR")
+
+// Must* — panic on invalid (for fail-fast main() init)
+dbURL := env.MustRequired("DATABASE_URL")
+port := env.MustInt("PORT", 8080)
+```
+
 ### llm
 
 ```go
