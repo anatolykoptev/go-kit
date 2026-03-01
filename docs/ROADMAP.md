@@ -753,7 +753,7 @@ err := config.Parse(&cfg)
 
 ### Planned Additions
 
-**Status**: DONE (items 1-5: SnapshotAndReset, Gauge, Timer, Labels, Sink)
+**Status**: DONE (items 1-8: SnapshotAndReset, Gauge, Timer, Labels, Sink, Rate/EWMA, Reservoir, TTL)
 
 | # | Feature | Reference | Effort |
 |---|---------|-----------|--------|

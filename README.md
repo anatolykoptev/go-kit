@@ -14,7 +14,7 @@ go get github.com/anatolykoptev/go-kit
 | [`llm`](#llm) | OpenAI-compatible LLM client with streaming, tool calling, structured output | stdlib |
 | [`cache`](#cache) | L1 memory cache with S3-FIFO eviction | stdlib |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
-| [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks | stdlib |
+| [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks, rates, histograms, TTL | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
 
 All packages are independent — no internal cross-imports. Import only what you need.
@@ -219,7 +219,7 @@ import "github.com/anatolykoptev/go-kit/metrics"
 
 reg := metrics.NewRegistry()
 
-// Counters (unchanged)
+// Counters
 reg.Incr("requests")
 reg.Add("bytes", 1024)
 
@@ -235,8 +235,23 @@ defer reg.StartTimer("api.latency").Stop()
 reg.Incr(metrics.Label("requests", "method", "GET"))
 reg.Incr(metrics.Label("requests", "method", "POST"))
 
+// Rate tracking (EWMA)
+rate := reg.Rate("events")
+rate.Update(1) // record event
+rate.M1()      // events/sec, 1-minute window
+
+// Histogram (percentiles via reservoir sampling)
+h := reg.Histogram("latency")
+h.Update(12.5) // record observation
+snap := h.Snapshot()
+// snap.P50, snap.P95, snap.P99, snap.Min, snap.Max, snap.Mean
+
+// TTL for dynamic metrics
+reg.IncrWithTTL(metrics.Label("api.calls", "path", "/users"), 10*time.Minute)
+reg.CleanupExpired() // remove stale metrics
+
 // Snapshot and reset (for periodic reporting)
-snap := reg.SnapshotAndReset() // reads + zeros atomically
+all := reg.SnapshotAndReset() // reads + zeros atomically
 
 // Output formatting
 reg.WriteTo(os.Stdout, metrics.TextSink{})  // key=value lines
@@ -246,6 +261,9 @@ reg.WriteTo(os.Stdout, metrics.JSONSink{})  // JSON object
 - Gauge type with lock-free float64 (Set/Add/Inc/Dec)
 - StartTimer/Stop for one-liner latency tracking
 - Label() for dimensional metric keys
+- Rate (EWMA): events/sec with 1/5/15-minute moving averages
+- Histogram: reservoir sampling for P50/P95/P99 without unbounded memory
+- TTL: auto-expire stale per-endpoint/per-user metrics
 - SnapshotAndReset for atomic read-and-zero
 - Sink interface with TextSink and JSONSink
 
