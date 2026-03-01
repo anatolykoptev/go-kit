@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+// Lookup returns the value of the environment variable and whether it was set.
+// Unlike Str, it distinguishes between "not set" and "set to empty string".
+func Lookup(key string) (string, bool) {
+	return os.LookupEnv(key)
+}
+
+// Exists reports whether the environment variable is set (even if empty).
+func Exists(key string) bool {
+	_, ok := os.LookupEnv(key)
+	return ok
+}
+
 // Str returns the value of the environment variable named by key,
 // or def if the variable is not set or empty.
 func Str(key, def string) string {
