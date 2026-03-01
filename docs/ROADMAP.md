@@ -725,7 +725,7 @@ err := config.Parse(&cfg)
 
 ### Planned Additions
 
-**Status**: Not started
+**Status**: DONE (items 1-4: RetryAfter, MaxElapsedTime, Jitter, Timer)
 
 | # | Feature | Reference | Effort |
 |---|---------|-----------|--------|

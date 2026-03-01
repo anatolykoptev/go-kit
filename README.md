@@ -103,15 +103,20 @@ L1 memory cache with S3-FIFO eviction for high hit rates. Background cleanup, TT
 import "github.com/anatolykoptev/go-kit/retry"
 
 result, err := retry.Do(ctx, retry.Options{
-    MaxAttempts:  3,
-    InitialDelay: 500 * time.Millisecond,
-    MaxDelay:     5 * time.Second,
+    MaxAttempts:    5,
+    InitialDelay:  500 * time.Millisecond,
+    MaxDelay:      10 * time.Second,
+    MaxElapsedTime: 30 * time.Second,  // total budget
+    Jitter:        true,               // ±25% random jitter
 }, func() (string, error) {
     return callAPI()
 })
 
-// HTTP-specific: retries on 429/5xx
-resp, err := retry.HTTP(ctx, retry.Options{}, doRequest)
+// HTTP-specific: retries on 429/5xx, auto-parses Retry-After header
+resp, err := retry.HTTP(ctx, retry.Options{Jitter: true}, doRequest)
+
+// Override backoff from fn:
+return "", retry.RetryAfter(5*time.Second, err)
 ```
 
 ### metrics
