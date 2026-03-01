@@ -268,3 +268,29 @@ func Int64List(key string) []int64 {
 	}
 	return result
 }
+
+// Map returns a comma-separated list of key:value pairs as a map.
+// Format: "k1:v1,k2:v2". Entries without ":" are silently skipped.
+// Whitespace is trimmed from keys and values. Returns nil if not set.
+func Map(key, def string) map[string]string {
+	v := Str(key, def)
+	if v == "" {
+		return nil
+	}
+	m := make(map[string]string)
+	for _, pair := range strings.Split(v, ",") {
+		k, val, ok := strings.Cut(strings.TrimSpace(pair), ":")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		m[k] = strings.TrimSpace(val)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}

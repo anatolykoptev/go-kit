@@ -499,3 +499,56 @@ func TestUint64E_Invalid(t *testing.T) {
 		t.Errorf("Type = %q, want %q", pe.Type, "uint64")
 	}
 }
+
+func TestMap(t *testing.T) {
+	t.Setenv("TEST_MAP", "Content-Type:json, Accept:*/*")
+	got := env.Map("TEST_MAP", "")
+	if got == nil {
+		t.Fatal("Map returned nil")
+	}
+	if got["Content-Type"] != "json" {
+		t.Errorf("Content-Type = %q, want %q", got["Content-Type"], "json")
+	}
+	if got["Accept"] != "*/*" {
+		t.Errorf("Accept = %q, want %q", got["Accept"], "*/*")
+	}
+}
+
+func TestMap_Default(t *testing.T) {
+	got := env.Map("TEST_MAP_MISSING", "a:1,b:2")
+	if got == nil {
+		t.Fatal("Map returned nil with default")
+	}
+	if got["a"] != "1" || got["b"] != "2" {
+		t.Errorf("Map = %v, want {a:1 b:2}", got)
+	}
+}
+
+func TestMap_Empty(t *testing.T) {
+	got := env.Map("TEST_MAP_MISSING2", "")
+	if got != nil {
+		t.Errorf("Map = %v, want nil", got)
+	}
+}
+
+func TestMap_SkipsBadEntries(t *testing.T) {
+	t.Setenv("TEST_MAP_BAD", "good:value,nocolon,also:works")
+	got := env.Map("TEST_MAP_BAD", "")
+	if len(got) != 2 {
+		t.Fatalf("Map len = %d, want 2: %v", len(got), got)
+	}
+	if got["good"] != "value" || got["also"] != "works" {
+		t.Errorf("Map = %v", got)
+	}
+}
+
+func TestMap_EmptyValue(t *testing.T) {
+	t.Setenv("TEST_MAP_EVAL", "key:")
+	got := env.Map("TEST_MAP_EVAL", "")
+	if got == nil {
+		t.Fatal("Map returned nil")
+	}
+	if got["key"] != "" {
+		t.Errorf("key value = %q, want empty", got["key"])
+	}
+}
