@@ -2,6 +2,8 @@ package cache_test
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,5 +235,154 @@ func TestCache_S3FIFO_FreqCap(t *testing.T) {
 
 	if _, ok := c.Get(ctx, "x"); !ok {
 		t.Error("highly accessed 'x' should survive evictions")
+	}
+}
+
+func TestGetOrLoad_CacheHit(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	c.Set(ctx, "pre", []byte("cached"))
+
+	var called bool
+	got, err := c.GetOrLoad(ctx, "pre", func(_ context.Context) ([]byte, error) {
+		called = true
+		return []byte("loaded"), nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("loader should not be called on cache hit")
+	}
+	if string(got) != "cached" {
+		t.Errorf("got %q, want %q", got, "cached")
+	}
+}
+
+func TestGetOrLoad_CacheMiss(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	got, err := c.GetOrLoad(ctx, "miss", func(_ context.Context) ([]byte, error) {
+		return []byte("loaded"), nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != "loaded" {
+		t.Errorf("got %q, want %q", got, "loaded")
+	}
+
+	// Should now be in cache.
+	cached, ok := c.Get(ctx, "miss")
+	if !ok {
+		t.Fatal("loaded value should be cached")
+	}
+	if string(cached) != "loaded" {
+		t.Errorf("cached %q, want %q", cached, "loaded")
+	}
+}
+
+func TestGetOrLoad_Singleflight(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	var calls atomic.Int32
+	loader := func(_ context.Context) ([]byte, error) {
+		calls.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		return []byte("result"), nil
+	}
+
+	// Launch 10 concurrent loads for the same key.
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := c.GetOrLoad(ctx, "shared", loader)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if string(got) != "result" {
+				t.Errorf("got %q, want %q", got, "result")
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Singleflight should deduplicate — only 1 loader call.
+	if n := calls.Load(); n != 1 {
+		t.Errorf("loader called %d times, want 1 (singleflight)", n)
+	}
+}
+
+func TestJitter_Varies(t *testing.T) {
+	c := cache.New(cache.Config{
+		L1MaxItems:    100,
+		L1TTL:         time.Second,
+		JitterPercent: 0.5, // ±50% — extreme to make variation obvious
+	})
+	defer c.Close()
+	ctx := context.Background()
+
+	// Insert many items and verify they don't all expire at the same time.
+	for i := range 20 {
+		c.Set(ctx, cache.Key("jitter", string(rune('a'+i))), []byte("data"))
+	}
+
+	// Sleep for half TTL — with ±50% jitter, some should expire, some shouldn't.
+	time.Sleep(600 * time.Millisecond)
+
+	alive := 0
+	for i := range 20 {
+		if _, ok := c.Get(ctx, cache.Key("jitter", string(rune('a'+i)))); ok {
+			alive++
+		}
+	}
+
+	// With ±50% jitter on 1s TTL, after 600ms:
+	// - Entries with TTL < 600ms (TTL range 500ms-1500ms) should have expired
+	// - Not all should be alive, not all should be dead
+	if alive == 0 || alive == 20 {
+		t.Errorf("alive = %d, jitter should produce varying expiry", alive)
+	}
+}
+
+func TestStats_Evictions(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 3, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	// Fill cache (3 items) then add 3 more — triggers 3 evictions.
+	for i := range 6 {
+		c.Set(ctx, cache.Key("ev", string(rune('a'+i))), []byte("data"))
+	}
+
+	stats := c.Stats()
+	if stats.Evictions == 0 {
+		t.Error("Evictions should be > 0 after overfilling")
+	}
+}
+
+func TestStats_HitRatio(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	c.Set(ctx, "a", []byte("1"))
+	c.Get(ctx, "a") // hit
+	c.Get(ctx, "a") // hit
+	c.Get(ctx, "b") // miss
+
+	stats := c.Stats()
+	// 2 hits / 3 total = 0.666...
+	if stats.HitRatio < 0.65 || stats.HitRatio > 0.68 {
+		t.Errorf("HitRatio = %f, want ~0.667", stats.HitRatio)
 	}
 }
