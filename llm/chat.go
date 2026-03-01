@@ -1,6 +1,11 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
+)
 
 // Usage holds token usage from the API response.
 type Usage struct {
@@ -82,6 +87,20 @@ func WithToolChoice(choice any) ChatOption {
 	return func(c *chatConfig) { c.toolChoice = choice }
 }
 
+// WithJSONSchema sets the response format to structured JSON output.
+func WithJSONSchema(name string, schema any) ChatOption {
+	return func(c *chatConfig) {
+		c.responseFormat = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   name,
+				"strict": true,
+				"schema": schema,
+			},
+		}
+	}
+}
+
 // Chat sends a chat completion request and returns the full response
 // including tool calls, finish reason, and token usage.
 func (c *Client) Chat(ctx context.Context, messages []Message, opts ...ChatOption) (*ChatResponse, error) {
@@ -92,4 +111,25 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ...ChatOptio
 	req := c.newRequest(messages)
 	cfg.apply(req)
 	return c.execute(ctx, req)
+}
+
+// ChatTyped sends a structured output request and unmarshals the response into target.
+// Generates JSON Schema from target's type, sends it as response_format,
+// and unmarshals the JSON response directly into target.
+func (c *Client) ChatTyped(ctx context.Context, messages []Message, target any) error {
+	schema := SchemaOf(target)
+	t := reflect.TypeOf(target)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	name := strings.ToLower(t.Name())
+	if name == "" {
+		name = "response"
+	}
+
+	resp, err := c.Chat(ctx, messages, WithJSONSchema(name, schema))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal([]byte(resp.Content), target)
 }
