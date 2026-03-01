@@ -22,6 +22,17 @@ func Exists(key string) bool {
 	return ok
 }
 
+// Required returns the value of the environment variable named by key.
+// Returns NotSetError if the variable is not set or is empty.
+// Use this for variables that must be configured (e.g. DATABASE_URL).
+func Required(key string) (string, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return "", &NotSetError{Key: key}
+	}
+	return v, nil
+}
+
 // Str returns the value of the environment variable named by key,
 // or def if the variable is not set or empty.
 func Str(key, def string) string {
