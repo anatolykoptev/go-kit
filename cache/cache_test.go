@@ -596,3 +596,31 @@ func TestNoL2_Unchanged(t *testing.T) {
 		t.Errorf("L2 stats should be 0 without L2: hits=%d, misses=%d", stats.L2Hits, stats.L2Misses)
 	}
 }
+
+func TestClear(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	for i := range 5 {
+		c.Set(ctx, cache.Key("clear", string(rune('a'+i))), []byte("v"))
+	}
+	if s := c.Stats(); s.L1Size != 5 {
+		t.Fatalf("pre-clear size = %d, want 5", s.L1Size)
+	}
+
+	n := c.Clear()
+	if n != 5 {
+		t.Errorf("Clear returned %d, want 5", n)
+	}
+	if s := c.Stats(); s.L1Size != 0 {
+		t.Errorf("post-clear size = %d, want 0", s.L1Size)
+	}
+
+	// Cache still works after Clear.
+	c.Set(ctx, "post-clear", []byte("ok"))
+	got, ok := c.Get(ctx, "post-clear")
+	if !ok || string(got) != "ok" {
+		t.Errorf("post-clear get: ok=%v, got=%q", ok, got)
+	}
+}

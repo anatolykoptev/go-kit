@@ -343,6 +343,20 @@ func (c *Cache) Stats() Stats {
 	}
 }
 
+// Clear removes all entries from L1 and returns the number cleared.
+// L2 is not affected.
+func (c *Cache) Clear() int {
+	c.mu.Lock()
+	n := len(c.items)
+	c.items = make(map[string]*entry)
+	c.small.Init()
+	c.main.Init()
+	c.ghost.Init()
+	c.ghostMap = make(map[string]*list.Element)
+	c.mu.Unlock()
+	return n
+}
+
 // Close stops the background cleanup goroutine and closes L2 if set.
 func (c *Cache) Close() {
 	select {
