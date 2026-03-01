@@ -195,3 +195,65 @@ func TestToPascalCase(t *testing.T) {
 		}
 	}
 }
+
+func TestContainsAll(t *testing.T) {
+	if !strutil.ContainsAll("hello world foo", []string{"hello", "world"}) {
+		t.Error("should contain all")
+	}
+	if strutil.ContainsAll("hello world", []string{"hello", "missing"}) {
+		t.Error("should not contain all")
+	}
+	if !strutil.ContainsAll("anything", nil) {
+		t.Error("nil substrs should return true")
+	}
+	if !strutil.ContainsAll("anything", []string{}) {
+		t.Error("empty substrs should return true")
+	}
+}
+
+func TestScrub(t *testing.T) {
+	// Valid UTF-8 unchanged
+	if got := strutil.Scrub("hello"); got != "hello" {
+		t.Errorf("Scrub valid = %q, want %q", got, "hello")
+	}
+	// Invalid bytes replaced
+	invalid := "hello\x80world"
+	got := strutil.Scrub(invalid)
+	if got != "hello\uFFFDworld" {
+		t.Errorf("Scrub invalid = %q, want %q", got, "hello\uFFFDworld")
+	}
+	// Empty string
+	if got := strutil.Scrub(""); got != "" {
+		t.Errorf("Scrub empty = %q, want empty", got)
+	}
+	// Unicode preserved
+	if got := strutil.Scrub("Привет 🌍"); got != "Привет 🌍" {
+		t.Errorf("Scrub unicode = %q, want %q", got, "Привет 🌍")
+	}
+}
+
+func TestWordWrap(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		width int
+		want  string
+	}{
+		{"short", "hello world", 80, "hello world"},
+		{"wrap", "the quick brown fox jumps over the lazy dog", 15,
+			"the quick brown\nfox jumps over\nthe lazy dog"},
+		{"preserve newlines", "line one\nline two", 80, "line one\nline two"},
+		{"long word", "superlongword fits", 5, "superlongword\nfits"},
+		{"empty", "", 10, ""},
+		{"zero width", "hello", 0, "hello"},
+		{"single word", "hello", 10, "hello"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := strutil.WordWrap(tt.input, tt.width)
+			if got != tt.want {
+				t.Errorf("WordWrap(%q, %d) =\n%q\nwant:\n%q", tt.input, tt.width, got, tt.want)
+			}
+		})
+	}
+}
