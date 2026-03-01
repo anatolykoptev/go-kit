@@ -5,6 +5,7 @@ package strutil
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Truncate caps s at maxRunes runes, appending "..." if truncated.
@@ -177,4 +178,61 @@ func titleWord(w string) string {
 		runes[j] = unicode.ToLower(runes[j])
 	}
 	return string(runes)
+}
+
+// ContainsAll reports whether s contains all of the given substrings.
+func ContainsAll(s string, substrs []string) bool {
+	for _, sub := range substrs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+// Scrub returns s with invalid UTF-8 bytes replaced by the Unicode
+// replacement character (U+FFFD). Returns s unchanged if already valid.
+func Scrub(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
+}
+
+// WordWrap wraps s at word boundaries to fit within width runes per line.
+// Preserves existing newlines. Long words that exceed width are not broken.
+func WordWrap(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	var sb strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		wrapLine(&sb, line, width)
+	}
+	return sb.String()
+}
+
+func wrapLine(sb *strings.Builder, line string, width int) {
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return
+	}
+	lineLen := 0
+	for _, word := range words {
+		wordLen := len([]rune(word))
+		if lineLen > 0 && lineLen+1+wordLen > width {
+			sb.WriteByte('\n')
+			lineLen = 0
+		}
+		if lineLen > 0 {
+			sb.WriteByte(' ')
+			lineLen++
+		}
+		sb.WriteString(word)
+		lineLen += wordLen
+	}
 }
