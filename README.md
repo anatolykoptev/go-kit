@@ -26,14 +26,31 @@ All packages are independent — no internal cross-imports. Import only what you
 ```go
 import "github.com/anatolykoptev/go-kit/env"
 
-port := env.Str("PORT", "8080")
-workers := env.Int("WORKERS", 4)
+port := env.Int("PORT", 8080)
 debug := env.Bool("DEBUG", false)
-timeout := env.Duration("TIMEOUT", 30*time.Second)
-hosts := env.List("ALLOWED_HOSTS", "localhost")  // comma-separated
+
+// Docker secrets / Kubernetes volumes
+dbPass := env.File("DB_PASSWORD_FILE", "")
+
+// Variable expansion
+dbURL := env.Expand("DATABASE_URL", "postgres://localhost:5432/mydb")
+
+// Binary data
+cert := env.Base64("TLS_CERT", nil)
+key := env.Hex("API_KEY_HEX", nil)
+
+// Testability — decouple from os.Getenv
+env.DefaultSource = env.MapSource(map[string]string{
+    "PORT": "9090",
+})
 ```
 
-Functions: `Str`, `Int`, `Int64`, `Uint`, `Uint64`, `Float`, `Bool`, `Duration`, `List`, `Int64List`, `Map`, `URL`.
+Functions: `Str`, `Int`, `Int64`, `Uint`, `Uint64`, `Float`, `Bool`, `Duration`, `List`, `Int64List`, `Map`, `URL`, `File`, `Expand`, `Base64`, `Hex`.
+
+- Source interface for testability (MapSource for parallel-safe tests)
+- File: read Docker secrets and Kubernetes volumes
+- Expand: resolve ${VAR} references
+- Base64/Hex: binary data from env vars
 
 ```go
 headers := env.Map("HEADERS", "")              // "Content-Type:json,Accept:*/*" → map
