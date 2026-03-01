@@ -431,3 +431,71 @@ func TestDuration_GoFormatComplex(t *testing.T) {
 		t.Errorf("Duration = %v, want %v", got, want)
 	}
 }
+
+func TestUint(t *testing.T) {
+	t.Setenv("TEST_UINT", "42")
+	if got := env.Uint("TEST_UINT", 0); got != 42 {
+		t.Errorf("Uint = %d, want 42", got)
+	}
+}
+
+func TestUint_Default(t *testing.T) {
+	if got := env.Uint("TEST_UINT_MISSING", 7); got != 7 {
+		t.Errorf("Uint = %d, want 7", got)
+	}
+}
+
+func TestUint_Invalid(t *testing.T) {
+	t.Setenv("TEST_UINT_BAD", "-5")
+	if got := env.Uint("TEST_UINT_BAD", 99); got != 99 {
+		t.Errorf("Uint = %d, want default 99", got)
+	}
+}
+
+func TestUintE_Valid(t *testing.T) {
+	t.Setenv("TEST_UINTE", "100")
+	val, err := env.UintE("TEST_UINTE", 0)
+	if err != nil {
+		t.Fatalf("UintE error: %v", err)
+	}
+	if val != 100 {
+		t.Errorf("UintE = %d, want 100", val)
+	}
+}
+
+func TestUintE_Invalid(t *testing.T) {
+	t.Setenv("TEST_UINTE_BAD", "-1")
+	_, err := env.UintE("TEST_UINTE_BAD", 0)
+	if err == nil {
+		t.Fatal("UintE should error on negative")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *ParseError", err)
+	}
+	if pe.Type != "uint" {
+		t.Errorf("Type = %q, want %q", pe.Type, "uint")
+	}
+}
+
+func TestUint64(t *testing.T) {
+	t.Setenv("TEST_UINT64", "18446744073709551615")
+	if got := env.Uint64("TEST_UINT64", 0); got != 18446744073709551615 {
+		t.Errorf("Uint64 = %d, want max uint64", got)
+	}
+}
+
+func TestUint64E_Invalid(t *testing.T) {
+	t.Setenv("TEST_UINT64E_BAD", "abc")
+	_, err := env.Uint64E("TEST_UINT64E_BAD", 0)
+	if err == nil {
+		t.Fatal("Uint64E should error on invalid")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *ParseError", err)
+	}
+	if pe.Type != "uint64" {
+		t.Errorf("Type = %q, want %q", pe.Type, "uint64")
+	}
+}

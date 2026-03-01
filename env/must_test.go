@@ -84,3 +84,17 @@ func TestMustDuration_Valid(t *testing.T) {
 		t.Errorf("MustDuration = %v, want 5s", got)
 	}
 }
+
+func TestMustUint_Panics(t *testing.T) {
+	t.Setenv("TEST_MUSTUINT_BAD", "-1")
+	mustPanic(t, "MustUint", func() {
+		env.MustUint("TEST_MUSTUINT_BAD", 0)
+	})
+}
+
+func TestMustUint64_Panics(t *testing.T) {
+	t.Setenv("TEST_MUSTUINT64_BAD", "abc")
+	mustPanic(t, "MustUint64", func() {
+		env.MustUint64("TEST_MUSTUINT64_BAD", 0)
+	})
+}
