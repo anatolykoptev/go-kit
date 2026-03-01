@@ -316,3 +316,102 @@ func TestFloatE_Invalid(t *testing.T) {
 		t.Errorf("Type = %q, want %q", pe.Type, "float64")
 	}
 }
+
+func TestBoolE_Valid(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		want bool
+	}{
+		{"true", true},
+		{"1", true},
+		{"yes", true},
+		{"false", false},
+		{"0", false},
+		{"no", false},
+		{"TRUE", true},
+		{"NO", false},
+	} {
+		t.Run(tc.val, func(t *testing.T) {
+			t.Setenv("TEST_BOOLE", tc.val)
+			got, err := env.BoolE("TEST_BOOLE", !tc.want)
+			if err != nil {
+				t.Fatalf("BoolE(%q) returned error: %v", tc.val, err)
+			}
+			if got != tc.want {
+				t.Errorf("BoolE(%q) = %v, want %v", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBoolE_NotSet(t *testing.T) {
+	val, err := env.BoolE("TEST_BOOLE_MISSING_XYZ", true)
+	if err != nil {
+		t.Fatalf("BoolE should not error on unset: %v", err)
+	}
+	if val != true {
+		t.Errorf("BoolE = %v, want default true", val)
+	}
+}
+
+func TestBoolE_Invalid(t *testing.T) {
+	t.Setenv("TEST_BOOLE_BAD", "maybe")
+	_, err := env.BoolE("TEST_BOOLE_BAD", false)
+	if err == nil {
+		t.Fatal("BoolE should return error for invalid value")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *env.ParseError", err)
+	}
+	if pe.Key != "TEST_BOOLE_BAD" || pe.Value != "maybe" || pe.Type != "bool" {
+		t.Errorf("ParseError = {%q, %q, %q}", pe.Key, pe.Value, pe.Type)
+	}
+}
+
+func TestDurationE_GoFormat(t *testing.T) {
+	t.Setenv("TEST_DURE", "5s")
+	val, err := env.DurationE("TEST_DURE", 0)
+	if err != nil {
+		t.Fatalf("DurationE returned error: %v", err)
+	}
+	if val != 5*time.Second {
+		t.Errorf("DurationE = %v, want 5s", val)
+	}
+}
+
+func TestDurationE_FloatSeconds(t *testing.T) {
+	t.Setenv("TEST_DURE_FLOAT", "3.5")
+	val, err := env.DurationE("TEST_DURE_FLOAT", 0)
+	if err != nil {
+		t.Fatalf("DurationE returned error: %v", err)
+	}
+	if val != 3500*time.Millisecond {
+		t.Errorf("DurationE = %v, want 3.5s", val)
+	}
+}
+
+func TestDurationE_NotSet(t *testing.T) {
+	val, err := env.DurationE("TEST_DURE_MISSING_XYZ", 10*time.Second)
+	if err != nil {
+		t.Fatalf("DurationE should not error on unset: %v", err)
+	}
+	if val != 10*time.Second {
+		t.Errorf("DurationE = %v, want 10s", val)
+	}
+}
+
+func TestDurationE_Invalid(t *testing.T) {
+	t.Setenv("TEST_DURE_BAD", "not_a_duration")
+	_, err := env.DurationE("TEST_DURE_BAD", 0)
+	if err == nil {
+		t.Fatal("DurationE should return error for invalid value")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *env.ParseError", err)
+	}
+	if pe.Type != "duration" {
+		t.Errorf("Type = %q, want %q", pe.Type, "duration")
+	}
+}
