@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"hash/fnv"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -117,8 +118,11 @@ type Cache struct {
 	hits      atomic.Int64
 	misses    atomic.Int64
 	evictions atomic.Int64
+	l2hits    atomic.Int64
+	l2misses  atomic.Int64
 
 	flight group
+	l2     L2 // optional L2 store; nil = L1-only
 	done   chan struct{}
 }
 
@@ -146,6 +150,11 @@ func New(cfg Config) *Cache {
 		done:     make(chan struct{}),
 	}
 
+	// Connect L2 if Redis configured.
+	if cfg.RedisURL != "" {
+		c.l2 = NewRedisL2(cfg.RedisURL, cfg.RedisDB, cfg.Prefix)
+	}
+
 	// Background cleanup every 1/10 of TTL, minimum 10s.
 	interval := cfg.L1TTL / 10
 	if interval < 10*time.Second {
@@ -155,6 +164,10 @@ func New(cfg Config) *Cache {
 
 	return c
 }
+
+// WithL2 sets a custom L2 store. Use in tests with a mock.
+// Overrides any RedisURL in Config.
+func (c *Cache) WithL2(l2 L2) { c.l2 = l2 }
 
 func (c *Cache) jitteredTTL() time.Duration {
 	ttl := c.cfg.L1TTL
@@ -168,42 +181,59 @@ func (c *Cache) jitteredTTL() time.Duration {
 	return ttl + time.Duration(rand.Int64N(2*jitter+1)-jitter)
 }
 
-// Get retrieves a value from L1 (then L2 if miss). Returns nil, false on miss.
+// Get retrieves a value from L1 (then L2 if configured). Returns nil, false on miss.
 func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	e, ok := c.items[key]
-	if !ok {
-		c.misses.Add(1)
-		// TODO: L2 Redis lookup (Phase 2 — add redis/go-redis dependency).
-		_ = ctx
-		return nil, false
+	if ok && !time.Now().After(e.expiresAt) {
+		if e.freq < 3 {
+			e.freq++
+		}
+		data := e.data
+		c.mu.Unlock()
+		c.hits.Add(1)
+		return data, true
 	}
 
-	if time.Now().After(e.expiresAt) {
+	// L1 miss or expired.
+	if ok {
 		c.removeEntry(e)
-		c.misses.Add(1)
-		_ = ctx
+	}
+	c.mu.Unlock()
+
+	// Try L2.
+	if c.l2 != nil {
+		data, err := c.l2.Get(ctx, key)
+		if err == nil {
+			c.l2hits.Add(1)
+			// Promote to L1.
+			c.Set(ctx, key, data)
+			return data, true
+		}
+		c.l2misses.Add(1)
 		return nil, false
 	}
 
-	if e.freq < 3 {
-		e.freq++
-	}
-	c.hits.Add(1)
-	return e.data, true
+	c.misses.Add(1)
+	return nil, false
 }
 
 // Set stores a value in L1 (and L2 if configured).
 func (c *Cache) Set(ctx context.Context, key string, data []byte) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Update existing entry.
 	if e, ok := c.items[key]; ok {
 		e.data = data
 		e.expiresAt = time.Now().Add(c.jitteredTTL())
+		c.mu.Unlock()
+		// Write-through to L2 (best-effort).
+		if c.l2 != nil {
+			if err := c.l2.Set(ctx, key, data, c.cfg.L2TTL); err != nil {
+				slog.Debug("cache: L2 set failed", slog.Any("error", err))
+			}
+		}
 		return
 	}
 
@@ -231,21 +261,30 @@ func (c *Cache) Set(ctx context.Context, key string, data []byte) {
 	}
 	e.elem = c.small.PushBack(e)
 	c.items[key] = e
+	c.mu.Unlock()
 
-	// TODO: L2 Redis set (Phase 2).
-	_ = ctx
+	// Write-through to L2 (best-effort).
+	if c.l2 != nil {
+		if err := c.l2.Set(ctx, key, data, c.cfg.L2TTL); err != nil {
+			slog.Debug("cache: L2 set failed", slog.Any("error", err))
+		}
+	}
 }
 
 // Delete removes a key from both L1 and L2.
 func (c *Cache) Delete(ctx context.Context, key string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if e, ok := c.items[key]; ok {
 		c.removeEntry(e)
 	}
-	// TODO: L2 Redis delete (Phase 2).
-	_ = ctx
+	c.mu.Unlock()
+
+	// Delete from L2 (best-effort).
+	if c.l2 != nil {
+		if err := c.l2.Del(ctx, key); err != nil {
+			slog.Debug("cache: L2 del failed", slog.Any("error", err))
+		}
+	}
 }
 
 // GetOrLoad returns the value for key, loading it via loader on cache miss.
@@ -272,6 +311,8 @@ type Stats struct {
 	L1Hits    int64
 	L1Misses  int64
 	L1Size    int
+	L2Hits    int64
+	L2Misses  int64
 	Evictions int64
 	HitRatio  float64
 }
@@ -280,9 +321,13 @@ type Stats struct {
 func (c *Cache) Stats() Stats {
 	hits := c.hits.Load()
 	misses := c.misses.Load()
+	l2h := c.l2hits.Load()
+	l2m := c.l2misses.Load()
+	totalHits := hits + l2h
+	totalMisses := misses + l2m
 	var ratio float64
-	if total := hits + misses; total > 0 {
-		ratio = float64(hits) / float64(total)
+	if total := totalHits + totalMisses; total > 0 {
+		ratio = float64(totalHits) / float64(total)
 	}
 	c.mu.Lock()
 	size := len(c.items)
@@ -291,17 +336,22 @@ func (c *Cache) Stats() Stats {
 		L1Hits:    hits,
 		L1Misses:  misses,
 		L1Size:    size,
+		L2Hits:    l2h,
+		L2Misses:  l2m,
 		Evictions: c.evictions.Load(),
 		HitRatio:  ratio,
 	}
 }
 
-// Close stops the background cleanup goroutine.
+// Close stops the background cleanup goroutine and closes L2 if set.
 func (c *Cache) Close() {
 	select {
 	case <-c.done:
 	default:
 		close(c.done)
+	}
+	if c.l2 != nil {
+		c.l2.Close()
 	}
 }
 
