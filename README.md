@@ -15,7 +15,7 @@ go get github.com/anatolykoptev/go-kit
 | [`cache`](#cache) | L1 memory cache with S3-FIFO eviction | stdlib |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic operation counters | stdlib |
-| [`strutil`](#strutil) | Unicode-aware string helpers | stdlib |
+| [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
 
 All packages are independent — no internal cross-imports. Import only what you need.
 
@@ -143,6 +143,16 @@ import "github.com/anatolykoptev/go-kit/strutil"
 
 s := strutil.Truncate("Hello, world!", 5)       // "Hello..."
 s = strutil.TruncateAtWord("Hello, world!", 8)  // "Hello,..."
+s = strutil.TruncateMiddle("path/to/file.go", 10) // "path/...e.go"
+
+// Custom placeholder
+s = strutil.TruncateWith("Hello, world!", 5, "[...]")  // "Hello[...]"
+
+// Case conversions
+s = strutil.ToSnakeCase("myVariableName")  // "my_variable_name"
+s = strutil.ToCamelCase("my_variable")     // "myVariable"
+s = strutil.ToKebabCase("myVariableName")  // "my-variable-name"
+s = strutil.ToPascalCase("my_variable")    // "MyVariable"
 
 ok := strutil.Contains([]string{"a", "b"}, "a")    // true
 ok = strutil.ContainsAny("hello world", []string{"world"}) // true
