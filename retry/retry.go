@@ -35,6 +35,8 @@ type Options struct {
 	MaxElapsedTime time.Duration // total wall-clock budget; 0 = no limit
 	Jitter         bool          // add ±25% random jitter to delay
 	Timer          Timer         // custom timer for tests; nil = real time.After
+	AbortOn        []error       // never retry these errors (checked via errors.Is)
+	RetryableOnly  bool          // if true, only retry errors implementing Retryable
 }
 
 func (o *Options) applyDefaults() {
@@ -72,6 +74,48 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("retryable HTTP status %d", e.StatusCode)
+}
+
+// Retryable is an interface that errors can implement to signal
+// whether they should be retried. Used with Options.RetryableOnly.
+type Retryable interface {
+	Retryable() bool
+}
+
+type retryableError struct {
+	err error
+}
+
+func (e *retryableError) Error() string   { return e.err.Error() }
+func (e *retryableError) Unwrap() error   { return e.err }
+func (e *retryableError) Retryable() bool { return true }
+
+// MarkRetryable wraps an error to signal it should be retried.
+// Use with Options.RetryableOnly = true.
+func MarkRetryable(err error) error {
+	return &retryableError{err: err}
+}
+
+// IsRetryable reports whether err should be retried.
+// Returns true if err implements Retryable and Retryable() returns true.
+func IsRetryable(err error) bool {
+	var r Retryable
+	if errors.As(err, &r) {
+		return r.Retryable()
+	}
+	return false
+}
+
+func shouldAbort(opts *Options, err error) bool {
+	for _, target := range opts.AbortOn {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	if opts.RetryableOnly && !IsRetryable(err) {
+		return true
+	}
+	return false
 }
 
 // Do retries fn up to MaxAttempts times with exponential backoff.
@@ -129,6 +173,11 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 			return result, nil
 		}
 		lastErr = err
+
+		// Check abort conditions.
+		if shouldAbort(&opts, lastErr) {
+			break
+		}
 	}
 
 	var zero T
