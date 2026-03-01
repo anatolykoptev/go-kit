@@ -3,6 +3,7 @@ package metrics_test
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -297,5 +298,203 @@ func TestReset_IncludesGauges(t *testing.T) {
 	}
 	if len(r.GaugeSnapshot()) != 0 {
 		t.Error("gauges not cleared")
+	}
+}
+
+func TestRate_Basic(t *testing.T) {
+	r := metrics.NewRegistry()
+	rate := r.Rate("events")
+
+	for range 100 {
+		rate.Update(1)
+	}
+
+	if rate.Total() != 100 {
+		t.Errorf("Total = %d, want 100", rate.Total())
+	}
+
+	snap := rate.Snapshot()
+	if snap.Total != 100 {
+		t.Errorf("snapshot Total = %d, want 100", snap.Total)
+	}
+}
+
+func TestRate_Convergence(t *testing.T) {
+	r := metrics.NewRegistry()
+	rate := r.Rate("rps")
+
+	for i := range 10 {
+		rate.Update(100)
+		_ = i
+	}
+
+	if rate.Total() != 1000 {
+		t.Errorf("Total = %d, want 1000", rate.Total())
+	}
+	if m1 := rate.M1(); m1 < 0 {
+		t.Errorf("M1 = %f, want >= 0", m1)
+	}
+}
+
+func TestRateSnapshot(t *testing.T) {
+	r := metrics.NewRegistry()
+	r.Rate("a").Update(10)
+	r.Rate("b").Update(20)
+
+	snap := r.RateSnapshot()
+	if snap["a"].Total != 10 {
+		t.Errorf("a.Total = %d, want 10", snap["a"].Total)
+	}
+	if snap["b"].Total != 20 {
+		t.Errorf("b.Total = %d, want 20", snap["b"].Total)
+	}
+}
+
+func TestHistogram_Percentiles(t *testing.T) {
+	r := metrics.NewRegistry()
+	h := r.Histogram("latency")
+
+	for i := 1; i <= 100; i++ {
+		h.Update(float64(i))
+	}
+
+	snap := h.Snapshot()
+	if snap.Count != 100 {
+		t.Errorf("Count = %d, want 100", snap.Count)
+	}
+	if snap.Min != 1.0 {
+		t.Errorf("Min = %f, want 1.0", snap.Min)
+	}
+	if snap.Max != 100.0 {
+		t.Errorf("Max = %f, want 100.0", snap.Max)
+	}
+	if math.Abs(snap.Mean-50.5) > 0.01 {
+		t.Errorf("Mean = %f, want 50.5", snap.Mean)
+	}
+	if snap.P50 < 40 || snap.P50 > 60 {
+		t.Errorf("P50 = %f, want ~50", snap.P50)
+	}
+	if snap.P99 < 90 {
+		t.Errorf("P99 = %f, want ~99", snap.P99)
+	}
+}
+
+func TestHistogram_Empty(t *testing.T) {
+	r := metrics.NewRegistry()
+	h := r.Histogram("empty")
+
+	snap := h.Snapshot()
+	if snap.Count != 0 {
+		t.Errorf("Count = %d, want 0", snap.Count)
+	}
+	if p := h.Percentile(0.5); p != 0 {
+		t.Errorf("P50 = %f, want 0", p)
+	}
+}
+
+func TestHistogram_ReservoirOverflow(t *testing.T) {
+	r := metrics.NewRegistry()
+	h := r.Histogram("big")
+
+	for i := range 10000 {
+		h.Update(float64(i))
+	}
+
+	if h.Count() != 10000 {
+		t.Errorf("Count = %d, want 10000", h.Count())
+	}
+	snap := h.Snapshot()
+	if snap.Min != 0 {
+		t.Errorf("Min = %f, want 0", snap.Min)
+	}
+	if snap.Max != 9999 {
+		t.Errorf("Max = %f, want 9999", snap.Max)
+	}
+}
+
+func TestHistogramSnapshot(t *testing.T) {
+	r := metrics.NewRegistry()
+	r.Histogram("a").Update(10)
+	r.Histogram("b").Update(20)
+
+	snap := r.HistogramSnapshot()
+	if snap["a"].Count != 1 || snap["a"].Min != 10 {
+		t.Errorf("a = %+v, want count=1, min=10", snap["a"])
+	}
+	if snap["b"].Count != 1 || snap["b"].Min != 20 {
+		t.Errorf("b = %+v, want count=1, min=20", snap["b"])
+	}
+}
+
+func TestTTL_Cleanup(t *testing.T) {
+	r := metrics.NewRegistry()
+	r.IncrWithTTL("stale", 1*time.Millisecond)
+	r.Incr("permanent")
+
+	time.Sleep(5 * time.Millisecond)
+
+	removed := r.CleanupExpired()
+	if removed != 1 {
+		t.Errorf("removed = %d, want 1", removed)
+	}
+
+	snap := r.Snapshot()
+	if _, ok := snap["stale"]; ok {
+		t.Error("stale metric should have been removed")
+	}
+	if snap["permanent"] != 1 {
+		t.Errorf("permanent = %d, want 1", snap["permanent"])
+	}
+}
+
+func TestTTL_Refresh(t *testing.T) {
+	r := metrics.NewRegistry()
+	r.IncrWithTTL("metric", 50*time.Millisecond)
+
+	time.Sleep(10 * time.Millisecond)
+	r.IncrWithTTL("metric", 50*time.Millisecond)
+
+	time.Sleep(20 * time.Millisecond)
+	removed := r.CleanupExpired()
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0 (TTL was refreshed)", removed)
+	}
+	if v := r.Value("metric"); v != 2 {
+		t.Errorf("Value = %d, want 2", v)
+	}
+}
+
+func TestAddWithTTL(t *testing.T) {
+	r := metrics.NewRegistry()
+	r.AddWithTTL("bytes", 1024, 1*time.Millisecond)
+
+	if v := r.Value("bytes"); v != 1024 {
+		t.Errorf("Value = %d, want 1024", v)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	r.CleanupExpired()
+
+	snap := r.Snapshot()
+	if _, ok := snap["bytes"]; ok {
+		t.Error("bytes should have been expired")
+	}
+}
+
+func TestReset_IncludesRatesAndHistograms(t *testing.T) {
+	r := metrics.NewRegistry()
+	r.Rate("r").Update(1)
+	r.Histogram("h").Update(1)
+	r.IncrWithTTL("ttl", time.Minute)
+	r.Reset()
+
+	if len(r.RateSnapshot()) != 0 {
+		t.Error("rates not cleared")
+	}
+	if len(r.HistogramSnapshot()) != 0 {
+		t.Error("histograms not cleared")
+	}
+	if removed := r.CleanupExpired(); removed != 0 {
+		t.Errorf("ttls not cleared, removed = %d", removed)
 	}
 }
