@@ -52,6 +52,20 @@ func Int(key string, def int) int {
 	return def
 }
 
+// IntE is like Int but returns a ParseError if the variable is set but not a valid integer.
+// If the variable is not set, returns (def, nil).
+func IntE(key string, def int) (int, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "int", Err: err}
+	}
+	return n, nil
+}
+
 // Int64 returns the environment variable as int64, or def if not set or invalid.
 func Int64(key string, def int64) int64 {
 	if v := os.Getenv(key); v != "" {
@@ -62,6 +76,19 @@ func Int64(key string, def int64) int64 {
 	return def
 }
 
+// Int64E is like Int64 but returns a ParseError if the variable is set but not a valid int64.
+func Int64E(key string, def int64) (int64, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "int64", Err: err}
+	}
+	return n, nil
+}
+
 // Float returns the environment variable as float64, or def if not set or invalid.
 func Float(key string, def float64) float64 {
 	if v := os.Getenv(key); v != "" {
@@ -70,6 +97,19 @@ func Float(key string, def float64) float64 {
 		}
 	}
 	return def
+}
+
+// FloatE is like Float but returns a ParseError if the variable is set but not a valid float64.
+func FloatE(key string, def float64) (float64, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def, &ParseError{Key: key, Value: v, Type: "float64", Err: err}
+	}
+	return f, nil
 }
 
 // Bool returns the environment variable as a bool, or def if not set.

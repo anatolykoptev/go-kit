@@ -228,3 +228,91 @@ func TestRequired_Empty(t *testing.T) {
 		t.Fatal("Required should return error for empty variable")
 	}
 }
+
+func TestIntE_Valid(t *testing.T) {
+	t.Setenv("TEST_INTE", "42")
+	val, err := env.IntE("TEST_INTE", 0)
+	if err != nil {
+		t.Fatalf("IntE returned error: %v", err)
+	}
+	if val != 42 {
+		t.Errorf("IntE = %d, want 42", val)
+	}
+}
+
+func TestIntE_NotSet(t *testing.T) {
+	val, err := env.IntE("TEST_INTE_MISSING_XYZ", 99)
+	if err != nil {
+		t.Fatalf("IntE should not error on unset: %v", err)
+	}
+	if val != 99 {
+		t.Errorf("IntE = %d, want default 99", val)
+	}
+}
+
+func TestIntE_Invalid(t *testing.T) {
+	t.Setenv("TEST_INTE_BAD", "not_a_number")
+	_, err := env.IntE("TEST_INTE_BAD", 0)
+	if err == nil {
+		t.Fatal("IntE should return error for invalid value")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *env.ParseError", err)
+	}
+	if pe.Key != "TEST_INTE_BAD" || pe.Value != "not_a_number" || pe.Type != "int" {
+		t.Errorf("ParseError = {%q, %q, %q}, want {TEST_INTE_BAD, not_a_number, int}", pe.Key, pe.Value, pe.Type)
+	}
+}
+
+func TestInt64E_Valid(t *testing.T) {
+	t.Setenv("TEST_INT64E", "9999999999")
+	val, err := env.Int64E("TEST_INT64E", 0)
+	if err != nil {
+		t.Fatalf("Int64E returned error: %v", err)
+	}
+	if val != 9999999999 {
+		t.Errorf("Int64E = %d, want 9999999999", val)
+	}
+}
+
+func TestInt64E_Invalid(t *testing.T) {
+	t.Setenv("TEST_INT64E_BAD", "xyz")
+	_, err := env.Int64E("TEST_INT64E_BAD", 0)
+	if err == nil {
+		t.Fatal("Int64E should return error for invalid value")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *env.ParseError", err)
+	}
+	if pe.Type != "int64" {
+		t.Errorf("Type = %q, want %q", pe.Type, "int64")
+	}
+}
+
+func TestFloatE_Valid(t *testing.T) {
+	t.Setenv("TEST_FLOATE", "3.14")
+	val, err := env.FloatE("TEST_FLOATE", 0)
+	if err != nil {
+		t.Fatalf("FloatE returned error: %v", err)
+	}
+	if val != 3.14 {
+		t.Errorf("FloatE = %f, want 3.14", val)
+	}
+}
+
+func TestFloatE_Invalid(t *testing.T) {
+	t.Setenv("TEST_FLOATE_BAD", "not_float")
+	_, err := env.FloatE("TEST_FLOATE_BAD", 0)
+	if err == nil {
+		t.Fatal("FloatE should return error for invalid value")
+	}
+	var pe *env.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error type = %T, want *env.ParseError", err)
+	}
+	if pe.Type != "float64" {
+		t.Errorf("Type = %q, want %q", pe.Type, "float64")
+	}
+}
