@@ -5,8 +5,11 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -17,12 +20,21 @@ const (
 	DefaultMaxDelay     = 5 * time.Second
 )
 
+// Timer abstracts time.After for testability.
+// Implement this to control delays in tests.
+type Timer interface {
+	After(d time.Duration) <-chan time.Time
+}
+
 // Options controls retry behavior.
 // Zero values are replaced by the corresponding Default* constants.
 type Options struct {
-	MaxAttempts  int
-	InitialDelay time.Duration
-	MaxDelay     time.Duration
+	MaxAttempts    int
+	InitialDelay   time.Duration
+	MaxDelay       time.Duration
+	MaxElapsedTime time.Duration // total wall-clock budget; 0 = no limit
+	Jitter         bool          // add ±25% random jitter to delay
+	Timer          Timer         // custom timer for tests; nil = real time.After
 }
 
 func (o *Options) applyDefaults() {
@@ -35,6 +47,22 @@ func (o *Options) applyDefaults() {
 	if o.MaxDelay <= 0 {
 		o.MaxDelay = DefaultMaxDelay
 	}
+}
+
+// RetryAfterError wraps an error with a retry-after duration hint.
+// Return this from fn to override the computed backoff for the next attempt.
+type RetryAfterError struct {
+	Delay time.Duration
+	Err   error
+}
+
+func (e *RetryAfterError) Error() string { return e.Err.Error() }
+func (e *RetryAfterError) Unwrap() error { return e.Err }
+
+// RetryAfter wraps an error with a retry-after duration.
+// When Do receives this error, it uses d instead of the exponential backoff.
+func RetryAfter(d time.Duration, err error) error {
+	return &RetryAfterError{Delay: d, Err: err}
 }
 
 // HTTPError is returned when an HTTP response has a retryable status code.
@@ -56,17 +84,43 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 		return zero, err
 	}
 
+	start := time.Now()
 	delay := opts.InitialDelay
 	var lastErr error
 
 	for attempt := range opts.MaxAttempts {
+		// Check elapsed time budget before each retry.
+		if opts.MaxElapsedTime > 0 && attempt > 0 && time.Since(start) >= opts.MaxElapsedTime {
+			break
+		}
+
 		if attempt > 0 {
+			actualDelay := delay
+
+			// Override delay if fn returned RetryAfter hint.
+			var ra *RetryAfterError
+			if errors.As(lastErr, &ra) && ra.Delay > 0 {
+				actualDelay = ra.Delay
+			}
+
+			// Apply jitter (±25%).
+			if opts.Jitter && actualDelay > 0 {
+				quarter := int64(actualDelay) / 4
+				actualDelay = time.Duration(int64(actualDelay) - quarter + rand.Int64N(2*quarter+1))
+			}
+
+			// Wait using Timer or real time.
+			afterCh := time.After(actualDelay)
+			if opts.Timer != nil {
+				afterCh = opts.Timer.After(actualDelay)
+			}
 			select {
 			case <-ctx.Done():
 				var zero T
 				return zero, ctx.Err()
-			case <-time.After(delay):
+			case <-afterCh:
 			}
+
 			delay = min(delay*2, opts.MaxDelay)
 		}
 
@@ -105,9 +159,25 @@ func HTTP(ctx context.Context, opts Options, fn func() (*http.Response, error)) 
 			return nil, err
 		}
 		if isRetryableStatus(resp.StatusCode) {
+			retryDelay := parseRetryAfter(resp.Header.Get("Retry-After"))
 			resp.Body.Close()
-			return nil, &HTTPError{StatusCode: resp.StatusCode}
+			httpErr := &HTTPError{StatusCode: resp.StatusCode}
+			if retryDelay > 0 {
+				return nil, RetryAfter(retryDelay, httpErr)
+			}
+			return nil, httpErr
 		}
 		return resp, nil
 	})
+}
+
+// parseRetryAfter parses the Retry-After header value as seconds.
+func parseRetryAfter(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(s); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
 }
