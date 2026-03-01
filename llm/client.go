@@ -131,17 +131,19 @@ type chatResponse struct {
 
 // Complete sends a text completion request with optional system prompt.
 // If system is empty, only the user message is sent.
-func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
+// Optional ChatOptions (e.g. WithChatTemperature, WithChatMaxTokens) override client defaults for this call.
+func (c *Client) Complete(ctx context.Context, system, user string, opts ...ChatOption) (string, error) {
 	var msgs []Message
 	if system != "" {
 		msgs = append(msgs, Message{Role: "system", Content: system})
 	}
 	msgs = append(msgs, Message{Role: "user", Content: user})
-	return c.CompleteRaw(ctx, msgs)
+	return c.CompleteRaw(ctx, msgs, opts...)
 }
 
 // CompleteMultimodal sends a vision request with text + images.
-func (c *Client) CompleteMultimodal(ctx context.Context, prompt string, images []ImagePart) (string, error) {
+// Optional ChatOptions (e.g. WithChatTemperature, WithChatMaxTokens) override client defaults for this call.
+func (c *Client) CompleteMultimodal(ctx context.Context, prompt string, images []ImagePart, opts ...ChatOption) (string, error) {
 	parts := []ContentPart{{Type: "text", Text: prompt}}
 	for _, img := range images {
 		parts = append(parts, ContentPart{
@@ -150,13 +152,21 @@ func (c *Client) CompleteMultimodal(ctx context.Context, prompt string, images [
 		})
 	}
 	msgs := []Message{{Role: "user", Content: parts}}
-	return c.CompleteRaw(ctx, msgs)
+	return c.CompleteRaw(ctx, msgs, opts...)
 }
 
 // CompleteRaw sends a chat completion with explicit messages.
 // Retries on 429/5xx, cycles through fallback keys.
-func (c *Client) CompleteRaw(ctx context.Context, messages []Message) (string, error) {
+// Optional ChatOptions (e.g. WithChatTemperature, WithChatMaxTokens) override client defaults for this call.
+func (c *Client) CompleteRaw(ctx context.Context, messages []Message, opts ...ChatOption) (string, error) {
 	req := c.newRequest(messages)
+	if len(opts) > 0 {
+		var cfg chatConfig
+		for _, opt := range opts {
+			opt(&cfg)
+		}
+		cfg.apply(req)
+	}
 	resp, err := c.execute(ctx, req)
 	if err != nil {
 		return "", err

@@ -474,6 +474,40 @@ func TestStream_Usage(t *testing.T) {
 	}
 }
 
+func TestComplete_PerCallOverrides(t *testing.T) {
+	var capturedTemp float64
+	var capturedMaxTokens float64
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		capturedTemp, _ = req["temperature"].(float64)
+		capturedMaxTokens, _ = req["max_tokens"].(float64)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ok"}},
+			},
+		})
+	})
+
+	// Client defaults: temp=0.1, maxTokens=8192
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	_, err := c.Complete(context.Background(), "", "test",
+		llm.WithChatTemperature(0.7),
+		llm.WithChatMaxTokens(250),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedTemp != 0.7 {
+		t.Errorf("temperature = %v, want 0.7", capturedTemp)
+	}
+	if capturedMaxTokens != 250 {
+		t.Errorf("max_tokens = %v, want 250", capturedMaxTokens)
+	}
+}
+
 func TestStream_Error(t *testing.T) {
 	srv := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
