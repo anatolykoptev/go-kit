@@ -63,6 +63,8 @@ type chatConfig struct {
 	tools          []Tool
 	toolChoice     any
 	responseFormat any
+	temperature    *float64
+	maxTokens      *int
 }
 
 func (cfg *chatConfig) apply(req *chatRequest) {
@@ -75,6 +77,12 @@ func (cfg *chatConfig) apply(req *chatRequest) {
 	if cfg.responseFormat != nil {
 		req.ResponseFormat = cfg.responseFormat
 	}
+	if cfg.temperature != nil {
+		req.Temperature = *cfg.temperature
+	}
+	if cfg.maxTokens != nil {
+		req.MaxTokens = *cfg.maxTokens
+	}
 }
 
 // WithTools sets the available tools for the request.
@@ -85,6 +93,16 @@ func WithTools(tools []Tool) ChatOption {
 // WithToolChoice sets the tool choice strategy ("auto", "none", or a specific tool).
 func WithToolChoice(choice any) ChatOption {
 	return func(c *chatConfig) { c.toolChoice = choice }
+}
+
+// WithChatTemperature overrides the sampling temperature for a single call.
+func WithChatTemperature(t float64) ChatOption {
+	return func(c *chatConfig) { c.temperature = &t }
+}
+
+// WithChatMaxTokens overrides the max tokens for a single call.
+func WithChatMaxTokens(n int) ChatOption {
+	return func(c *chatConfig) { c.maxTokens = &n }
 }
 
 // WithJSONSchema sets the response format to structured JSON output.
