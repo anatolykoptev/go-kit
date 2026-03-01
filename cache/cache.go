@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"hash/fnv"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,10 @@ type Config struct {
 
 	// L2TTL is the TTL for L2 Redis entries (default 24h). Ignored if no Redis.
 	L2TTL time.Duration
+
+	// JitterPercent adds random TTL variation to prevent cache stampedes.
+	// 0.1 means ±10% jitter. 0 disables jitter (default).
+	JitterPercent float64
 }
 
 func (c *Config) applyDefaults() {
@@ -56,6 +61,43 @@ type entry struct {
 	inMain    bool          // false=small, true=main
 }
 
+// group deduplicates concurrent loads for the same key.
+type group struct {
+	mu    sync.Mutex
+	calls map[string]*groupCall
+}
+
+type groupCall struct {
+	wg  sync.WaitGroup
+	val []byte
+	err error
+}
+
+func (g *group) do(key string, fn func() ([]byte, error)) ([]byte, error) {
+	g.mu.Lock()
+	if g.calls == nil {
+		g.calls = make(map[string]*groupCall)
+	}
+	if c, ok := g.calls[key]; ok {
+		g.mu.Unlock()
+		c.wg.Wait()
+		return c.val, c.err
+	}
+	c := &groupCall{}
+	c.wg.Add(1)
+	g.calls[key] = c
+	g.mu.Unlock()
+
+	c.val, c.err = fn()
+	c.wg.Done()
+
+	g.mu.Lock()
+	delete(g.calls, key)
+	g.mu.Unlock()
+
+	return c.val, c.err
+}
+
 // Cache is a tiered L1 (memory) + optional L2 (Redis) cache.
 // L1 uses the S3-FIFO eviction algorithm with three queues.
 type Cache struct {
@@ -72,10 +114,12 @@ type Cache struct {
 	mainCap  int // 90% of L1MaxItems
 	ghostCap int // = mainCap
 
-	hits   atomic.Int64
-	misses atomic.Int64
+	hits      atomic.Int64
+	misses    atomic.Int64
+	evictions atomic.Int64
 
-	done chan struct{}
+	flight group
+	done   chan struct{}
 }
 
 // New creates a new Cache. If cfg.RedisURL is empty, L2 is disabled.
@@ -110,6 +154,18 @@ func New(cfg Config) *Cache {
 	go c.cleanupLoop(interval)
 
 	return c
+}
+
+func (c *Cache) jitteredTTL() time.Duration {
+	ttl := c.cfg.L1TTL
+	if c.cfg.JitterPercent <= 0 {
+		return ttl
+	}
+	jitter := int64(float64(ttl) * c.cfg.JitterPercent)
+	if jitter <= 0 {
+		return ttl
+	}
+	return ttl + time.Duration(rand.Int64N(2*jitter+1)-jitter)
 }
 
 // Get retrieves a value from L1 (then L2 if miss). Returns nil, false on miss.
@@ -147,7 +203,7 @@ func (c *Cache) Set(ctx context.Context, key string, data []byte) {
 	// Update existing entry.
 	if e, ok := c.items[key]; ok {
 		e.data = data
-		e.expiresAt = time.Now().Add(c.cfg.L1TTL)
+		e.expiresAt = time.Now().Add(c.jitteredTTL())
 		return
 	}
 
@@ -170,7 +226,7 @@ func (c *Cache) Set(ctx context.Context, key string, data []byte) {
 	e := &entry{
 		key:       key,
 		data:      data,
-		expiresAt: time.Now().Add(c.cfg.L1TTL),
+		expiresAt: time.Now().Add(c.jitteredTTL()),
 		freq:      initFreq,
 	}
 	e.elem = c.small.PushBack(e)
@@ -192,22 +248,51 @@ func (c *Cache) Delete(ctx context.Context, key string) {
 	_ = ctx
 }
 
+// GetOrLoad returns the value for key, loading it via loader on cache miss.
+// Concurrent loads for the same key are deduplicated (singleflight).
+// The loaded value is stored in L1.
+func (c *Cache) GetOrLoad(ctx context.Context, key string, loader func(context.Context) ([]byte, error)) ([]byte, error) {
+	if data, ok := c.Get(ctx, key); ok {
+		return data, nil
+	}
+
+	data, err := c.flight.do(key, func() ([]byte, error) {
+		return loader(ctx)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	c.Set(ctx, key, data)
+	return data, nil
+}
+
 // Stats holds cache statistics.
 type Stats struct {
-	L1Hits   int64
-	L1Misses int64
-	L1Size   int
+	L1Hits    int64
+	L1Misses  int64
+	L1Size    int
+	Evictions int64
+	HitRatio  float64
 }
 
 // Stats returns a snapshot of cache statistics.
 func (c *Cache) Stats() Stats {
+	hits := c.hits.Load()
+	misses := c.misses.Load()
+	var ratio float64
+	if total := hits + misses; total > 0 {
+		ratio = float64(hits) / float64(total)
+	}
 	c.mu.Lock()
 	size := len(c.items)
 	c.mu.Unlock()
 	return Stats{
-		L1Hits:   c.hits.Load(),
-		L1Misses: c.misses.Load(),
-		L1Size:   size,
+		L1Hits:    hits,
+		L1Misses:  misses,
+		L1Size:    size,
+		Evictions: c.evictions.Load(),
+		HitRatio:  ratio,
 	}
 }
 
@@ -244,6 +329,7 @@ func (c *Cache) evict() bool {
 
 		if now.After(e.expiresAt) {
 			delete(c.items, e.key)
+			c.evictions.Add(1)
 			return true
 		}
 
@@ -257,6 +343,7 @@ func (c *Cache) evict() bool {
 
 		// One-hit wonder — evict to ghost.
 		delete(c.items, e.key)
+		c.evictions.Add(1)
 		c.addToGhost(e.key)
 		return true
 	}
@@ -270,6 +357,7 @@ func (c *Cache) evict() bool {
 
 		if now.After(e.expiresAt) {
 			delete(c.items, e.key)
+			c.evictions.Add(1)
 			return true
 		}
 
@@ -280,6 +368,7 @@ func (c *Cache) evict() bool {
 		}
 
 		delete(c.items, e.key)
+		c.evictions.Add(1)
 		return true
 	}
 
@@ -288,6 +377,7 @@ func (c *Cache) evict() bool {
 		e := front.Value.(*entry)
 		c.main.Remove(front)
 		delete(c.items, e.key)
+		c.evictions.Add(1)
 		return true
 	}
 
