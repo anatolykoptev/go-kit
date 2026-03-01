@@ -310,3 +310,106 @@ func TestHTTP_RetryAfterHeader(t *testing.T) {
 		t.Errorf("delay = %v, want 3s (from Retry-After header)", timer.delays[0])
 	}
 }
+
+func TestDo_AbortOn(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts: 5,
+		AbortOn:     []error{context.DeadlineExceeded},
+	}, func() (int, error) {
+		attempts++
+		return 0, context.DeadlineExceeded
+	})
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (should abort on first error)", attempts)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestDo_AbortOn_NonMatching(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: time.Millisecond,
+		AbortOn:      []error{context.DeadlineExceeded},
+		Timer:        &instantTimer{},
+	}, func() (int, error) {
+		attempts++
+		return 0, errors.New("transient")
+	})
+
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (non-matching error should retry)", attempts)
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDo_RetryableOnly(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:   3,
+		InitialDelay:  time.Millisecond,
+		RetryableOnly: true,
+		Timer:         &instantTimer{},
+	}, func() (int, error) {
+		attempts++
+		return 0, retry.MarkRetryable(errors.New("temporary"))
+	})
+
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (retryable error should retry)", attempts)
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDo_RetryableOnly_Abort(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:   5,
+		RetryableOnly: true,
+	}, func() (int, error) {
+		attempts++
+		return 0, errors.New("permanent")
+	})
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (unmarked error should abort)", attempts)
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestMarkRetryable_Unwrap(t *testing.T) {
+	inner := errors.New("db connection failed")
+	wrapped := retry.MarkRetryable(inner)
+
+	if !errors.Is(wrapped, inner) {
+		t.Error("MarkRetryable should preserve error chain")
+	}
+	if !retry.IsRetryable(wrapped) {
+		t.Error("IsRetryable should return true for MarkRetryable error")
+	}
+	if retry.IsRetryable(inner) {
+		t.Error("IsRetryable should return false for plain error")
+	}
+}
+
+func TestIsRetryable(t *testing.T) {
+	if retry.IsRetryable(nil) {
+		t.Error("IsRetryable(nil) should be false")
+	}
+	if retry.IsRetryable(errors.New("plain")) {
+		t.Error("IsRetryable(plain error) should be false")
+	}
+	if !retry.IsRetryable(retry.MarkRetryable(errors.New("temp"))) {
+		t.Error("IsRetryable(MarkRetryable) should be true")
+	}
+}
