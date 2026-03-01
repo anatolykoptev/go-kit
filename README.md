@@ -110,17 +110,30 @@ for chunk, ok := stream.Next(); ok; chunk, ok = stream.Next() {
 import "github.com/anatolykoptev/go-kit/cache"
 
 c := cache.New(cache.Config{
-    L1MaxItems: 1000,
-    L1TTL:      30 * time.Minute,
+    L1MaxItems:    1000,
+    L1TTL:         30 * time.Minute,
+    JitterPercent: 0.1,  // ±10% TTL jitter prevents stampedes
 })
 defer c.Close()
 
-c.Set(ctx, key, data)
-data, ok := c.Get(ctx, key)
-key := c.Key("prefix", query)  // deterministic FNV-128a key
+c.Set(ctx, "key", data)
+data, ok := c.Get(ctx, "key")
+
+// Cache-aside with singleflight (concurrent loads deduplicated)
+data, err := c.GetOrLoad(ctx, "key", func(ctx context.Context) ([]byte, error) {
+    return fetchFromDB(ctx, "key")
+})
+
+// Statistics
+stats := c.Stats()
+fmt.Printf("Hit ratio: %.1f%%, Evictions: %d\n", stats.HitRatio*100, stats.Evictions)
 ```
 
-L1 memory cache with S3-FIFO eviction for high hit rates. Background cleanup, TTL expiry. L2 Redis planned.
+- GetOrLoad with inline singleflight (prevents thundering herd)
+- TTL jitter (prevents cache stampedes)
+- Evictions counter + HitRatio in Stats
+- L1 memory cache with S3-FIFO eviction for high hit rates
+- Background cleanup, TTL expiry. L2 Redis planned.
 
 ### retry
 
