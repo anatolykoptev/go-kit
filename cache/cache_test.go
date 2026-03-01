@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -384,5 +385,214 @@ func TestStats_HitRatio(t *testing.T) {
 	// 2 hits / 3 total = 0.666...
 	if stats.HitRatio < 0.65 || stats.HitRatio > 0.68 {
 		t.Errorf("HitRatio = %f, want ~0.667", stats.HitRatio)
+	}
+}
+
+// mapL2 is a mock L2 for testing (no Redis needed).
+type mapL2 struct {
+	mu   sync.Mutex
+	data map[string][]byte
+}
+
+func newMapL2() *mapL2 {
+	return &mapL2{data: make(map[string][]byte)}
+}
+
+func (m *mapL2) Get(_ context.Context, key string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.data[key]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return v, nil
+}
+
+func (m *mapL2) Set(_ context.Context, key string, data []byte, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[key] = data
+	return nil
+}
+
+func (m *mapL2) Del(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, key)
+	return nil
+}
+
+func (m *mapL2) Close() error { return nil }
+
+func TestL2_WriteThrough(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	c.WithL2(l2)
+
+	ctx := context.Background()
+	c.Set(ctx, "key1", []byte("value1"))
+
+	// Verify L2 received the write.
+	l2.mu.Lock()
+	got, ok := l2.data["key1"]
+	l2.mu.Unlock()
+	if !ok {
+		t.Fatal("L2 should have received write-through")
+	}
+	if string(got) != "value1" {
+		t.Errorf("L2 got %q, want %q", got, "value1")
+	}
+}
+
+func TestL2_ReadThrough(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	l2.data["pre-seeded"] = []byte("from-redis")
+	c.WithL2(l2)
+
+	ctx := context.Background()
+
+	// L1 miss, L2 hit — should return data and promote to L1.
+	got, ok := c.Get(ctx, "pre-seeded")
+	if !ok {
+		t.Fatal("should hit L2")
+	}
+	if string(got) != "from-redis" {
+		t.Errorf("got %q, want %q", got, "from-redis")
+	}
+
+	// Now should be in L1 — verify by checking stats.
+	stats := c.Stats()
+	if stats.L2Hits != 1 {
+		t.Errorf("L2Hits = %d, want 1", stats.L2Hits)
+	}
+
+	// Second Get should hit L1 (not L2 again).
+	got2, ok2 := c.Get(ctx, "pre-seeded")
+	if !ok2 || string(got2) != "from-redis" {
+		t.Errorf("L1 promotion failed: ok=%v, got=%q", ok2, got2)
+	}
+	stats2 := c.Stats()
+	if stats2.L1Hits != 1 {
+		t.Errorf("L1Hits after promotion = %d, want 1", stats2.L1Hits)
+	}
+}
+
+func TestL2_Miss(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	c.WithL2(l2)
+
+	ctx := context.Background()
+	_, ok := c.Get(ctx, "nowhere")
+	if ok {
+		t.Error("should miss both L1 and L2")
+	}
+
+	stats := c.Stats()
+	if stats.L2Misses != 1 {
+		t.Errorf("L2Misses = %d, want 1", stats.L2Misses)
+	}
+}
+
+func TestL2_Delete(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	c.WithL2(l2)
+
+	ctx := context.Background()
+	c.Set(ctx, "del-me", []byte("data"))
+	c.Delete(ctx, "del-me")
+
+	// Verify L2 also deleted.
+	l2.mu.Lock()
+	_, ok := l2.data["del-me"]
+	l2.mu.Unlock()
+	if ok {
+		t.Error("L2 should have deleted the key")
+	}
+}
+
+func TestL2_GetOrLoad(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	c.WithL2(l2)
+
+	ctx := context.Background()
+	got, err := c.GetOrLoad(ctx, "loaded", func(_ context.Context) ([]byte, error) {
+		return []byte("from-loader"), nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != "from-loader" {
+		t.Errorf("got %q, want %q", got, "from-loader")
+	}
+
+	// Verify L2 received via write-through from Set.
+	l2.mu.Lock()
+	v, ok := l2.data["loaded"]
+	l2.mu.Unlock()
+	if !ok {
+		t.Fatal("L2 should have received loaded value")
+	}
+	if string(v) != "from-loader" {
+		t.Errorf("L2 got %q, want %q", v, "from-loader")
+	}
+}
+
+func TestL2_Stats(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	l2.data["exists"] = []byte("yes")
+	c.WithL2(l2)
+
+	ctx := context.Background()
+	c.Get(ctx, "exists") // L2 hit
+	c.Get(ctx, "exists") // L1 hit (promoted)
+	c.Get(ctx, "nope")   // L2 miss
+
+	stats := c.Stats()
+	if stats.L1Hits != 1 {
+		t.Errorf("L1Hits = %d, want 1", stats.L1Hits)
+	}
+	if stats.L2Hits != 1 {
+		t.Errorf("L2Hits = %d, want 1", stats.L2Hits)
+	}
+	if stats.L2Misses != 1 {
+		t.Errorf("L2Misses = %d, want 1", stats.L2Misses)
+	}
+}
+
+func TestNoL2_Unchanged(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	c.Set(ctx, "a", []byte("1"))
+	got, ok := c.Get(ctx, "a")
+	if !ok || string(got) != "1" {
+		t.Errorf("L1-only: ok=%v, got=%q", ok, got)
+	}
+	_, ok2 := c.Get(ctx, "miss")
+	if ok2 {
+		t.Error("should miss without L2")
+	}
+
+	stats := c.Stats()
+	if stats.L2Hits != 0 || stats.L2Misses != 0 {
+		t.Errorf("L2 stats should be 0 without L2: hits=%d, misses=%d", stats.L2Hits, stats.L2Misses)
 	}
 }
