@@ -1,6 +1,7 @@
 package env_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -192,5 +193,38 @@ func TestExists_Empty(t *testing.T) {
 	t.Setenv("TEST_EXISTS_EMPTY", "")
 	if !env.Exists("TEST_EXISTS_EMPTY") {
 		t.Error("Exists should return true for set-but-empty variable")
+	}
+}
+
+func TestRequired_Set(t *testing.T) {
+	t.Setenv("TEST_REQ", "dbhost:5432")
+	val, err := env.Required("TEST_REQ")
+	if err != nil {
+		t.Fatalf("Required returned error: %v", err)
+	}
+	if val != "dbhost:5432" {
+		t.Errorf("Required = %q, want %q", val, "dbhost:5432")
+	}
+}
+
+func TestRequired_NotSet(t *testing.T) {
+	_, err := env.Required("TEST_REQ_MISSING_XYZ")
+	if err == nil {
+		t.Fatal("Required should return error for unset variable")
+	}
+	var notSet *env.NotSetError
+	if !errors.As(err, &notSet) {
+		t.Fatalf("error type = %T, want *env.NotSetError", err)
+	}
+	if notSet.Key != "TEST_REQ_MISSING_XYZ" {
+		t.Errorf("Key = %q, want %q", notSet.Key, "TEST_REQ_MISSING_XYZ")
+	}
+}
+
+func TestRequired_Empty(t *testing.T) {
+	t.Setenv("TEST_REQ_EMPTY", "")
+	_, err := env.Required("TEST_REQ_EMPTY")
+	if err == nil {
+		t.Fatal("Required should return error for empty variable")
 	}
 }
