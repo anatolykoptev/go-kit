@@ -779,7 +779,7 @@ err := config.Parse(&cfg)
 
 ### Planned Additions
 
-**Status**: DONE (items 1-3: TruncateMiddle, configurable placeholder, case conversions)
+**Status**: DONE (items 1-6: TruncateMiddle, configurable placeholder, case conversions, WordWrap, Scrub, ContainsAll)
 
 | # | Feature | Reference | Effort |
 |---|---------|-----------|--------|
