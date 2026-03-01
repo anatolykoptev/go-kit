@@ -33,7 +33,13 @@ timeout := env.Duration("TIMEOUT", 30*time.Second)
 hosts := env.List("ALLOWED_HOSTS", "localhost")  // comma-separated
 ```
 
-Functions: `Str`, `Int`, `Int64`, `Float`, `Bool`, `Duration`, `List`, `Int64List`.
+Functions: `Str`, `Int`, `Int64`, `Uint`, `Uint64`, `Float`, `Bool`, `Duration`, `List`, `Int64List`, `Map`, `URL`.
+
+```go
+headers := env.Map("HEADERS", "")              // "Content-Type:json,Accept:*/*" → map
+endpoint := env.URL("API_URL", "http://localhost:8080")  // parsed *url.URL
+maxConns := env.Uint("MAX_CONNS", 100)
+```
 
 #### Error handling
 
