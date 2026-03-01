@@ -83,8 +83,10 @@ func NewClient(baseURL, apiKey, model string, opts ...Option) *Client {
 
 // Message is a chat message.
 type Message struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"` // string or []ContentPart for multimodal
+	Role       string     `json:"role"`
+	Content    any        `json:"content"` // string or []ContentPart for multimodal
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // ContentPart is a part of a multimodal message.
@@ -106,18 +108,25 @@ type ImagePart struct {
 }
 
 type chatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature"`
-	MaxTokens   int       `json:"max_tokens"`
+	Model          string    `json:"model"`
+	Messages       []Message `json:"messages"`
+	Temperature    float64   `json:"temperature"`
+	MaxTokens      int       `json:"max_tokens"`
+	Stream         bool      `json:"stream,omitempty"`
+	Tools          []Tool    `json:"tools,omitempty"`
+	ToolChoice     any       `json:"tool_choice,omitempty"`
+	ResponseFormat any       `json:"response_format,omitempty"`
 }
 
 type chatResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // Complete sends a text completion request with optional system prompt.
@@ -147,26 +156,41 @@ func (c *Client) CompleteMultimodal(ctx context.Context, prompt string, images [
 // CompleteRaw sends a chat completion with explicit messages.
 // Retries on 429/5xx, cycles through fallback keys.
 func (c *Client) CompleteRaw(ctx context.Context, messages []Message) (string, error) {
-	// Try primary key.
-	result, err := c.doWithRetry(ctx, c.apiKey, messages)
+	req := c.newRequest(messages)
+	resp, err := c.execute(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return resp.Content, nil
+}
+
+func (c *Client) newRequest(messages []Message) *chatRequest {
+	return &chatRequest{
+		Model:       c.model,
+		Messages:    messages,
+		Temperature: c.temperature,
+		MaxTokens:   c.maxTokens,
+	}
+}
+
+func (c *Client) execute(ctx context.Context, req *chatRequest) (*ChatResponse, error) {
+	result, err := c.doWithRetry(ctx, c.apiKey, req)
 	if err == nil {
 		return result, nil
 	}
-
-	// Try fallback keys.
 	for _, key := range c.fallbackKeys {
 		if key == "" {
 			continue
 		}
-		result, err = c.doWithRetry(ctx, key, messages)
+		result, err = c.doWithRetry(ctx, key, req)
 		if err == nil {
 			return result, nil
 		}
 	}
-	return "", err
+	return nil, err
 }
 
-func (c *Client) doWithRetry(ctx context.Context, apiKey string, messages []Message) (string, error) {
+func (c *Client) doWithRetry(ctx context.Context, apiKey string, req *chatRequest) (*ChatResponse, error) {
 	delay := retryDelay
 	var lastErr error
 
@@ -174,13 +198,13 @@ func (c *Client) doWithRetry(ctx context.Context, apiKey string, messages []Mess
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(delay):
 			}
 			delay = min(delay*2, maxRetryDelay)
 		}
 
-		result, err := c.doRequest(ctx, apiKey, messages)
+		result, err := c.doRequest(ctx, apiKey, req)
 		if err == nil {
 			return result, nil
 		}
@@ -189,57 +213,57 @@ func (c *Client) doWithRetry(ctx context.Context, apiKey string, messages []Mess
 		// Only retry on retryable errors.
 		var re *retryableError
 		if !asRetryable(err, &re) {
-			return "", err
+			return nil, err
 		}
 	}
-	return "", lastErr
+	return nil, lastErr
 }
 
-func (c *Client) doRequest(ctx context.Context, apiKey string, messages []Message) (string, error) {
-	body, err := json.Marshal(chatRequest{
-		Model:       c.model,
-		Messages:    messages,
-		Temperature: c.temperature,
-		MaxTokens:   c.maxTokens,
-	})
+func (c *Client) doRequest(ctx context.Context, apiKey string, req *chatRequest) (*ChatResponse, error) {
+	body, err := json.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: URL comes from caller config, not user input
+	resp, err := c.httpClient.Do(httpReq) //nolint:gosec // G704: URL comes from caller config, not user input
 	if err != nil {
-		return "", fmt.Errorf("http request: %w", err)
+		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if isRetryableStatus(resp.StatusCode) {
-		return "", &retryableError{statusCode: resp.StatusCode, body: string(respBody)}
+		return nil, &retryableError{statusCode: resp.StatusCode, body: string(respBody)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("llm: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("llm: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp chatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if len(chatResp.Choices) == 0 {
-		return "", errors.New("llm: empty choices in response")
+		return nil, errors.New("llm: empty choices in response")
 	}
 
-	return strings.TrimSpace(chatResp.Choices[0].Message.Content), nil
+	return &ChatResponse{
+		Content:      strings.TrimSpace(chatResp.Choices[0].Message.Content),
+		ToolCalls:    chatResp.Choices[0].Message.ToolCalls,
+		FinishReason: chatResp.Choices[0].FinishReason,
+		Usage:        chatResp.Usage,
+	}, nil
 }
 
 type retryableError struct {
