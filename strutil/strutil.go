@@ -2,22 +2,35 @@
 // Zero external dependencies.
 package strutil
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Truncate caps s at maxRunes runes, appending "..." if truncated.
 // Safe for UTF-8 (Cyrillic, CJK, emoji).
 func Truncate(s string, maxRunes int) string {
+	return TruncateWith(s, maxRunes, "...")
+}
+
+// TruncateWith is like Truncate but uses a custom placeholder.
+func TruncateWith(s string, maxRunes int, placeholder string) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
 		return s
 	}
-	return string(runes[:maxRunes]) + "..."
+	return string(runes[:maxRunes]) + placeholder
 }
 
 // TruncateAtWord truncates s to maxRunes at a word boundary.
 // If the last space is too far back (< half of maxRunes), truncates at maxRunes.
 // Appends "..." if truncated.
 func TruncateAtWord(s string, maxRunes int) string {
+	return TruncateAtWordWith(s, maxRunes, "...")
+}
+
+// TruncateAtWordWith is like TruncateAtWord but uses a custom placeholder.
+func TruncateAtWordWith(s string, maxRunes int, placeholder string) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
 		return s
@@ -25,9 +38,33 @@ func TruncateAtWord(s string, maxRunes int) string {
 	truncated := string(runes[:maxRunes])
 	cut := strings.LastIndex(truncated, " ")
 	if cut < len(truncated)/2 {
-		return truncated + "..."
+		return truncated + placeholder
 	}
-	return truncated[:cut] + "..."
+	return truncated[:cut] + placeholder
+}
+
+// TruncateMiddle keeps the start and end of s, cutting the middle.
+// Appends "..." as the middle placeholder.
+// Example: TruncateMiddle("path/to/very/long/file.go", 15) → "path/to/...file.go"
+func TruncateMiddle(s string, maxRunes int) string {
+	return TruncateMiddleWith(s, maxRunes, "...")
+}
+
+// TruncateMiddleWith is like TruncateMiddle but uses a custom placeholder.
+func TruncateMiddleWith(s string, maxRunes int, placeholder string) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 0 {
+		return placeholder
+	}
+	head := (maxRunes + 1) / 2
+	tail := maxRunes - head
+	if tail <= 0 {
+		return string(runes[:head]) + placeholder
+	}
+	return string(runes[:head]) + placeholder + string(runes[len(runes)-tail:])
 }
 
 // Contains reports whether items contains s.
@@ -48,4 +85,96 @@ func ContainsAny(s string, substrs []string) bool {
 		}
 	}
 	return false
+}
+
+// splitWords breaks s into words by detecting case transitions and delimiters.
+// Handles camelCase, PascalCase, snake_case, kebab-case, spaces, and acronyms.
+func splitWords(s string) []string {
+	var words []string
+	runes := []rune(s)
+	start := 0
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		if r == '_' || r == '-' || r == ' ' {
+			if i > start {
+				words = append(words, string(runes[start:i]))
+			}
+			start = i + 1
+			continue
+		}
+
+		if i > start && unicode.IsUpper(r) {
+			prev := runes[i-1]
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) {
+				words = append(words, string(runes[start:i]))
+				start = i
+			} else if unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+				words = append(words, string(runes[start:i]))
+				start = i
+			}
+		}
+	}
+	if start < len(runes) {
+		words = append(words, string(runes[start:]))
+	}
+	return words
+}
+
+// ToSnakeCase converts s to snake_case.
+// "myVariableName" → "my_variable_name", "HTTPServer" → "http_server"
+func ToSnakeCase(s string) string {
+	words := splitWords(s)
+	for i, w := range words {
+		words[i] = strings.ToLower(w)
+	}
+	return strings.Join(words, "_")
+}
+
+// ToKebabCase converts s to kebab-case.
+// "myVariableName" → "my-variable-name", "HTTPServer" → "http-server"
+func ToKebabCase(s string) string {
+	words := splitWords(s)
+	for i, w := range words {
+		words[i] = strings.ToLower(w)
+	}
+	return strings.Join(words, "-")
+}
+
+// ToCamelCase converts s to camelCase.
+// "my_variable_name" → "myVariableName", "HTTPServer" → "httpServer"
+func ToCamelCase(s string) string {
+	words := splitWords(s)
+	if len(words) == 0 {
+		return ""
+	}
+	words[0] = strings.ToLower(words[0])
+	for i := 1; i < len(words); i++ {
+		words[i] = titleWord(words[i])
+	}
+	return strings.Join(words, "")
+}
+
+// ToPascalCase converts s to PascalCase.
+// "my_variable_name" → "MyVariableName", "http_server" → "HttpServer"
+func ToPascalCase(s string) string {
+	words := splitWords(s)
+	for i := range words {
+		words[i] = titleWord(words[i])
+	}
+	return strings.Join(words, "")
+}
+
+// titleWord returns w with the first rune upper-cased and the rest lower-cased.
+func titleWord(w string) string {
+	runes := []rune(w)
+	if len(runes) == 0 {
+		return ""
+	}
+	runes[0] = unicode.ToUpper(runes[0])
+	for j := 1; j < len(runes); j++ {
+		runes[j] = unicode.ToLower(runes[j])
+	}
+	return string(runes)
 }
