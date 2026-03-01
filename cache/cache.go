@@ -1,13 +1,13 @@
 // Package cache provides a tiered L1 (memory) + optional L2 (Redis) cache.
-// L1 uses sync.Map with TTL and size-based eviction.
+// L1 uses S3-FIFO eviction with 3 queues (small, main, ghost) for high hit rates.
 // If RedisURL is empty, operates as L1-only (no external dependencies needed at runtime).
 package cache
 
 import (
+	"container/list"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
-	"strings"
+	"hash/fnv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,25 +46,36 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// entry is an item stored in the S3-FIFO cache.
+type entry struct {
+	key       string
+	data      []byte
+	expiresAt time.Time
+	freq      uint8         // 0-3, S3-FIFO frequency counter
+	elem      *list.Element // back-ref in small or main list
+	inMain    bool          // false=small, true=main
+}
+
 // Cache is a tiered L1 (memory) + optional L2 (Redis) cache.
+// L1 uses the S3-FIFO eviction algorithm with three queues.
 type Cache struct {
 	cfg Config
 
-	// L1: in-memory cache.
-	l1    sync.Map
-	l1Len atomic.Int64
+	mu       sync.Mutex
+	items    map[string]*entry       // all active entries
+	small    *list.List              // probation queue (10% capacity)
+	main     *list.List              // main queue (90% capacity)
+	ghost    *list.List              // ghost queue (evicted keys, no values)
+	ghostMap map[string]*list.Element // ghost key lookups
 
-	// Stats.
-	l1Hits   atomic.Int64
-	l1Misses atomic.Int64
+	smallCap int // 10% of L1MaxItems
+	mainCap  int // 90% of L1MaxItems
+	ghostCap int // = mainCap
 
-	// Shutdown.
+	hits   atomic.Int64
+	misses atomic.Int64
+
 	done chan struct{}
-}
-
-type l1Entry struct {
-	data      []byte
-	expiresAt time.Time
 }
 
 // New creates a new Cache. If cfg.RedisURL is empty, L2 is disabled.
@@ -72,9 +83,23 @@ type l1Entry struct {
 func New(cfg Config) *Cache {
 	cfg.applyDefaults()
 
+	smallCap := cfg.L1MaxItems / 10
+	if smallCap < 1 {
+		smallCap = 1
+	}
+	mainCap := cfg.L1MaxItems - smallCap
+
 	c := &Cache{
-		cfg:  cfg,
-		done: make(chan struct{}),
+		cfg:      cfg,
+		items:    make(map[string]*entry),
+		small:    list.New(),
+		main:     list.New(),
+		ghost:    list.New(),
+		ghostMap: make(map[string]*list.Element),
+		smallCap: smallCap,
+		mainCap:  mainCap,
+		ghostCap: mainCap,
+		done:     make(chan struct{}),
 	}
 
 	// Background cleanup every 1/10 of TTL, minimum 10s.
@@ -89,35 +114,67 @@ func New(cfg Config) *Cache {
 
 // Get retrieves a value from L1 (then L2 if miss). Returns nil, false on miss.
 func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool) {
-	// L1 lookup.
-	if v, ok := c.l1.Load(key); ok {
-		entry := v.(*l1Entry) //nolint:forcetypeassert // invariant
-		if time.Now().Before(entry.expiresAt) {
-			c.l1Hits.Add(1)
-			return entry.data, true
-		}
-		// Expired — remove.
-		c.l1.Delete(key)
-		c.l1Len.Add(-1)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	e, ok := c.items[key]
+	if !ok {
+		c.misses.Add(1)
+		// TODO: L2 Redis lookup (Phase 2 — add redis/go-redis dependency).
+		_ = ctx
+		return nil, false
 	}
 
-	c.l1Misses.Add(1)
+	if time.Now().After(e.expiresAt) {
+		c.removeEntry(e)
+		c.misses.Add(1)
+		_ = ctx
+		return nil, false
+	}
 
-	// TODO: L2 Redis lookup (Phase 2 — add redis/go-redis dependency).
-	_ = ctx
-
-	return nil, false
+	if e.freq < 3 {
+		e.freq++
+	}
+	c.hits.Add(1)
+	return e.data, true
 }
 
 // Set stores a value in L1 (and L2 if configured).
 func (c *Cache) Set(ctx context.Context, key string, data []byte) {
-	c.evictIfNeeded()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	c.l1.Store(key, &l1Entry{
+	// Update existing entry.
+	if e, ok := c.items[key]; ok {
+		e.data = data
+		e.expiresAt = time.Now().Add(c.cfg.L1TTL)
+		return
+	}
+
+	// Evict until under capacity.
+	for len(c.items) >= c.cfg.L1MaxItems {
+		if !c.evict() {
+			break
+		}
+	}
+
+	// Check ghost for frequency boost.
+	var initFreq uint8
+	if ge, ok := c.ghostMap[key]; ok {
+		c.ghost.Remove(ge)
+		delete(c.ghostMap, key)
+		initFreq = 1 // ghost re-admission boost
+	}
+
+	// Insert into small queue.
+	e := &entry{
+		key:       key,
 		data:      data,
 		expiresAt: time.Now().Add(c.cfg.L1TTL),
-	})
-	c.l1Len.Add(1)
+		freq:      initFreq,
+	}
+	e.elem = c.small.PushBack(e)
+	c.items[key] = e
 
 	// TODO: L2 Redis set (Phase 2).
 	_ = ctx
@@ -125,8 +182,11 @@ func (c *Cache) Set(ctx context.Context, key string, data []byte) {
 
 // Delete removes a key from both L1 and L2.
 func (c *Cache) Delete(ctx context.Context, key string) {
-	if _, loaded := c.l1.LoadAndDelete(key); loaded {
-		c.l1Len.Add(-1)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if e, ok := c.items[key]; ok {
+		c.removeEntry(e)
 	}
 	// TODO: L2 Redis delete (Phase 2).
 	_ = ctx
@@ -141,14 +201,12 @@ type Stats struct {
 
 // Stats returns a snapshot of cache statistics.
 func (c *Cache) Stats() Stats {
-	size := 0
-	c.l1.Range(func(_, _ any) bool {
-		size++
-		return true
-	})
+	c.mu.Lock()
+	size := len(c.items)
+	c.mu.Unlock()
 	return Stats{
-		L1Hits:   c.l1Hits.Load(),
-		L1Misses: c.l1Misses.Load(),
+		L1Hits:   c.hits.Load(),
+		L1Misses: c.misses.Load(),
 		L1Size:   size,
 	}
 }
@@ -162,56 +220,103 @@ func (c *Cache) Close() {
 	}
 }
 
-// Key builds a deterministic cache key from parts using SHA-256.
+// Key builds a deterministic cache key from parts using FNV-128a.
 func Key(parts ...string) string {
-	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(h[:16])
+	h := fnv.New128a()
+	for i, p := range parts {
+		if i > 0 {
+			h.Write([]byte{0})
+		}
+		h.Write([]byte(p))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-// evictIfNeeded removes entries when L1 exceeds max size.
-// First pass: remove expired. Second pass: remove oldest if still over limit.
-func (c *Cache) evictIfNeeded() {
-	if c.l1Len.Load() < int64(c.cfg.L1MaxItems) {
-		return
-	}
-
+// evict removes one entry from the cache using S3-FIFO policy.
+func (c *Cache) evict() bool {
 	now := time.Now()
-	removed := int64(0)
 
-	// Pass 1: remove expired entries.
-	c.l1.Range(func(k, v any) bool {
-		if now.After(v.(*l1Entry).expiresAt) { //nolint:forcetypeassert // invariant
-			c.l1.Delete(k)
-			removed++
+	// Phase 1: evict from small queue.
+	for c.small.Len() > 0 {
+		front := c.small.Front()
+		e := front.Value.(*entry)
+		c.small.Remove(front)
+
+		if now.After(e.expiresAt) {
+			delete(c.items, e.key)
+			return true
 		}
-		return true
-	})
-	c.l1Len.Add(-removed)
 
-	if c.l1Len.Load() < int64(c.cfg.L1MaxItems) {
-		return
-	}
-
-	// Pass 2: remove oldest entry (closest expiry = was set earliest).
-	var oldest struct {
-		key string
-		at  time.Time
-	}
-	oldest.at = now.Add(time.Hour) // sentinel
-
-	c.l1.Range(func(k, v any) bool {
-		entry := v.(*l1Entry) //nolint:forcetypeassert // invariant
-		if entry.expiresAt.Before(oldest.at) {
-			oldest.key = k.(string) //nolint:forcetypeassert // invariant
-			oldest.at = entry.expiresAt
+		if e.freq > 0 {
+			// Accessed while in small — promote to main.
+			e.freq = 0
+			e.inMain = true
+			e.elem = c.main.PushBack(e)
+			continue
 		}
-		return true
-	})
 
-	if oldest.key != "" {
-		c.l1.Delete(oldest.key)
-		c.l1Len.Add(-1)
+		// One-hit wonder — evict to ghost.
+		delete(c.items, e.key)
+		c.addToGhost(e.key)
+		return true
 	}
+
+	// Phase 2: evict from main queue (CLOCK-like second chance).
+	limit := c.main.Len()
+	for i := 0; i < limit && c.main.Len() > 0; i++ {
+		front := c.main.Front()
+		e := front.Value.(*entry)
+		c.main.Remove(front)
+
+		if now.After(e.expiresAt) {
+			delete(c.items, e.key)
+			return true
+		}
+
+		if e.freq > 0 {
+			e.freq--
+			e.elem = c.main.PushBack(e)
+			continue
+		}
+
+		delete(c.items, e.key)
+		return true
+	}
+
+	// Safety: force evict front of main if all had freq > 0.
+	if front := c.main.Front(); front != nil {
+		e := front.Value.(*entry)
+		c.main.Remove(front)
+		delete(c.items, e.key)
+		return true
+	}
+
+	return false
+}
+
+// addToGhost adds a key to the ghost queue, evicting the oldest ghost if full.
+func (c *Cache) addToGhost(key string) {
+	for len(c.ghostMap) >= c.ghostCap {
+		front := c.ghost.Front()
+		if front == nil {
+			break
+		}
+		old := front.Value.(string)
+		c.ghost.Remove(front)
+		delete(c.ghostMap, old)
+	}
+	elem := c.ghost.PushBack(key)
+	c.ghostMap[key] = elem
+}
+
+// removeEntry removes an active entry from its queue and the items map.
+func (c *Cache) removeEntry(e *entry) {
+	if e.inMain {
+		c.main.Remove(e.elem)
+	} else {
+		c.small.Remove(e.elem)
+	}
+	delete(c.items, e.key)
 }
 
 // cleanupLoop periodically removes expired entries from L1.
@@ -224,16 +329,19 @@ func (c *Cache) cleanupLoop(interval time.Duration) {
 		case <-c.done:
 			return
 		case <-ticker.C:
+			c.mu.Lock()
 			now := time.Now()
-			removed := int64(0)
-			c.l1.Range(func(k, v any) bool {
-				if now.After(v.(*l1Entry).expiresAt) { //nolint:forcetypeassert // invariant
-					c.l1.Delete(k)
-					removed++
+			for key, e := range c.items {
+				if now.After(e.expiresAt) {
+					if e.inMain {
+						c.main.Remove(e.elem)
+					} else {
+						c.small.Remove(e.elem)
+					}
+					delete(c.items, key)
 				}
-				return true
-			})
-			c.l1Len.Add(-removed)
+			}
+			c.mu.Unlock()
 		}
 	}
 }
