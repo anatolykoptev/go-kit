@@ -12,7 +12,7 @@ go get github.com/anatolykoptev/go-kit
 |---------|------|------|
 | [`env`](#env) | Environment variable parsing | stdlib |
 | [`llm`](#llm) | OpenAI-compatible LLM client with retry + fallback keys | stdlib |
-| [`cache`](#cache) | L1 memory cache with TTL and eviction | stdlib |
+| [`cache`](#cache) | L1 memory cache with S3-FIFO eviction | stdlib |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic operation counters | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers | stdlib |
@@ -92,10 +92,10 @@ defer c.Close()
 
 c.Set(ctx, key, data)
 data, ok := c.Get(ctx, key)
-key := c.Key("prefix", query)  // deterministic SHA-256 key
+key := c.Key("prefix", query)  // deterministic FNV-128a key
 ```
 
-L1 memory cache with background cleanup and LRU eviction. L2 Redis planned.
+L1 memory cache with S3-FIFO eviction for high hit rates. Background cleanup, TTL expiry. L2 Redis planned.
 
 ### retry
 

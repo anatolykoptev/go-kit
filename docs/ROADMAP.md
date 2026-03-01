@@ -511,7 +511,7 @@ client := llm.NewClient(baseURL, key, model,
 
 ### Phase A: Core Performance (highest impact)
 
-**Status**: Not started
+**Status**: DONE
 
 #### A1. S3-FIFO Eviction Algorithm
 
