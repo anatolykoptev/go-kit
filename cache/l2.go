@@ -2,14 +2,25 @@ package cache
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
+// Sentinel errors for L2 cache operations.
+var (
+	// ErrCacheMiss indicates the requested key was not found in the cache.
+	ErrCacheMiss = errors.New("cache: miss")
+
+	// ErrL2Unavailable indicates the L2 store is not available (nil receiver or closed).
+	ErrL2Unavailable = errors.New("cache: L2 unavailable")
+)
+
 // L2 is an optional second-tier cache (typically Redis).
-// Get returns the value and nil error on hit, a non-nil error on miss or failure.
+// Get returns the value and nil error on hit, ErrCacheMiss on miss.
 // Implementations must be safe for concurrent use.
 type L2 interface {
 	Get(ctx context.Context, key string) ([]byte, error)
@@ -57,21 +68,49 @@ func (r *RedisL2) key(k string) string {
 }
 
 // Get retrieves a value from Redis by key.
+// Returns ErrCacheMiss if the key does not exist or receiver is nil.
 func (r *RedisL2) Get(ctx context.Context, key string) ([]byte, error) {
-	return r.rdb.Get(ctx, r.key(key)).Bytes()
+	if r == nil {
+		return nil, ErrCacheMiss
+	}
+	data, err := r.rdb.Get(ctx, r.key(key)).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, ErrCacheMiss
+		}
+		return nil, fmt.Errorf("cache: L2 get %q: %w", key, err)
+	}
+	return data, nil
 }
 
 // Set stores a value in Redis with the given TTL.
+// Returns ErrL2Unavailable if receiver is nil.
 func (r *RedisL2) Set(ctx context.Context, key string, data []byte, ttl time.Duration) error {
-	return r.rdb.Set(ctx, r.key(key), data, ttl).Err()
+	if r == nil {
+		return ErrL2Unavailable
+	}
+	if err := r.rdb.Set(ctx, r.key(key), data, ttl).Err(); err != nil {
+		return fmt.Errorf("cache: L2 set %q: %w", key, err)
+	}
+	return nil
 }
 
 // Del removes a key from Redis.
+// Returns ErrL2Unavailable if receiver is nil.
 func (r *RedisL2) Del(ctx context.Context, key string) error {
-	return r.rdb.Del(ctx, r.key(key)).Err()
+	if r == nil {
+		return ErrL2Unavailable
+	}
+	if err := r.rdb.Del(ctx, r.key(key)).Err(); err != nil {
+		return fmt.Errorf("cache: L2 del %q: %w", key, err)
+	}
+	return nil
 }
 
-// Close closes the underlying Redis client.
+// Close closes the underlying Redis client. No-op if receiver is nil.
 func (r *RedisL2) Close() error {
+	if r == nil {
+		return nil
+	}
 	return r.rdb.Close()
 }
