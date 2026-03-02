@@ -7,6 +7,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/hex"
+	"errors"
 	"hash/fnv"
 	"log/slog"
 	"math/rand/v2"
@@ -120,6 +121,7 @@ type Cache struct {
 	evictions atomic.Int64
 	l2hits    atomic.Int64
 	l2misses  atomic.Int64
+	l2errors  atomic.Int64
 
 	flight group
 	l2     L2 // optional L2 store; nil = L1-only
@@ -211,12 +213,14 @@ func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool) {
 		data, err := c.l2.Get(ctx, key)
 		if err == nil {
 			c.l2hits.Add(1)
-			// Promote to L1.
 			c.Set(ctx, key, data)
 			return data, true
 		}
-		c.l2misses.Add(1)
-		return nil, false
+		if errors.Is(err, ErrCacheMiss) {
+			c.l2misses.Add(1)
+		} else {
+			c.l2errors.Add(1)
+		}
 	}
 
 	c.misses.Add(1)
@@ -317,6 +321,7 @@ type Stats struct {
 	L1Size    int
 	L2Hits    int64
 	L2Misses  int64
+	L2Errors  int64
 	Evictions int64
 	HitRatio  float64
 }
@@ -327,6 +332,7 @@ func (c *Cache) Stats() Stats {
 	misses := c.misses.Load()
 	l2h := c.l2hits.Load()
 	l2m := c.l2misses.Load()
+	l2e := c.l2errors.Load()
 	totalHits := hits + l2h
 	totalMisses := misses + l2m
 	var ratio float64
@@ -342,6 +348,7 @@ func (c *Cache) Stats() Stats {
 		L1Size:    size,
 		L2Hits:    l2h,
 		L2Misses:  l2m,
+		L2Errors:  l2e,
 		Evictions: c.evictions.Load(),
 		HitRatio:  ratio,
 	}

@@ -2,7 +2,6 @@ package cache_test
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -403,7 +402,7 @@ func (m *mapL2) Get(_ context.Context, key string) ([]byte, error) {
 	defer m.mu.Unlock()
 	v, ok := m.data[key]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, cache.ErrCacheMiss
 	}
 	return v, nil
 }
