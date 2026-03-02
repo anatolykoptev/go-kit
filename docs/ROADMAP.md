@@ -4,7 +4,7 @@
 >
 > **Goal**: Extract duplicated infrastructure code from 8 Go MCP servers into a single reusable module.
 > Estimated savings: ~3,790 LOC of copy-paste across repos.
-> **Current version**: v0.3.0 | **Migrated**: 4/8 repos (go-search, go-job, go-wp, go-code)
+> **Current version**: v0.5.0 | **Migrated**: 8/8 repos (all go-* services use go-kit)
 
 ## Organization
 
@@ -15,16 +15,16 @@ mcpserver → отдельный репо (go-mcpserver), т.к. тянет за
 
 ## Consumers
 
-| Repo | Port | go-kit v0.3.0 | Migrated packages | Remaining |
+| Repo | Port | go-kit v0.5.0 | Imported packages | Remaining |
 |------|------|:---:|---|---|
-| go-search | 8890 | **yes** | env, llm, metrics, retry, strutil | cache |
-| go-job | 8891 | **yes** | env, llm, metrics, strutil | cache |
-| go-wp | 8894 | **yes** | env, llm, metrics, strutil | cache |
-| go-code | 8897 | **yes** | env, llm, metrics | cache, retry |
-| go-hully | 8892 | no | — | env, cache, metrics |
-| go-startup | 8893 | no | — | env, llm, cache, metrics, strutil |
-| go-content | 8895 | no | — | env, metrics |
-| gigiena-teksta | 8896 | no | — | env, llm, cache, metrics |
+| go-search | 8890 | **yes** | cache, env, strutil | llm, metrics, retry |
+| go-job | 8891 | **yes** | cache, env, llm, metrics, strutil | retry |
+| go-wp | 8894 | **yes** | cache, env, llm, metrics, strutil | retry |
+| go-code | 8897 | **yes** | cache, env, llm | metrics, retry, strutil |
+| go-hully | 8892 | **yes** | cache, env, metrics, strutil | llm, retry |
+| go-startup | 8893 | **yes** | cache, env, llm, metrics, strutil | retry |
+| go-content | 8895 | **yes** | env, metrics | llm, cache, retry |
+| gigiena-teksta | 8896 | **yes** | env, metrics | llm, cache, retry |
 
 ## Already Extracted (reference)
 
@@ -353,11 +353,11 @@ These duplications are better solved by importing existing libraries, not by add
 | `fetch_html.go` — trafilatura→goquery→regex content extraction (~180 LOC) | go-job, go-startup | Import `go-engine/fetch` (used by go-search) |
 | `DetectQueryType` — query classification (~66 LOC) | go-job, go-startup | Import `go-engine/text` |
 | `promptBase`, `promptDeep`, `TypeInstructions` — LLM prompt templates (~72 LOC) | go-job, go-startup | Import `go-engine/llm` |
-| Local `env()`/`envInt()` helpers (~40 LOC) | go-startup, go-hully | Import `go-kit/env` (already exists) |
+| Local `env()`/`envInt()` helpers (~40 LOC) | ~~go-startup, go-hully~~ | ~~Import `go-kit/env`~~ DONE — all repos migrated |
 | SearXNG client (~132 LOC) | go-code (duplicate of go-engine) | Import `go-engine/search` or extract to go-kit |
 
-**go-startup is the biggest offender** — doesn't import go-kit or go-engine, has full inline copies
-of env, llm, cache, fetch, detect, prompts. One migration removes ~1,000 LOC of duplication.
+**go-startup** — now imports go-kit for env, llm, metrics, strutil (cache was already migrated).
+Remaining inline copies: fetch, detect, prompts (domain-specific, belong in go-engine).
 
 ---
 
@@ -375,18 +375,18 @@ of env, llm, cache, fetch, detect, prompts. One migration removes ~1,000 LOC of 
 | 8-10 | domain-specific | **Out of scope** → go-engine, go-enriche, go-stealth | — | ~480 LOC | — |
 | **Total (go-kit)** | | | | **~3,310 LOC** | **8 repos** |
 
-### Migration rollout (go-kit v0.3.0):
+### Migration rollout (go-kit v0.5.0):
 
-| Repo | Status | Migrated | Remaining |
-|------|--------|----------|-----------|
-| go-search | **done** | env, llm, metrics, retry, strutil | cache |
-| go-job | **done** | env, llm, metrics, strutil | cache |
-| go-wp | **done** | env, llm, metrics, strutil | cache |
-| go-code | **done** | env, llm, metrics | cache, retry |
-| go-hully | pending | — | env, cache, metrics |
-| go-startup | pending | — | env, llm, cache, metrics, strutil |
-| go-content | pending | — | env, metrics |
-| gigiena-teksta | pending | — | env, llm, cache, metrics |
+| Repo | Status | Imported | Remaining (still uses internal code) |
+|------|--------|----------|--------------------------------------|
+| go-search | partial | cache, env, strutil | llm, metrics, retry |
+| go-job | mostly done | cache, env, llm, metrics, strutil | retry |
+| go-wp | mostly done | cache, env, llm, metrics, strutil | retry |
+| go-code | partial | cache, env, llm | metrics, retry, strutil |
+| go-hully | mostly done | cache, env, metrics, strutil | llm, retry |
+| go-startup | mostly done | cache, env, llm, metrics, strutil | retry |
+| go-content | partial | env, metrics | llm, cache, retry |
+| gigiena-teksta | partial | env, metrics | llm, cache, retry |
 
 ---
 
@@ -854,13 +854,216 @@ Ongoing:
   llm Phase C, env Phase D, strutil deferred items — as needed
 ```
 
-## Competitive Reference Table
+## Competitive Reference Table (post v0.5.0)
 
-| Package | Our Current | Best Competitor | Gap Level | After Improvements |
-|---------|-------------|-----------------|-----------|-------------------|
-| env | Function getters, silent defaults | caarlos0/env (6K stars) | Medium | On par (different niche: functions vs struct tags) |
-| llm | Text completion + retry + key cycling | openai/openai-go (3K, official) | **Critical** | Unique: Instructor-style extraction + key cycling |
-| cache | sync.Map + FIFO + TTL | maypok86/otter (5.8K) | **High** | Competitive: S3-FIFO + generics + singleflight |
-| retry | Generic Do[T] + HTTP | cenkalti/backoff (3.9K) | Low | On par with better jitter + RetryAfter |
-| metrics | Atomic counters only | hashicorp/go-metrics | Medium | Mini hashicorp: gauges + timers + labels + sinks |
-| strutil | Truncate + Contains | huandu/xstrings | Low | Adequate for our needs |
+| Package | v0.5.0 Status | Best Competitor | Gap |
+|---------|--------------|-----------------|-----|
+| env | Error variants, Source interface, File, Base64, Expand | caarlos0/env (6K) | On par |
+| llm | Stream, tools, Extract[T], endpoints, middleware | openai/openai-go (3K) | **Unique**: Extract + key cycling |
+| cache | S3-FIFO, L2 Redis, singleflight, circuit breaker | maypok86/otter (5.8K) | Competitive |
+| retry | Do[T], HTTP, RetryAfter, AbortOn, RetryableOnly | cenkalti/backoff (3.9K) | On par |
+| metrics | Counter, Gauge, Rate/EWMA, Histogram, Timer, TTL | hashicorp/go-metrics | On par |
+| strutil | Truncate*, case conversion, Scrub, WordWrap | huandu/xstrings | Adequate |
+
+---
+
+# Wave 2: Next Improvements (March 2026)
+
+> **Research date**: 2026-03-02
+> **Method**: go-code repo_search + repo_analyze of 10 competitor repos
+> **Goal**: identify features that provide real value to go-* consumers
+
+## Analyzed Competitors
+
+| Repo | Stars | Relevant to |
+|------|-------|-------------|
+| scalalang2/golang-fifo | 170 | cache — S3-FIFO/SIEVE reference impl |
+| Yiling-J/theine-go | 362 | cache — W-TinyLFU, secondary cache, doorkeeper |
+| 567-labs/instructor-go | 193 | llm — streaming structured output, union types |
+| teilomillet/gollm | 639 | llm — prompt templates, memory, provider switching |
+| sethvargo/go-retry | 708 | retry — middleware pattern, Fibonacci backoff |
+| avast/retry-go | 2888 | retry — simple API reference |
+
+## Priority Matrix
+
+| # | Feature | Package | Effort | Impact | Priority |
+|---|---------|---------|--------|--------|----------|
+| 1 | Per-key TTL | cache | Low | High | **P0** |
+| 2 | OnEvict callback | cache | Low | Medium | **P1** |
+| 3 | ratelimit package | **new** | Medium | High | **P1** |
+| 4 | Union types in Extract | llm | Medium | Medium | **P2** |
+| 5 | Streaming structured output | llm | High | Medium | **P2** |
+| 6 | Fibonacci backoff | retry | Low | Low | **P3** |
+| 7 | Doorkeeper bloom filter | cache | Medium | Low | **P3** |
+
+---
+
+### W2-1. cache: Per-Key TTL (P0)
+
+**Gap**: `Set(ctx, key, data)` uses global L1TTL/L2TTL. Different data has different freshness
+requirements (LinkedIn jobs 15min, company research 24h) — forces separate Cache instances.
+
+**Competitors**: golang-fifo `SetWithTTL`, theine-go `SetWithTTL`, every modern cache lib.
+
+```go
+// New API (backward-compatible — Set() keeps using global TTL):
+func (c *Cache) SetWithTTL(ctx context.Context, key string, data []byte, ttl time.Duration)
+```
+
+**Implementation**: store `expiresAt` per entry (already exists), just let caller override TTL.
+L2 `Set` already takes a `ttl` parameter. Minimal change.
+
+**Effort**: ~30 LOC | **Impact**: eliminates need for multiple Cache instances per service
+
+---
+
+### W2-2. cache: OnEvict Callback (P1)
+
+**Gap**: no way to react when entries are evicted (metrics, dependent invalidation, logging).
+
+**Competitors**: golang-fifo `SetOnEvicted(func(key, value, reason))`,
+theine-go `RemovalListener`, otter `WithDeletionListener`.
+
+```go
+type EvictReason int
+const (
+    EvictExpired  EvictReason = iota // TTL expired
+    EvictCapacity                     // evicted for space
+    EvictExplicit                     // Delete() called
+)
+
+type Config struct {
+    // ...existing fields...
+    OnEvict func(key string, data []byte, reason EvictReason)
+}
+```
+
+**Effort**: ~50 LOC | **Impact**: better observability, dependent cache invalidation
+
+---
+
+### W2-3. ratelimit: New Package (P1)
+
+**Gap**: all go-* services work with rate-limited APIs (LinkedIn, Twitter, LLM providers).
+Each service implements ad-hoc sleeps or relies on retry. No shared rate limiter.
+
+**Design**: token bucket (stdlib `time.Ticker` based), zero external deps.
+
+```go
+package ratelimit
+
+type Limiter struct { ... }
+
+func New(rate float64, burst int) *Limiter
+func (l *Limiter) Wait(ctx context.Context) error    // block until token available
+func (l *Limiter) Allow() bool                        // non-blocking check
+func (l *Limiter) Reserve() *Reservation              // pre-reserve a token
+
+// Per-key rate limiting (e.g. per-domain, per-API-key)
+type KeyLimiter struct { ... }
+func NewKeyLimiter(rate float64, burst int) *KeyLimiter
+func (kl *KeyLimiter) Wait(ctx context.Context, key string) error
+```
+
+**Note**: Consider wrapping `golang.org/x/time/rate` if acceptable as dep.
+Otherwise, implement from scratch (~150 LOC for token bucket).
+
+**Effort**: ~200 LOC | **Impact**: shared rate limiting across all services
+
+---
+
+### W2-4. llm: Union Types in Extract (P2)
+
+**Gap**: `Extract[T]()` returns one fixed type. Agent patterns need LLM to choose
+between multiple response types (call tool A vs tool B vs plain text).
+
+**Competitor**: instructor-go `CreateChatCompletionUnion()` with `UnionOptions`.
+
+```go
+// Discriminated union extraction:
+type SearchAction struct { Query string `json:"query"` }
+type AnswerAction struct { Text string  `json:"text"` }
+
+result, err := llm.ExtractUnion[SearchAction | AnswerAction](ctx, messages)
+// Go lacks sum types — use interface + type switch:
+
+type Action interface{ isAction() }
+result, err := llm.ExtractOneOf(ctx, messages,
+    llm.UnionType[SearchAction]("search"),
+    llm.UnionType[AnswerAction]("answer"),
+)
+switch v := result.(type) {
+case *SearchAction: ...
+case *AnswerAction: ...
+}
+```
+
+**Effort**: ~150 LOC | **Impact**: enables agent routing patterns
+
+---
+
+### W2-5. llm: Streaming Structured Output (P2)
+
+**Gap**: `Stream()` returns raw text chunks. `Extract[T]()` waits for full response.
+No progressive parsing of partial JSON during streaming.
+
+**Competitor**: instructor-go `CreateChatCompletionStream()` + `stream.Scan(&partial)`.
+
+```go
+stream, err := client.StreamExtract(ctx, messages, &target)
+for stream.Next() {
+    partial := stream.Partial()  // partially filled struct
+    fmt.Printf("Name so far: %s\n", partial.Name)
+}
+final := stream.Value()  // fully parsed + validated
+```
+
+**Effort**: ~300 LOC (partial JSON parser) | **Impact**: better UX for long extractions
+
+---
+
+### W2-6. retry: Fibonacci Backoff (P3)
+
+**Gap**: only exponential backoff. Fibonacci is gentler (1,1,2,3,5,8 vs 1,2,4,8,16,32).
+
+**Competitor**: sethvargo/go-retry `NewFibonacci(initialDuration)`.
+
+```go
+opts := retry.Options{
+    Strategy:     retry.Fibonacci,  // new; default stays Exponential
+    InitialDelay: 500 * time.Millisecond,
+}
+```
+
+**Effort**: ~20 LOC | **Impact**: minor, niche use case
+
+---
+
+### W2-7. cache: Doorkeeper Bloom Filter (P3)
+
+**Gap**: ghost queue protects against one-hit wonders, but uses memory (map of keys).
+Bloom filter is more space-efficient for high-cardinality workloads.
+
+**Competitor**: theine-go uses doorkeeper bloom filter before admission.
+
+**Decision**: defer — ghost queue is sufficient for current workloads (~1000 items).
+Revisit if L1MaxItems grows to 100K+.
+
+---
+
+## Implementation Order
+
+```
+March 2026 (immediate):
+  W2-1  Per-key TTL                — 0.5 day, backward-compatible
+  W2-2  OnEvict callback           — 0.5 day, backward-compatible
+
+April 2026:
+  W2-3  ratelimit package          — 1-2 days, new package
+  W2-4  Union types in Extract     — 1 day
+
+Later / as needed:
+  W2-5  Streaming structured output — 2-3 days, complex partial JSON parsing
+  W2-6  Fibonacci backoff           — 0.5 day, trivial
+  W2-7  Doorkeeper bloom filter     — defer until needed
+```
