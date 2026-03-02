@@ -1,988 +1,117 @@
-# go-kit — Shared Infrastructure for go-* Services
+# go-kit Roadmap
 
 > **Module**: `github.com/anatolykoptev/go-kit`
->
-> **Goal**: Extract duplicated infrastructure code from 8 Go MCP servers into a single reusable module.
-> Estimated savings: ~3,790 LOC of copy-paste across repos.
-> **Current version**: v0.5.0 | **Migrated**: 8/8 repos (all go-* services use go-kit)
+> **Current version**: v0.6.0 | **Migrated**: 8/8 repos
 
-## Organization
+See also: [architecture.md](architecture.md) | [design.md](design.md)
 
-**Monorepo** — один `go.mod`, один CI, один `go get`.
-Мелкие пакеты (env, retry, metrics, strutil) живут в go-kit навсегда.
-mcpserver → отдельный репо (go-mcpserver), т.к. тянет зависимость mcp-go.
-Если llm или cache вырастут в сложности — выносим в отдельный репо (как go-stealth, go-imagefy).
+## Extraction Phases (all complete)
 
-## Consumers
+| Phase | Package | Savings | Repos |
+|-------|---------|---------|-------|
+| 1 | env | ~500 LOC | 8 |
+| 2 | llm | ~950 LOC | 6 |
+| 3 | cache | ~800 LOC | 7 |
+| 4 | retry | ~100 LOC | 2+ |
+| 5 | metrics | ~300 LOC | 7 |
+| 6 | strutil | ~100 LOC | 4+ |
+| 7 | mcpserver | ~560 LOC | 7 (separate repo: go-mcpserver) |
+| **Total** | | **~3,310 LOC** | **8 repos** |
 
-| Repo | Port | go-kit v0.5.0 | Imported packages | Remaining |
-|------|------|:---:|---|---|
-| go-search | 8890 | **yes** | cache, env, strutil | llm, metrics, retry |
-| go-job | 8891 | **yes** | cache, env, llm, metrics, strutil | retry |
-| go-wp | 8894 | **yes** | cache, env, llm, metrics, strutil | retry |
-| go-code | 8897 | **yes** | cache, env, llm | metrics, retry, strutil |
-| go-hully | 8892 | **yes** | cache, env, metrics, strutil | llm, retry |
-| go-startup | 8893 | **yes** | cache, env, llm, metrics, strutil | retry |
-| go-content | 8895 | **yes** | env, metrics | llm, cache, retry |
-| gigiena-teksta | 8896 | **yes** | env, metrics | llm, cache, retry |
+## Competitive Improvements (all complete)
 
-## Already Extracted (reference)
+Every package upgraded to be competitive with best-in-class Go libraries.
+See [design.md](design.md) for full competitive analysis and rationale.
 
-| Module | What | From |
-|--------|------|------|
-| go-stealth | TLS fingerprint, user-agents, RetryHTTP | go-job |
-| go-imagefy | Image safety, search, validation | go-wp |
-| go-enriche | Web content enrichment (extract, structured) | go-wp |
+| Package | Key additions |
+|---------|--------------|
+| env | Error variants (`*E`, `Must*`), Source interface, File, Expand, Base64/Hex |
+| llm | Streaming, tool calling, structured output, Extract[T], endpoint fallback, middleware |
+| cache | S3-FIFO eviction, sharded map, singleflight, TTL jitter, L2 Redis interface, per-key TTL |
+| retry | RetryAfter, MaxElapsedTime, Jitter, Timer, AbortOn, RetryableOnly |
+| metrics | Gauge, Timer, Labels, Sink, Rate/EWMA, Histogram, TTL, SnapshotAndReset |
+| strutil | TruncateMiddle, case conversions, WordWrap, Scrub, ContainsAll |
 
----
+## Migration Status (v0.6.0)
 
-## Package Layout
-
-```
-go-kit/                         github.com/anatolykoptev/go-kit
-  go.mod                        — single module, minimal deps
-  env/                          — environment variable parsing (zero deps)
-  llm/                          — OpenAI-compatible LLM client (net/http only)
-  cache/                        — L1 memory + L2 Redis tiered cache (redis dep)
-  retry/                        — generic retry with exponential backoff (zero deps)
-  metrics/                      — atomic operation counters (zero deps)
-  strutil/                      — unicode-aware string helpers (zero deps)
-  docs/
-    ROADMAP.md                  — this file
-```
-
-**Dependencies**: `redis/go-redis` (only for cache/).
-Go module pruning ensures consumers that don't use cache/ won't pull redis.
+| Repo | Imported | Remaining |
+|------|----------|-----------|
+| go-search | cache, env, strutil | llm, metrics, retry |
+| go-job | cache, env, llm, metrics, strutil | retry |
+| go-wp | cache, env, llm, metrics, strutil | retry |
+| go-code | cache, env, llm | metrics, retry, strutil |
+| go-hully | cache, env, metrics, strutil | llm, retry |
+| go-startup | cache, env, llm, metrics, strutil | retry |
+| go-content | env, metrics | llm, cache, retry |
+| gigiena-teksta | env, metrics | llm, cache, retry |
 
 ---
 
-## Phase 1: env — Config Parsing (Priority: HIGH)
+## Wave 2: Active Items (March 2026)
 
-**Status**: DONE
-
-**Problem**: Every repo has its own `env()`, `envInt()`, `envList()` etc. 8 copies, 6 different implementations.
-
-**Best source**: go-wp `internal/envutil/` (cleanest) + go-content (has `envDuration`, `envFloat`)
-
-**Package API**:
-```go
-package env
-
-func Str(key, def string) string
-func Int(key string, def int) int
-func Int64(key string, def int64) int64
-func Float(key string, def float64) float64
-func Bool(key string, def bool) bool
-func Duration(key string, def time.Duration) time.Duration
-func List(key, def string) []string       // comma-separated, trimmed, no empty
-func Int64List(key string) []int64         // from go-hully
-```
-
-**Files to replace**:
-- `go-search/config.go` — inline `env()`, `envInt()`, `envList()`
-- `go-code/cmd/go-code/config.go:104-150` — `env()`, `envInt()`, `envList()`
-- `go-wp/internal/envutil/envutil.go` — entire package
-- `go-job/main.go` — inline env parsing
-- `go-startup/main.go` — inline env parsing
-- `go-hully/config.go` — `env()`, `envList()`, `envInt64List()`
-- `go-content/internal/config/config.go` — `env()`, `envInt()`, `envFloat()`, `envDuration()`
-- `gigiena-teksta/main.go` — inline env parsing
-
-**Estimated savings**: ~500 LOC
-
----
-
-## Phase 2: llm — LLM Client (Priority: HIGH)
-
-**Status**: DONE
-
-**Problem**: 6 repos have independent LLM clients with identical `chatMessage`/`chatRequest`/`chatResponse` structs and nearly identical `callLLM` functions. go-code has the most mature version (retry + fallback keys).
-
-**Best source**: go-code `internal/llm/` (retry, fallback keys) + go-wp (multimodal `Content any`)
-
-**Package API**:
-```go
-package llm
-
-type Client struct { ... }
-
-func NewClient(baseURL, apiKey, model string, opts ...Option) *Client
-
-// Options
-func WithFallbackKeys(keys []string) Option
-func WithHTTPClient(c *http.Client) Option
-func WithMaxTokens(n int) Option
-func WithTemperature(t float64) Option
-
-func (c *Client) Complete(ctx context.Context, system, user string) (string, error)
-func (c *Client) CompleteRaw(ctx context.Context, messages []Message) (string, error)
-
-// Types
-type Message struct {
-    Role    string `json:"role"`
-    Content any    `json:"content"` // string or []ContentPart (multimodal)
-}
-
-type ContentPart struct {
-    Type     string    `json:"type"`
-    Text     string    `json:"text,omitempty"`
-    ImageURL *ImageURL `json:"image_url,omitempty"`
-}
-
-// Helpers
-func ExtractJSON(s string) string   // strip markdown fences, find { }
-```
-
-**Files to replace**:
-- `go-search/internal/engine/llm.go` (322 LOC)
-- `go-code/internal/llm/llm.go` (362 LOC) — becomes thin wrapper or direct use
-- `go-job/internal/engine/llm.go` (376 LOC)
-- `go-startup/internal/engine/llm.go` (308 LOC)
-- `go-wp/internal/engine/llm.go` (165 LOC)
-- `gigiena-teksta/internal/llm/verifier.go` (182 LOC) — partial
-
-**Estimated savings**: ~950 LOC
-
----
-
-## Phase 3: cache — Tiered Cache (Priority: HIGH)
-
-**Status**: DONE
-
-**Problem**: 7 repos implement L1 (sync.Map + TTL) + L2 (Redis) caching. go-search/go-job/go-startup are near-identical (~300 LOC each).
-
-**Best source**: go-search (L1+L2 architecture) + go-wp (generic `[]byte` interface) + go-code (Scan strategy)
-
-**Package API**:
-```go
-package cache
-
-type Cache struct { ... }
-
-type Config struct {
-    RedisURL   string
-    RedisDB    int
-    Prefix     string        // key prefix (e.g. "go-search:")
-    L1MaxItems int           // max items in memory (default 1000)
-    L1TTL      time.Duration // memory cache TTL (default 30m)
-    L2TTL      time.Duration // Redis TTL (default 24h)
-}
-
-func New(cfg Config) *Cache
-
-func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool)
-func (c *Cache) Set(ctx context.Context, key string, data []byte)
-func (c *Cache) Delete(ctx context.Context, key string)
-func (c *Cache) Key(parts ...string) string  // deterministic cache key from parts
-
-type Stats struct {
-    L1Hits, L1Misses int64
-    L2Hits, L2Misses int64
-    L1Size           int
-}
-func (c *Cache) Stats() Stats
-func (c *Cache) Close()
-```
-
-**Files to replace**:
-- `go-search/internal/engine/cache.go` (297 LOC)
-- `go-code/internal/cache/cache.go` (239 LOC)
-- `go-job/internal/engine/cache.go` (313 LOC)
-- `go-startup/internal/engine/cache.go` (231 LOC)
-- `go-wp/internal/engine/cache.go` (250 LOC)
-- `go-hully/internal/storage/cache.go` (203 LOC) — partial
-- `gigiena-teksta/internal/embedder/cache.go` (178 LOC) — partial
-
-**Estimated savings**: ~800 LOC
-
----
-
-## Phase 4: retry — Generic Retry (Priority: MEDIUM)
-
-**Status**: DONE
-
-**Problem**: go-code has a clean generic `Do[T]()` with backoff. go-search has simpler `RetryDo`. Others inline retry or use go-stealth.
-
-**Best source**: go-code `internal/retry/retry.go`
-
-**Package API**:
-```go
-package retry
-
-type Config struct {
-    MaxAttempts  int
-    InitialDelay time.Duration
-    MaxDelay     time.Duration
-    Jitter       bool
-}
-
-var DefaultConfig = Config{MaxAttempts: 3, InitialDelay: 500*time.Millisecond, MaxDelay: 10*time.Second, Jitter: true}
-
-func Do[T any](ctx context.Context, cfg Config, fn func() (T, error)) (T, error)
-func HTTP(ctx context.Context, cfg Config, fn func() (*http.Response, error)) (*http.Response, error)
-```
-
-**Files to replace**:
-- `go-code/internal/retry/retry.go` (116 LOC)
-- `go-search/internal/engine/retry.go` (24 LOC)
-
-**Estimated savings**: ~100 LOC
-
----
-
-## Phase 5: metrics — Atomic Counters (Priority: MEDIUM)
-
-**Status**: DONE
-
-**Problem**: 7 repos use identical pattern: `atomic.Int64` counters + `Snapshot()` + `Format()`. Domain-specific counters vary, but infrastructure is copy-paste.
-
-**Best source**: go-code `internal/metrics/`
-
-**Package API**:
-```go
-package metrics
-
-type Counter struct { ... }  // wraps atomic.Int64
-
-func NewCounter(name string) *Counter
-func (c *Counter) Add(n int64)
-func (c *Counter) Value() int64
-
-type Registry struct { ... }
-
-func NewRegistry() *Registry
-func (r *Registry) Counter(name string) *Counter
-func (r *Registry) Snapshot() map[string]int64
-func (r *Registry) Format() string  // human-readable summary
-func (r *Registry) TrackOperation(name string, fn func() error) error
-```
-
-**Files to replace**: 7 repos, each 40-145 LOC of metrics boilerplate.
-
-**Estimated savings**: ~300 LOC
-
----
-
-## Phase 6: strutil — String Helpers (Priority: LOW)
-
-**Status**: DONE
-
-**Problem**: `Truncate` (byte-based, broken for Unicode) vs `TruncateStr` (rune-based). `contains()` helpers duplicated.
-
-**Best source**: go-wp `TruncateStr` (Unicode-correct + ellipsis)
-
-**Package API**:
-```go
-package strutil
-
-func Truncate(s string, maxRunes int) string          // rune-aware + "..."
-func Contains(haystack []string, needle string) bool
-func ContainsAny(s string, substrs []string) bool
-func Slugify(s string) string                          // safe URL slugs
-```
-
-**Estimated savings**: ~100 LOC
-
----
-
-## Phase 7: mcpserver — MCP Server Bootstrap (Priority: HIGH)
-
-**Status**: Separate repo (`go-mcpserver`), handled by another agent.
-
-**Reason for separation**: mcpserver pulls `mcp-go` dependency which is heavy and evolves
-independently. Keeping it in go-kit would force all consumers to pull mcp-go transitively.
-Separate repo allows independent versioning and release cycle.
-
-**Estimated savings**: ~560 LOC → ~120 LOC shared
-
----
-
-## Migration Strategy
-
-### Per-phase rollout:
-1. Implement package with tests in go-kit
-2. Pick ONE consumer repo as pilot (go-code or go-search — best test coverage)
-3. Replace internal code with go-kit import, verify tests pass
-4. Roll out to remaining repos one by one
-5. Delete replaced internal code
-
-### Dependency direction:
-```
-go-kit (stdlib + redis), go-mcpserver (mcp-go)
-  ↑
-go-stealth, go-imagefy, go-enriche, go-engine (domain libs)
-  ↑
-go-search, go-code, go-wp, go-job, go-startup, go-hully, go-content, gigiena-teksta (services)
-```
-
-### Risk mitigation:
-- go-kit has NO business logic — pure infrastructure
-- Each package is independent (no internal cross-imports)
-- Consumers can adopt packages incrementally (env first, then llm, etc.)
-- Existing `internal/` code works until migrated — no big-bang switch
-
-### Graduation to own repo:
-If `llm/` or `cache/` grow beyond ~500 LOC or need their own release cycle,
-extract to `github.com/anatolykoptev/go-llm` or `go-cache` — same pattern
-as go-stealth and go-imagefy. go-kit keeps thin re-export wrappers for
-backward compat during transition.
-
----
-
-## Phases 8-10: Domain-Specific — Not go-kit Scope
-
-**Status**: Out of scope. These are domain-specific and belong in their respective repos.
-
-| Phase | Feature | Why not go-kit | Where it belongs |
-|-------|---------|----------------|------------------|
-| 8 | llm extensions (BuildSourcesText, SearchResult, StripFences) | SearchResult is search-engine domain logic; StripFences already covered by `llm.ExtractJSON` | `go-engine` |
-| 9 | strutil extensions (CleanHTML, UserAgentChrome) | CleanHTML is web scraping logic; UserAgentChrome is stealth/anti-bot | `go-enriche` (CleanHTML), `go-stealth` (UserAgent) |
-| 10 | metrics extensions (TrackOperation with slog) | Mixes metrics + logging concerns; current `Registry.TrackOperation` already covers metrics part | Not needed — consumers use existing API |
-
-**Principle**: go-kit = pure infrastructure with zero business logic.
-Domain-specific helpers belong in domain libraries (go-engine, go-enriche, go-stealth).
-
----
-
-## Cross-Project Deduplication (not go-kit)
-
-These duplications are better solved by importing existing libraries, not by adding to go-kit:
-
-| Duplicate | Projects | Solution |
-|-----------|----------|----------|
-| `fetch_html.go` — trafilatura→goquery→regex content extraction (~180 LOC) | go-job, go-startup | Import `go-engine/fetch` (used by go-search) |
-| `DetectQueryType` — query classification (~66 LOC) | go-job, go-startup | Import `go-engine/text` |
-| `promptBase`, `promptDeep`, `TypeInstructions` — LLM prompt templates (~72 LOC) | go-job, go-startup | Import `go-engine/llm` |
-| Local `env()`/`envInt()` helpers (~40 LOC) | ~~go-startup, go-hully~~ | ~~Import `go-kit/env`~~ DONE — all repos migrated |
-| SearXNG client (~132 LOC) | go-code (duplicate of go-engine) | Import `go-engine/search` or extract to go-kit |
-
-**go-startup** — now imports go-kit for env, llm, metrics, strutil (cache was already migrated).
-Remaining inline copies: fetch, detect, prompts (domain-specific, belong in go-engine).
-
----
-
-## Summary
-
-| Phase | Package | Status | Priority | Savings | Repos |
-|-------|---------|--------|----------|---------|-------|
-| 1 | env | **DONE** | HIGH | ~500 LOC | 8 |
-| 2 | llm | **DONE** | HIGH | ~950 LOC | 6 |
-| 3 | cache | **DONE** | HIGH | ~800 LOC | 7 |
-| 4 | retry | **DONE** | MEDIUM | ~100 LOC | 2+ |
-| 5 | metrics | **DONE** | MEDIUM | ~300 LOC | 7 |
-| 6 | strutil | **DONE** | LOW | ~100 LOC | 4+ |
-| 7 | mcpserver | **Separate repo** (go-mcpserver) | HIGH | ~560 LOC | 7 |
-| 8-10 | domain-specific | **Out of scope** → go-engine, go-enriche, go-stealth | — | ~480 LOC | — |
-| **Total (go-kit)** | | | | **~3,310 LOC** | **8 repos** |
-
-### Migration rollout (go-kit v0.5.0):
-
-| Repo | Status | Imported | Remaining (still uses internal code) |
-|------|--------|----------|--------------------------------------|
-| go-search | partial | cache, env, strutil | llm, metrics, retry |
-| go-job | mostly done | cache, env, llm, metrics, strutil | retry |
-| go-wp | mostly done | cache, env, llm, metrics, strutil | retry |
-| go-code | partial | cache, env, llm | metrics, retry, strutil |
-| go-hully | mostly done | cache, env, metrics, strutil | llm, retry |
-| go-startup | mostly done | cache, env, llm, metrics, strutil | retry |
-| go-content | partial | env, metrics | llm, cache, retry |
-| gigiena-teksta | partial | env, metrics | llm, cache, retry |
-
----
-
-# Competitive Improvements (2026)
-
-> **Goal**: Make each go-kit package best-in-class, not just "our copy-paste extracted".
-> Based on competitive analysis of 25+ libraries across Go, Rust, Python, TypeScript, Java.
-
-## Priority Overview
-
-| # | Package | Effort | Impact | Key insight |
-|---|---------|--------|--------|-------------|
-| 1 | **llm** | HIGH | CRITICAL | Missing streaming/tools/structured output = unusable for agentic AI |
-| 2 | **cache** | HIGH | HIGH | FIFO eviction → S3-FIFO = +10-30% hit rate; sync.Map → sharded = +2-5x throughput |
-| 3 | **env** | LOW | HIGH | Error variants + Required + Duration format — max ROI |
-| 4 | **retry** | LOW | MEDIUM | RetryAfter + MaxElapsedTime + Jitter = production-grade |
-| 5 | **metrics** | MEDIUM | MEDIUM | Gauge + Timer + Labels = observability toolkit |
-| 6 | **strutil** | LOW | LOW | TruncateMiddle + case conversions — nice to have |
-
----
-
-## Improvement 1: llm — From Utility to Competitive Client
-
-**Competitors**: sashabaranov/go-openai (10.5K stars), openai/openai-go (3K, official), tmc/langchaingo (8.7K)
-
-**Our unique edge**: API key cycling/fallback — no competitor does this.
-
-### Phase A: Table Stakes (must-have for 2026)
-
-**Status**: DONE (A1 streaming, A2 tool calling, A3 structured output, A4 usage tracking)
-
-#### A1. SSE Streaming
-
-```go
-stream, err := client.Stream(ctx, messages, opts...)
-for chunk := range stream.Chunks() {
-    fmt.Print(chunk.Delta)
-}
-if err := stream.Err(); err != nil { ... }
-usage := stream.Usage()
-```
-
-- Parse `data: ` lines from `text/event-stream` via `bufio.Scanner`
-- Handle `[DONE]` signal
-- Zero new deps (stdlib `bufio` + `net/http`)
-- Reference: openai/openai-go `ssestream.Stream[T]`
-
-#### A2. Tool/Function Calling
-
-```go
-tools := []llm.Tool{{
-    Name:        "get_weather",
-    Description: "Get weather for a location",
-    Parameters:  llm.SchemaFrom(WeatherParams{}),
-}}
-resp, err := client.Chat(ctx, messages, llm.WithTools(tools))
-for _, call := range resp.ToolCalls {
-    // call.Name, call.Arguments (json.RawMessage)
-}
-```
-
-- Add `tools`, `tool_choice` to request body
-- Parse `tool_calls` array from response
-- Support `tool` role messages for sending results back
-- Reference: sashabaranov/go-openai tool calling
-
-#### A3. Structured Output / JSON Schema
-
-```go
-type Recipe struct {
-    Name        string   `json:"name" jsonschema:"description=Recipe name"`
-    Ingredients []string `json:"ingredients"`
-    Steps       []string `json:"steps"`
-}
-var recipe Recipe
-err := client.ChatTyped(ctx, messages, &recipe)
-```
-
-- `reflect` → JSON Schema generation from Go struct tags
-- Set `response_format={type:"json_schema", json_schema:...}`
-- Auto-unmarshal response into target struct
-- Reference: sashabaranov/go-openai `jsonschema` package
-
-#### A4. Token Usage Reporting
-
-```go
-resp, err := client.Chat(ctx, messages)
-fmt.Printf("Tokens: %d prompt, %d completion, %d cached\n",
-    resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.CachedTokens)
-```
-
-- Parse `usage` object from response JSON
-- Include `prompt_tokens_details.cached_tokens` for prompt caching
-
-### Phase B: Differentiators
-
-**Status**: DONE (B1 Extract, B2 Endpoints, B3 Middleware)
-
-#### B1. Instructor-Style Typed Extraction with Retry — DONE
-
-```go
-var result MyStruct
-err := client.Extract(ctx, prompt, &result,
-    llm.WithMaxRetries(3),
-    llm.WithValidator(validateFunc),
-)
-```
-
-- JSON Schema → structured output → validate → retry with error feedback if invalid
-- **No Go library does this well** (Python Instructor is the gold standard)
-- Killer feature that justifies the library's existence
-
-#### B2. Model-Level Fallback Chains — DONE
-
-```go
-client := llm.NewClient(
-    llm.WithEndpoints(
-        llm.Endpoint{URL: geminiURL, Key: key1, Model: "gemini-2.5-flash"},
-        llm.Endpoint{URL: openaiURL, Key: key2, Model: "gpt-4o"},
-        llm.Endpoint{URL: localURL,  Key: "",   Model: "llama3"},
-    ),
-)
-```
-
-- Extend existing key cycling to full endpoint+model fallback
-- Each endpoint can have its own base URL, key, model
-- Natural evolution of our existing `WithFallbackKeys`
-
-#### B3. Request/Response Middleware — DONE
-
-```go
-client := llm.NewClient(baseURL, key, model,
-    llm.WithMiddleware(loggingMiddleware),
-    llm.WithMiddleware(cachingMiddleware),
-)
-```
-
-- `type Middleware func(req *Request, next func(*Request) (*Response, error)) (*Response, error)`
-- Enables: logging, metrics, caching, rate limiting without polluting core code
-
-### Phase C: Nice-to-Have
-
-- Cost estimation (hardcoded token pricing per model)
-- OpenTelemetry spans (optional, via interface injection)
-- Streaming typed extraction (partial JSON → progressive unmarshal)
-
----
-
-## Improvement 2: cache — From FIFO to Best-in-Class
-
-**Competitors**: maypok86/otter (5.8K), dgraph-io/ristretto (5.6K), eko/gocache (2.6K), jellydator/ttlcache (1.1K), samber/hot (243)
-
-### Phase A: Core Performance (highest impact)
-
-**Status**: DONE
-
-#### A1. S3-FIFO Eviction Algorithm
-
-Replace FIFO (oldest-first) with S3-FIFO (Small + Main + Ghost queues).
-
-- 3 FIFO queues — no complex data structures needed
-- +10-30% hit rate over plain FIFO on real workloads
-- Simpler than W-TinyLFU (no Count-Min Sketch for basic version)
-- Near-zero per-operation overhead
-- Reference: samber/hot, SOSP '23 paper "FIFO queues are all you need"
-- Benchmark data: twitter_cluster52 — S3-FIFO 76.66% vs FIFO ~60%
-
-#### A2. Sharded Map (replace sync.Map)
-
-```go
-type shard struct {
-    mu    sync.RWMutex
-    items map[string]*entry
-}
-type shardedMap [64]shard  // 64 shards
-```
-
-- `sync.Map` is optimized for read-heavy, few-writes — we have mixed workloads
-- Sharded map with 64 shards: +2-5x throughput under contention
-- Reference: dgraph-io/ristretto (256-shard `shardedMap`)
-
-#### A3. Fast Key Hashing (replace SHA-256)
-
-Replace `crypto/sha256` with `hash/maphash` (stdlib, zero deps) or `hash/fnv`.
-
-- SHA-256 is cryptographic — 10-50x slower than needed for cache keys
-- We need fast distribution, not collision resistance
-- `hash/maphash` is stdlib, no external deps needed
-- Reference: allegro/bigcache uses FNV-1a, ristretto uses xxhash
-
-### Phase B: Modern API
-
-**Status**: DONE (B2 GetOrLoad/singleflight, B3 TTL jitter, B4 enhanced stats; B1 generics deferred — all consumers use []byte)
-
-#### B1. Generics — DEFERRED
-
-```go
-type Cache[K comparable, V any] struct { ... }
-func New[K comparable, V any](cfg Config) *Cache[K, V]
-func (c *Cache[K, V]) Get(key K) (V, bool)
-func (c *Cache[K, V]) Set(key K, value V)
-```
-
-- Every modern competitor uses generics
-- Eliminates `[]byte` serialization for in-memory use cases
-- Keep a `ByteCache = Cache[string, []byte]` alias for backward compat
-- **Deferred**: all 7 consumers use `[]byte` — generics add complexity without current benefit
-
-#### B2. GetOrLoad with Singleflight — DONE
-
-```go
-func (c *Cache) GetOrLoad(ctx context.Context, key string, loader func(ctx context.Context) ([]byte, error)) ([]byte, error)
-```
-
-- Prevents thundering herd — 100 goroutines same key = 1 backend call
-- Inline singleflight (no external dependency)
-- Reference: otter, ttlcache, gocache all have this
-
-#### B3. TTL Jitter — DONE
-
-```go
-c := cache.New(cache.Config{
-    L1TTL:         30 * time.Minute,
-    JitterPercent: 0.1,  // ±10% random jitter on each entry's TTL
-})
-```
-
-- Many entries same TTL → all expire at once → cache stampede
-- Add configurable random jitter (default 10%) to each entry's TTL
-- Trivial implementation, prevents coordinated expiration spikes
-- Reference: samber/hot
-
-#### B4. Statistics — DONE
-
-```go
-type Stats struct {
-    Hits, Misses  int64
-    HitRatio      float64
-    Evictions     int64
-    CurrentSize   int64
-}
-```
-
-- Track: hits, misses, hit ratio, evictions, current size
-- Use `atomic.Int64` counters (lock-free)
-- Reference: ristretto (comprehensive), otter
-
-### Phase C: L2 Redis Integration
-
-**Status**: DONE
-
-#### C1. Store Interface
-
-```go
-type Store[K comparable, V any] interface {
-    Get(ctx context.Context, key K) (V, bool, error)
-    Set(ctx context.Context, key K, value V, ttl time.Duration) error
-    Delete(ctx context.Context, key K) error
-}
-```
-
-- L1 (memory) and L2 (Redis) both implement `Store`
-- Reference: eko/gocache `StoreInterface`
-
-#### C2. ChainCache with Read-Through Promotion
-
-- L1 miss + L2 hit → asynchronously populate L1
-- Write-through: Set writes to both L1 and L2
-- Reference: eko/gocache `ChainCache[T]`
-
-#### C3. Serialization
-
-- `encoding/json` for zero-dep core
-- Optional `msgpack` for performance (what gocache uses)
-
----
-
-## Improvement 3: env — Close the Gaps
-
-**Competitors**: caarlos0/env (6K), kelseyhightower/envconfig (5.4K), sethvargo/go-envconfig (1.2K)
-
-**Our edge**: simplest API (functions, not struct tags), zero reflection, fastest compile.
-
-### Phase A: Error Handling (P0)
-
-**Status**: DONE (8 commits: NotSetError, ParseError, Lookup, Exists, Required, *E variants, Must* variants, Duration Go format)
-
-```go
-// Error-returning variants — biggest gap vs ALL competitors
-func IntE(key string, def int) (int, error)       // error on parse failure
-func MustInt(key string, def int) int              // panic on parse failure
-
-// Required — no default, must be set
-func Required(key string) (string, error)          // error if not set
-func MustStr(key string) string                    // panic if not set
-
-// Distinguish "not set" vs "set to empty"
-func Lookup(key string) (string, bool)
-func Exists(key string) bool
-```
-
-- Every competitor returns errors; we silently swallow them
-- `*E` variants return errors, `Must*` panic — keep originals for backward compat
-- Inspired by: all 5 competitors + Rust's `Result<T, E>` pattern
-
-### Phase B: Type Completeness (P1)
-
-**Status**: DONE (Uint, Uint64, Map, URL with *E and Must* variants)
-
-```go
-func Duration(key string, def time.Duration) time.Duration  // now accepts "5s", "100ms", "2m30s"
-func Uint(key string, def uint) uint
-func Uint64(key string, def uint64) uint64
-func Map(key, def string) map[string]string                 // "k1:v1,k2:v2"
-func URL(key string, def string) *url.URL
-```
-
-- `Duration`: add `time.ParseDuration` with fallback to float-seconds for compat
-- `Map`: common for headers, labels — caarlos0, sethvargo, kelseyhightower support it
-- `URL`: first-class type in caarlos0 and sethvargo
-
-### Phase C: Power Features (P2)
-
-**Status**: DONE
-
-```go
-// Testability — decouple from os.Getenv
-type Source interface { Lookup(key string) (string, bool) }
-var DefaultSource Source = OSSource{}
-func MapSource(m map[string]string) Source  // for tests
-
-// Docker secrets / Kubernetes
-func File(key, def string) string           // read file path from env, return contents
-
-// Variable expansion
-func Expand(key, def string) string         // resolve ${OTHER_VAR} references
-
-// Binary data
-func Base64(key string, def []byte) []byte  // base64-decode
-func Hex(key string, def []byte) []byte     // hex-decode
-```
-
-- `Source` interface: inspired by sethvargo's `Lookuper` — enables parallel-safe tests
-- `File`: Docker secrets pattern (`/run/secrets/db_password`) — caarlos0 `file` tag
-- `Expand`: `os.Expand` based — caarlos0, sethvargo support this
-
-### Phase D: Optional Struct Parsing (P3)
-
-Consider a separate `env/config` sub-package with reflection-based `Parse`:
-
-```go
-type Config struct {
-    Port    int           `env:"PORT" default:"8080"`
-    Debug   bool          `env:"DEBUG"`
-    Timeout time.Duration `env:"TIMEOUT" default:"30s"`
-    DBUrl   string        `env:"DATABASE_URL" required:"true"`
-}
-err := config.Parse(&cfg)
-```
-
-- Keeps core `env/` zero-reflection
-- Competes directly with caarlos0/env but within our ecosystem
-- Decision: implement only if struct-based parsing is needed by 3+ consumers
-
----
-
-## Improvement 4: retry — Production Grade
-
-**Competitors**: cenkalti/backoff (3.9K), avast/retry-go (2.9K), failsafe-go (2K), sethvargo/go-retry (708)
-
-### Planned Additions
-
-**Status**: DONE (items 1-6: RetryAfter, MaxElapsedTime, Jitter, Timer, AbortOn, RetryableOnly)
-
-| # | Feature | Reference | Effort |
-|---|---------|-----------|--------|
-| 1 | **RetryAfter error** — let fn return `RetryAfter(duration)` to override backoff; auto-parse `Retry-After` header in HTTP retry | cenkalti, failsafe-go | Low |
-| 2 | **MaxElapsedTime** — total wall-clock budget across all attempts (not just max attempts) | cenkalti | Low |
-| 3 | **Jitter** — `WithJitter(bool)` adds random ±25% to delay; `FullJitter` strategy where delay is `[0, calculated_delay]` | avast/retry-go v5 | Low |
-| 4 | **Timer interface** — `type Timer interface { After(d) <-chan time.Time }` for deterministic tests without real sleeps | avast, cenkalti | Low |
-| 5 | **Per-error-type limits** — `AttemptsForError(0, context.DeadlineExceeded)` to never retry specific errors | avast/retry-go v5 | Low |
-| 6 | **RetryableError marker** — invert default: only explicitly marked errors trigger retry (safer for production) | sethvargo/go-retry | Low |
-
-### Not Planned (too heavy for our scope)
-
-- Circuit breaker, bulkhead, hedge policy → use failsafe-go directly
-- Policy composition framework → overkill for a utility library
-
----
-
-## Improvement 5: metrics — Observability Toolkit
-
-**Competitors**: daniel-nichter/go-metrics (zero-dep), hashicorp/go-metrics (enterprise), VictoriaMetrics/metrics
-
-### Planned Additions
-
-**Status**: DONE (items 1-8: SnapshotAndReset, Gauge, Timer, Labels, Sink, Rate/EWMA, Reservoir, TTL)
-
-| # | Feature | Reference | Effort |
-|---|---------|-----------|--------|
-| 1 | **Atomic snapshot-and-reset** — `Snapshot(reset bool)` reads + zeroes atomically, no lost counts between read and reset | daniel-nichter/go-metrics | Low |
-| 2 | **Gauge type** — track current values (queue depth, latency), optional min/max/mean over window | hashicorp, daniel-nichter | Medium |
-| 3 | **Timer/MeasureSince** — `defer reg.Timer("api.latency").Stop()` — one-liner for duration tracking | hashicorp `MeasureSince` | Low |
-| 4 | **Labels/tags** — `reg.Counter("requests", "method", "GET").Inc()` dimensional metrics | All serious systems | Medium |
-| 5 | **Sink interface** — `type Sink interface { WriteMetrics(w io.Writer) }` for JSON/text/Prometheus output | hashicorp | Low |
-| 6 | **Rate tracking (EWMA)** — events/sec with 1min, 5min, 15min exponentially weighted moving averages | Dropwizard Metrics (Java) | Medium |
-| 7 | **Reservoir sampling** — fixed 2K sample for accurate P50/P95/P99 without unbounded memory | daniel-nichter Algorithm R | Medium |
-| 8 | **TTL for dynamic metrics** — auto-expire stale counters created per-endpoint/per-user | mattrobenolt/go-metrics | Low |
-
-### Not Planned
-
-- Prometheus client_golang replacement → different scope
-- Push to remote (VictoriaMetrics, StatsD) → consumers can wrap via Sink interface
-
----
-
-## Improvement 6: strutil — Unicode-Correct Toolkit
-
-**Competitors**: huandu/xstrings, aquilax/truncate, Rust unicode-truncate
-
-### Planned Additions
-
-**Status**: DONE (items 1-6: TruncateMiddle, configurable placeholder, case conversions, WordWrap, Scrub, ContainsAll)
-
-| # | Feature | Reference | Effort |
-|---|---------|-----------|--------|
-| 1 | **TruncateMiddle** — `"path/to/ver...file.go"` — keeps start + end, cuts middle | aquilax/truncate `PositionMiddle` | Low |
-| 2 | **Configurable placeholder** — `WithPlaceholder("[...]")` instead of hardcoded "..." | aquilax, Ruby `truncate` | Low |
-| 3 | **Case conversions** — `ToSnakeCase`, `ToCamelCase`, `ToKebabCase`, `ToPascalCase` | huandu/xstrings | Low |
-| 4 | **WordWrap(s, width)** — wrap text at word boundaries | Python `textwrap.fill()` | Low |
-| 5 | **Scrub(s)** — remove/replace invalid UTF-8 sequences | huandu/xstrings | Trivial |
-| 6 | **ContainsAll** — complement to existing `ContainsAny` | Common pattern | Trivial |
-
-### Considered but Deferred
-
-- Display-width truncation (CJK = 2 columns) → needs `go-runewidth` dep or UAX #11 table
-- Grapheme cluster boundaries → needs `rivo/uniseg` dep
-- Decision: add these only if CJK/emoji truncation bugs appear in production
-
----
-
-## Implementation Order
-
-```
-Quarter 1 (immediate):
-  env Phase A (error variants)      — 1 day, backwards-compatible
-  env Phase B (Duration fix + types) — 1 day
-  retry additions (1-4)             — 1 day
-  strutil additions (1-3)           — 1 day
-  cache A3 (fast key hashing)       — 0.5 day
-
-Quarter 2:
-  llm Phase A (streaming + tools + structured output) — 3-5 days, biggest effort
-  cache Phase A (S3-FIFO + sharded map)              — 2-3 days
-  cache Phase B (generics + singleflight + stats)    — 1-2 days
-  metrics additions (1-5)                            — 2 days
-
-Quarter 3:
-  llm Phase B (instructor-style extraction, model fallback) — 2-3 days
-  cache Phase C (L2 Redis via Store interface)              — 2-3 days
-  env Phase C (Source interface, File, Expand)              — 1 day
-  metrics additions (6-8)                                   — 2 days
-
-Ongoing:
-  llm Phase C, env Phase D, strutil deferred items — as needed
-```
-
-## Competitive Reference Table (post v0.5.0)
-
-| Package | v0.5.0 Status | Best Competitor | Gap |
-|---------|--------------|-----------------|-----|
-| env | Error variants, Source interface, File, Base64, Expand | caarlos0/env (6K) | On par |
-| llm | Stream, tools, Extract[T], endpoints, middleware | openai/openai-go (3K) | **Unique**: Extract + key cycling |
-| cache | S3-FIFO, L2 Redis, singleflight, circuit breaker | maypok86/otter (5.8K) | Competitive |
-| retry | Do[T], HTTP, RetryAfter, AbortOn, RetryableOnly | cenkalti/backoff (3.9K) | On par |
-| metrics | Counter, Gauge, Rate/EWMA, Histogram, Timer, TTL | hashicorp/go-metrics | On par |
-| strutil | Truncate*, case conversion, Scrub, WordWrap | huandu/xstrings | Adequate |
-
----
-
-# Wave 2: Next Improvements (March 2026)
-
-> **Research date**: 2026-03-02
-> **Method**: go-code repo_search + repo_analyze of 10 competitor repos
-> **Goal**: identify features that provide real value to go-* consumers
-
-## Analyzed Competitors
-
-| Repo | Stars | Relevant to |
-|------|-------|-------------|
-| scalalang2/golang-fifo | 170 | cache — S3-FIFO/SIEVE reference impl |
-| Yiling-J/theine-go | 362 | cache — W-TinyLFU, secondary cache, doorkeeper |
-| 567-labs/instructor-go | 193 | llm — streaming structured output, union types |
-| teilomillet/gollm | 639 | llm — prompt templates, memory, provider switching |
-| sethvargo/go-retry | 708 | retry — middleware pattern, Fibonacci backoff |
-| avast/retry-go | 2888 | retry — simple API reference |
-
-## Priority Matrix
-
-| # | Feature | Package | Effort | Impact | Priority |
-|---|---------|---------|--------|--------|----------|
+| # | Feature | Package | Effort | Impact | Status |
+|---|---------|---------|--------|--------|--------|
 | 1 | Per-key TTL | cache | Low | High | **DONE** |
-| 2 | OnEvict callback | cache | Low | Medium | **P1** |
-| 3 | ratelimit package | **new** | Medium | High | **P1** |
+| 2 | OnEvict callback | cache | Low | Medium | **DONE** |
+| 3 | ratelimit package | ratelimit | Medium | High | **DONE** |
 | 4 | Union types in Extract | llm | Medium | Medium | **P2** |
 | 5 | Streaming structured output | llm | High | Medium | **P2** |
 | 6 | Fibonacci backoff | retry | Low | Low | **P3** |
 | 7 | Doorkeeper bloom filter | cache | Medium | Low | **P3** |
 
----
-
-### W2-1. cache: Per-Key TTL (P0) — DONE
-
-**Status**: DONE — `SetWithTTL`, `GetOrLoadWithTTL` added to `cache/operations.go`.
-
-```go
-func (c *Cache) SetWithTTL(ctx context.Context, key string, data []byte, ttl time.Duration)
-func (c *Cache) GetOrLoadWithTTL(ctx context.Context, key string, ttl time.Duration,
-    loader func(context.Context) ([]byte, error)) ([]byte, error)
-```
-
-L1 applies jitter to caller's TTL; L2 passes TTL directly. Fully backward-compatible.
-
----
-
 ### W2-2. cache: OnEvict Callback (P1)
 
-**Gap**: no way to react when entries are evicted (metrics, dependent invalidation, logging).
+**Gap**: no way to react when entries are evicted (metrics, dependent invalidation).
 
-**Competitors**: golang-fifo `SetOnEvicted(func(key, value, reason))`,
+Competitors: golang-fifo `SetOnEvicted(key, value, reason)`,
 theine-go `RemovalListener`, otter `WithDeletionListener`.
 
 ```go
 type EvictReason int
 const (
-    EvictExpired  EvictReason = iota // TTL expired
-    EvictCapacity                     // evicted for space
-    EvictExplicit                     // Delete() called
+    EvictExpired  EvictReason = iota
+    EvictCapacity
+    EvictExplicit
 )
 
 type Config struct {
-    // ...existing fields...
+    // ...existing...
     OnEvict func(key string, data []byte, reason EvictReason)
 }
 ```
 
-**Effort**: ~50 LOC | **Impact**: better observability, dependent cache invalidation
-
----
+Effort: ~50 LOC
 
 ### W2-3. ratelimit: New Package (P1)
 
-**Gap**: all go-* services work with rate-limited APIs (LinkedIn, Twitter, LLM providers).
-Each service implements ad-hoc sleeps or relies on retry. No shared rate limiter.
+**Gap**: all go-* services hit rate-limited APIs (LinkedIn, Twitter, LLM).
+Each service uses ad-hoc sleeps or retry. No shared rate limiter.
 
-**Design**: token bucket (stdlib `time.Ticker` based), zero external deps.
+Design: token bucket (`time.Ticker` based), zero external deps.
 
 ```go
 package ratelimit
 
-type Limiter struct { ... }
-
 func New(rate float64, burst int) *Limiter
-func (l *Limiter) Wait(ctx context.Context) error    // block until token available
-func (l *Limiter) Allow() bool                        // non-blocking check
-func (l *Limiter) Reserve() *Reservation              // pre-reserve a token
+func (l *Limiter) Wait(ctx context.Context) error
+func (l *Limiter) Allow() bool
 
-// Per-key rate limiting (e.g. per-domain, per-API-key)
-type KeyLimiter struct { ... }
+// Per-key rate limiting (per-domain, per-API-key)
 func NewKeyLimiter(rate float64, burst int) *KeyLimiter
 func (kl *KeyLimiter) Wait(ctx context.Context, key string) error
 ```
 
-**Note**: Consider wrapping `golang.org/x/time/rate` if acceptable as dep.
-Otherwise, implement from scratch (~150 LOC for token bucket).
-
-**Effort**: ~200 LOC | **Impact**: shared rate limiting across all services
-
----
+Note: consider wrapping `golang.org/x/time/rate` if acceptable as dep.
+Otherwise ~150 LOC from scratch.
 
 ### W2-4. llm: Union Types in Extract (P2)
 
 **Gap**: `Extract[T]()` returns one fixed type. Agent patterns need LLM to choose
-between multiple response types (call tool A vs tool B vs plain text).
+between multiple response types.
 
-**Competitor**: instructor-go `CreateChatCompletionUnion()` with `UnionOptions`.
+Competitor: instructor-go `CreateChatCompletionUnion()`.
 
 ```go
-// Discriminated union extraction:
-type SearchAction struct { Query string `json:"query"` }
-type AnswerAction struct { Text string  `json:"text"` }
-
-result, err := llm.ExtractUnion[SearchAction | AnswerAction](ctx, messages)
-// Go lacks sum types — use interface + type switch:
-
-type Action interface{ isAction() }
 result, err := llm.ExtractOneOf(ctx, messages,
     llm.UnionType[SearchAction]("search"),
     llm.UnionType[AnswerAction]("answer"),
@@ -993,72 +122,51 @@ case *AnswerAction: ...
 }
 ```
 
-**Effort**: ~150 LOC | **Impact**: enables agent routing patterns
-
----
-
 ### W2-5. llm: Streaming Structured Output (P2)
 
-**Gap**: `Stream()` returns raw text chunks. `Extract[T]()` waits for full response.
+**Gap**: `Stream()` returns raw text. `Extract[T]()` waits for full response.
 No progressive parsing of partial JSON during streaming.
 
-**Competitor**: instructor-go `CreateChatCompletionStream()` + `stream.Scan(&partial)`.
+Competitor: instructor-go `CreateChatCompletionStream()` + `stream.Scan(&partial)`.
 
 ```go
 stream, err := client.StreamExtract(ctx, messages, &target)
 for stream.Next() {
-    partial := stream.Partial()  // partially filled struct
-    fmt.Printf("Name so far: %s\n", partial.Name)
+    partial := stream.Partial()
 }
-final := stream.Value()  // fully parsed + validated
+final := stream.Value()
 ```
 
-**Effort**: ~300 LOC (partial JSON parser) | **Impact**: better UX for long extractions
-
----
+Effort: ~300 LOC (partial JSON parser)
 
 ### W2-6. retry: Fibonacci Backoff (P3)
 
-**Gap**: only exponential backoff. Fibonacci is gentler (1,1,2,3,5,8 vs 1,2,4,8,16,32).
-
-**Competitor**: sethvargo/go-retry `NewFibonacci(initialDuration)`.
-
-```go
-opts := retry.Options{
-    Strategy:     retry.Fibonacci,  // new; default stays Exponential
-    InitialDelay: 500 * time.Millisecond,
-}
-```
-
-**Effort**: ~20 LOC | **Impact**: minor, niche use case
-
----
+Gentler curve than exponential (1,1,2,3,5,8 vs 1,2,4,8,16,32).
+Reference: sethvargo/go-retry `NewFibonacci()`. Effort: ~20 LOC.
 
 ### W2-7. cache: Doorkeeper Bloom Filter (P3)
 
-**Gap**: ghost queue protects against one-hit wonders, but uses memory (map of keys).
+Ghost queue protects against one-hit wonders but uses memory (map of keys).
 Bloom filter is more space-efficient for high-cardinality workloads.
 
-**Competitor**: theine-go uses doorkeeper bloom filter before admission.
-
-**Decision**: defer — ghost queue is sufficient for current workloads (~1000 items).
+**Deferred** — ghost queue sufficient for current workloads (~1000 items).
 Revisit if L1MaxItems grows to 100K+.
 
 ---
 
-## Implementation Order
+## Timeline
 
 ```
 March 2026 (immediate):
-  W2-1  Per-key TTL                — DONE
-  W2-2  OnEvict callback           — 0.5 day, backward-compatible
+  W2-1  Per-key TTL              — DONE
+  W2-2  OnEvict callback         — DONE
+  W2-3  ratelimit package        — DONE
 
 April 2026:
-  W2-3  ratelimit package          — 1-2 days, new package
-  W2-4  Union types in Extract     — 1 day
+  W2-4  Union types in Extract   — 1 day
 
 Later / as needed:
-  W2-5  Streaming structured output — 2-3 days, complex partial JSON parsing
-  W2-6  Fibonacci backoff           — 0.5 day, trivial
-  W2-7  Doorkeeper bloom filter     — defer until needed
+  W2-5  Streaming structured     — 2-3 days
+  W2-6  Fibonacci backoff        — 0.5 day
+  W2-7  Doorkeeper bloom filter  — defer
 ```

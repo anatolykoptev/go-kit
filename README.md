@@ -15,6 +15,7 @@ go get github.com/anatolykoptev/go-kit
 | [`cache`](#cache) | L1 memory + L2 Redis tiered cache with S3-FIFO eviction | stdlib (L2: redis) |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks, rates, histograms, TTL | stdlib |
+| [`ratelimit`](#ratelimit) | Token bucket rate limiter with per-key support | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
 
 All packages are independent — no internal cross-imports. Import only what you need.
@@ -222,6 +223,56 @@ data, err := c.GetOrLoadWithTTL(ctx, "company:456", 24*time.Hour,
 - TTL jitter (prevents cache stampedes)
 - Evictions counter + HitRatio in Stats
 - Background cleanup, TTL expiry
+- OnEvict callback for eviction notifications (expired, capacity, explicit)
+
+**OnEvict callback** — react to cache evictions:
+
+```go
+c := cache.New(cache.Config{
+    L1MaxItems: 1000,
+    L1TTL:      30 * time.Minute,
+    OnEvict: func(key string, data []byte, reason cache.EvictReason) {
+        switch reason {
+        case cache.EvictCapacity:
+            metrics.Incr("cache.evict.capacity")
+        case cache.EvictExpired:
+            metrics.Incr("cache.evict.expired")
+        case cache.EvictExplicit:
+            metrics.Incr("cache.evict.explicit")
+        }
+    },
+})
+```
+
+### ratelimit
+
+```go
+import "github.com/anatolykoptev/go-kit/ratelimit"
+
+// Single rate limiter: 10 requests/sec, burst of 5
+lim := ratelimit.New(10, 5)
+if lim.Allow() {
+    // proceed
+}
+
+// Blocking wait (respects context cancellation)
+err := lim.Wait(ctx)
+
+// Per-key rate limiting (per-domain, per-API-key)
+kl := ratelimit.NewKeyLimiter(5, 3) // 5/sec per key, burst 3
+defer kl.Close()
+
+kl.Allow("api.linkedin.com")
+kl.Wait(ctx, "api.twitter.com")
+
+// Background cleanup of idle limiters
+kl.StartCleanup(time.Minute, 10*time.Minute)
+```
+
+- Token bucket algorithm, zero external deps
+- Non-blocking `Allow()` and blocking `Wait(ctx)`
+- Per-key limiters with automatic idle cleanup
+- Goroutine-safe
 
 ### retry
 
