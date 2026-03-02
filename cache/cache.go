@@ -5,11 +5,8 @@ package cache
 
 import (
 	"container/list"
-	"context"
 	"encoding/hex"
-	"errors"
 	"hash/fnv"
-	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -39,6 +36,10 @@ type Config struct {
 	// JitterPercent adds random TTL variation to prevent cache stampedes.
 	// 0.1 means ±10% jitter. 0 disables jitter (default).
 	JitterPercent float64
+
+	// L2 is an optional L2 store (e.g. Redis). If set, overrides RedisURL.
+	// Pass a mock here in tests instead of using a real Redis.
+	L2 L2
 }
 
 func (c *Config) applyDefaults() {
@@ -53,6 +54,9 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// maxFreq is the S3-FIFO frequency counter ceiling (0-3).
+const maxFreq = 3
+
 // entry is an item stored in the S3-FIFO cache.
 type entry struct {
 	key       string
@@ -63,53 +67,16 @@ type entry struct {
 	inMain    bool          // false=small, true=main
 }
 
-// group deduplicates concurrent loads for the same key.
-type group struct {
-	mu    sync.Mutex
-	calls map[string]*groupCall
-}
-
-type groupCall struct {
-	wg  sync.WaitGroup
-	val []byte
-	err error
-}
-
-func (g *group) do(key string, fn func() ([]byte, error)) ([]byte, error) {
-	g.mu.Lock()
-	if g.calls == nil {
-		g.calls = make(map[string]*groupCall)
-	}
-	if c, ok := g.calls[key]; ok {
-		g.mu.Unlock()
-		c.wg.Wait()
-		return c.val, c.err
-	}
-	c := &groupCall{}
-	c.wg.Add(1)
-	g.calls[key] = c
-	g.mu.Unlock()
-
-	c.val, c.err = fn()
-	c.wg.Done()
-
-	g.mu.Lock()
-	delete(g.calls, key)
-	g.mu.Unlock()
-
-	return c.val, c.err
-}
-
 // Cache is a tiered L1 (memory) + optional L2 (Redis) cache.
 // L1 uses the S3-FIFO eviction algorithm with three queues.
 type Cache struct {
 	cfg Config
 
 	mu       sync.Mutex
-	items    map[string]*entry       // all active entries
-	small    *list.List              // probation queue (10% capacity)
-	main     *list.List              // main queue (90% capacity)
-	ghost    *list.List              // ghost queue (evicted keys, no values)
+	items    map[string]*entry        // all active entries
+	small    *list.List               // probation queue (10% capacity)
+	main     *list.List               // main queue (90% capacity)
+	ghost    *list.List               // ghost queue (evicted keys, no values)
 	ghostMap map[string]*list.Element // ghost key lookups
 
 	smallCap int // 10% of L1MaxItems
@@ -152,10 +119,12 @@ func New(cfg Config) *Cache {
 		done:     make(chan struct{}),
 	}
 
-	// Connect L2 if Redis configured.
-	// Guard: NewRedisL2 returns nil on failure — must NOT assign nil
-	// concrete pointer to interface (Go typed-nil trap causes SIGSEGV).
-	if cfg.RedisURL != "" {
+	// Use explicitly provided L2, else try Redis, else nil.
+	if cfg.L2 != nil {
+		c.l2 = cfg.L2
+	} else if cfg.RedisURL != "" {
+		// Guard: NewRedisL2 returns nil on failure — must NOT assign nil
+		// concrete pointer to interface (Go typed-nil trap causes SIGSEGV).
 		if l2 := NewRedisL2(cfg.RedisURL, cfg.RedisDB, cfg.Prefix); l2 != nil {
 			c.l2 = l2
 		}
@@ -171,213 +140,15 @@ func New(cfg Config) *Cache {
 	return c
 }
 
-// WithL2 sets a custom L2 store. Use in tests with a mock.
-// Overrides any RedisURL in Config.
-func (c *Cache) WithL2(l2 L2) { c.l2 = l2 }
-
-func (c *Cache) jitteredTTL() time.Duration {
-	ttl := c.cfg.L1TTL
+func (c *Cache) jitteredTTL(base time.Duration) time.Duration {
 	if c.cfg.JitterPercent <= 0 {
-		return ttl
+		return base
 	}
-	jitter := int64(float64(ttl) * c.cfg.JitterPercent)
+	jitter := int64(float64(base) * c.cfg.JitterPercent)
 	if jitter <= 0 {
-		return ttl
+		return base
 	}
-	return ttl + time.Duration(rand.Int64N(2*jitter+1)-jitter)
-}
-
-// Get retrieves a value from L1 (then L2 if configured). Returns nil, false on miss.
-func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool) {
-	c.mu.Lock()
-
-	e, ok := c.items[key]
-	if ok && !time.Now().After(e.expiresAt) {
-		if e.freq < 3 {
-			e.freq++
-		}
-		data := e.data
-		c.mu.Unlock()
-		c.hits.Add(1)
-		return data, true
-	}
-
-	// L1 miss or expired.
-	if ok {
-		c.removeEntry(e)
-	}
-	c.mu.Unlock()
-
-	// Try L2.
-	if c.l2 != nil {
-		data, err := c.l2.Get(ctx, key)
-		if err == nil {
-			c.l2hits.Add(1)
-			c.Set(ctx, key, data)
-			return data, true
-		}
-		if errors.Is(err, ErrCacheMiss) {
-			c.l2misses.Add(1)
-		} else {
-			c.l2errors.Add(1)
-		}
-	}
-
-	c.misses.Add(1)
-	return nil, false
-}
-
-// Set stores a value in L1 (and L2 if configured).
-func (c *Cache) Set(ctx context.Context, key string, data []byte) {
-	c.mu.Lock()
-
-	// Update existing entry.
-	if e, ok := c.items[key]; ok {
-		e.data = data
-		e.expiresAt = time.Now().Add(c.jitteredTTL())
-		c.mu.Unlock()
-		// Write-through to L2 (best-effort).
-		if c.l2 != nil {
-			if err := c.l2.Set(ctx, key, data, c.cfg.L2TTL); err != nil {
-				slog.Debug("cache: L2 set failed", slog.Any("error", err))
-			}
-		}
-		return
-	}
-
-	// Evict until under capacity.
-	for len(c.items) >= c.cfg.L1MaxItems {
-		if !c.evict() {
-			break
-		}
-	}
-
-	// Check ghost for frequency boost.
-	var initFreq uint8
-	if ge, ok := c.ghostMap[key]; ok {
-		c.ghost.Remove(ge)
-		delete(c.ghostMap, key)
-		initFreq = 1 // ghost re-admission boost
-	}
-
-	// Insert into small queue.
-	e := &entry{
-		key:       key,
-		data:      data,
-		expiresAt: time.Now().Add(c.jitteredTTL()),
-		freq:      initFreq,
-	}
-	e.elem = c.small.PushBack(e)
-	c.items[key] = e
-	c.mu.Unlock()
-
-	// Write-through to L2 (best-effort).
-	if c.l2 != nil {
-		if err := c.l2.Set(ctx, key, data, c.cfg.L2TTL); err != nil {
-			slog.Debug("cache: L2 set failed", slog.Any("error", err))
-		}
-	}
-}
-
-// Delete removes a key from both L1 and L2.
-func (c *Cache) Delete(ctx context.Context, key string) {
-	c.mu.Lock()
-	if e, ok := c.items[key]; ok {
-		c.removeEntry(e)
-	}
-	c.mu.Unlock()
-
-	// Delete from L2 (best-effort).
-	if c.l2 != nil {
-		if err := c.l2.Del(ctx, key); err != nil {
-			slog.Debug("cache: L2 del failed", slog.Any("error", err))
-		}
-	}
-}
-
-// GetOrLoad returns the value for key, loading it via loader on cache miss.
-// Concurrent loads for the same key are deduplicated (singleflight).
-// The loaded value is stored in L1.
-func (c *Cache) GetOrLoad(ctx context.Context, key string, loader func(context.Context) ([]byte, error)) ([]byte, error) {
-	if data, ok := c.Get(ctx, key); ok {
-		return data, nil
-	}
-
-	data, err := c.flight.do(key, func() ([]byte, error) {
-		return loader(ctx)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	c.Set(ctx, key, data)
-	return data, nil
-}
-
-// Stats holds cache statistics.
-type Stats struct {
-	L1Hits    int64
-	L1Misses  int64
-	L1Size    int
-	L2Hits    int64
-	L2Misses  int64
-	L2Errors  int64
-	Evictions int64
-	HitRatio  float64
-}
-
-// Stats returns a snapshot of cache statistics.
-func (c *Cache) Stats() Stats {
-	hits := c.hits.Load()
-	misses := c.misses.Load()
-	l2h := c.l2hits.Load()
-	l2m := c.l2misses.Load()
-	l2e := c.l2errors.Load()
-	totalHits := hits + l2h
-	totalMisses := misses + l2m
-	var ratio float64
-	if total := totalHits + totalMisses; total > 0 {
-		ratio = float64(totalHits) / float64(total)
-	}
-	c.mu.Lock()
-	size := len(c.items)
-	c.mu.Unlock()
-	return Stats{
-		L1Hits:    hits,
-		L1Misses:  misses,
-		L1Size:    size,
-		L2Hits:    l2h,
-		L2Misses:  l2m,
-		L2Errors:  l2e,
-		Evictions: c.evictions.Load(),
-		HitRatio:  ratio,
-	}
-}
-
-// Clear removes all entries from L1 and returns the number cleared.
-// L2 is not affected.
-func (c *Cache) Clear() int {
-	c.mu.Lock()
-	n := len(c.items)
-	c.items = make(map[string]*entry)
-	c.small.Init()
-	c.main.Init()
-	c.ghost.Init()
-	c.ghostMap = make(map[string]*list.Element)
-	c.mu.Unlock()
-	return n
-}
-
-// Close stops the background cleanup goroutine and closes L2 if set.
-func (c *Cache) Close() {
-	select {
-	case <-c.done:
-	default:
-		close(c.done)
-	}
-	if c.l2 != nil {
-		c.l2.Close()
-	}
+	return base + time.Duration(rand.Int64N(2*jitter+1)-jitter)
 }
 
 // Key builds a deterministic cache key from parts using FNV-128a.
@@ -390,123 +161,4 @@ func Key(parts ...string) string {
 		h.Write([]byte(p))
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// evict removes one entry from the cache using S3-FIFO policy.
-func (c *Cache) evict() bool {
-	now := time.Now()
-
-	// Phase 1: evict from small queue.
-	for c.small.Len() > 0 {
-		front := c.small.Front()
-		e := front.Value.(*entry)
-		c.small.Remove(front)
-
-		if now.After(e.expiresAt) {
-			delete(c.items, e.key)
-			c.evictions.Add(1)
-			return true
-		}
-
-		if e.freq > 0 {
-			// Accessed while in small — promote to main.
-			e.freq = 0
-			e.inMain = true
-			e.elem = c.main.PushBack(e)
-			continue
-		}
-
-		// One-hit wonder — evict to ghost.
-		delete(c.items, e.key)
-		c.evictions.Add(1)
-		c.addToGhost(e.key)
-		return true
-	}
-
-	// Phase 2: evict from main queue (CLOCK-like second chance).
-	limit := c.main.Len()
-	for i := 0; i < limit && c.main.Len() > 0; i++ {
-		front := c.main.Front()
-		e := front.Value.(*entry)
-		c.main.Remove(front)
-
-		if now.After(e.expiresAt) {
-			delete(c.items, e.key)
-			c.evictions.Add(1)
-			return true
-		}
-
-		if e.freq > 0 {
-			e.freq--
-			e.elem = c.main.PushBack(e)
-			continue
-		}
-
-		delete(c.items, e.key)
-		c.evictions.Add(1)
-		return true
-	}
-
-	// Safety: force evict front of main if all had freq > 0.
-	if front := c.main.Front(); front != nil {
-		e := front.Value.(*entry)
-		c.main.Remove(front)
-		delete(c.items, e.key)
-		c.evictions.Add(1)
-		return true
-	}
-
-	return false
-}
-
-// addToGhost adds a key to the ghost queue, evicting the oldest ghost if full.
-func (c *Cache) addToGhost(key string) {
-	for len(c.ghostMap) >= c.ghostCap {
-		front := c.ghost.Front()
-		if front == nil {
-			break
-		}
-		old := front.Value.(string)
-		c.ghost.Remove(front)
-		delete(c.ghostMap, old)
-	}
-	elem := c.ghost.PushBack(key)
-	c.ghostMap[key] = elem
-}
-
-// removeEntry removes an active entry from its queue and the items map.
-func (c *Cache) removeEntry(e *entry) {
-	if e.inMain {
-		c.main.Remove(e.elem)
-	} else {
-		c.small.Remove(e.elem)
-	}
-	delete(c.items, e.key)
-}
-
-// cleanupLoop periodically removes expired entries from L1.
-func (c *Cache) cleanupLoop(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.done:
-			return
-		case <-ticker.C:
-			c.mu.Lock()
-			now := time.Now()
-			for key, e := range c.items {
-				if now.After(e.expiresAt) {
-					if e.inMain {
-						c.main.Remove(e.elem)
-					} else {
-						c.small.Remove(e.elem)
-					}
-					delete(c.items, key)
-				}
-			}
-			c.mu.Unlock()
-		}
-	}
 }

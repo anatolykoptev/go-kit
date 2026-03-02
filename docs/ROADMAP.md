@@ -888,7 +888,7 @@ Ongoing:
 
 | # | Feature | Package | Effort | Impact | Priority |
 |---|---------|---------|--------|--------|----------|
-| 1 | Per-key TTL | cache | Low | High | **P0** |
+| 1 | Per-key TTL | cache | Low | High | **DONE** |
 | 2 | OnEvict callback | cache | Low | Medium | **P1** |
 | 3 | ratelimit package | **new** | Medium | High | **P1** |
 | 4 | Union types in Extract | llm | Medium | Medium | **P2** |
@@ -898,22 +898,17 @@ Ongoing:
 
 ---
 
-### W2-1. cache: Per-Key TTL (P0)
+### W2-1. cache: Per-Key TTL (P0) — DONE
 
-**Gap**: `Set(ctx, key, data)` uses global L1TTL/L2TTL. Different data has different freshness
-requirements (LinkedIn jobs 15min, company research 24h) — forces separate Cache instances.
-
-**Competitors**: golang-fifo `SetWithTTL`, theine-go `SetWithTTL`, every modern cache lib.
+**Status**: DONE — `SetWithTTL`, `GetOrLoadWithTTL` added to `cache/operations.go`.
 
 ```go
-// New API (backward-compatible — Set() keeps using global TTL):
 func (c *Cache) SetWithTTL(ctx context.Context, key string, data []byte, ttl time.Duration)
+func (c *Cache) GetOrLoadWithTTL(ctx context.Context, key string, ttl time.Duration,
+    loader func(context.Context) ([]byte, error)) ([]byte, error)
 ```
 
-**Implementation**: store `expiresAt` per entry (already exists), just let caller override TTL.
-L2 `Set` already takes a `ttl` parameter. Minimal change.
-
-**Effort**: ~30 LOC | **Impact**: eliminates need for multiple Cache instances per service
+L1 applies jitter to caller's TTL; L2 passes TTL directly. Fully backward-compatible.
 
 ---
 
@@ -1055,7 +1050,7 @@ Revisit if L1MaxItems grows to 100K+.
 
 ```
 March 2026 (immediate):
-  W2-1  Per-key TTL                — 0.5 day, backward-compatible
+  W2-1  Per-key TTL                — DONE
   W2-2  OnEvict callback           — 0.5 day, backward-compatible
 
 April 2026:

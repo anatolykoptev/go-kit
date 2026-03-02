@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -437,14 +438,14 @@ func TestStream_Basic(t *testing.T) {
 	}
 	defer stream.Close()
 
-	var content string
+	var sb strings.Builder
 	for chunk, ok := stream.Next(); ok; chunk, ok = stream.Next() {
-		content += chunk.Delta
+		sb.WriteString(chunk.Delta)
 	}
 	if err := stream.Err(); err != nil {
 		t.Fatalf("stream error: %v", err)
 	}
-	if content != "Hello World" {
+	if content := sb.String(); content != "Hello World" {
 		t.Errorf("content = %q, want %q", content, "Hello World")
 	}
 }
@@ -511,7 +512,7 @@ func TestComplete_PerCallOverrides(t *testing.T) {
 func TestStream_Error(t *testing.T) {
 	srv := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("bad request"))
+		_, _ = w.Write([]byte("bad request"))
 	})
 	c := llm.NewClient(srv.URL, "key", "model")
 
@@ -565,7 +566,7 @@ func TestExtract_ValidationRetry(t *testing.T) {
 		llm.WithValidator(func(v any) error {
 			p := v.(*person)
 			if p.Name == "" {
-				return fmt.Errorf("name is required")
+				return errors.New("name is required")
 			}
 			return nil
 		}),
@@ -595,7 +596,7 @@ func TestExtract_ExhaustedRetries(t *testing.T) {
 		llm.WithValidator(func(v any) error {
 			p := v.(*person)
 			if p.Name == "" {
-				return fmt.Errorf("name is required")
+				return errors.New("name is required")
 			}
 			return nil
 		}),

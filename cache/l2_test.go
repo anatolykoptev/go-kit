@@ -121,11 +121,9 @@ func (f *faultyL2) Del(_ context.Context, key string) error {
 func (f *faultyL2) Close() error { return nil }
 
 func TestCache_L2Error_FallsThrough(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	faulty := newFaultyL2(100) // always fails
-	c.WithL2(faulty)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: faulty})
+	defer c.Close()
 
 	ctx := context.Background()
 
@@ -140,11 +138,9 @@ func TestCache_L2Error_FallsThrough(t *testing.T) {
 }
 
 func TestCache_L2Error_Stats(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	faulty := newFaultyL2(100)
-	c.WithL2(faulty)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: faulty})
+	defer c.Close()
 
 	ctx := context.Background()
 
@@ -164,11 +160,9 @@ func TestCache_L2Error_Stats(t *testing.T) {
 }
 
 func TestCache_CircuitBreaker_OpensAfterFailures(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	faulty := newFaultyL2(10) // first 10 calls fail
-	c.WithL2(faulty)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: faulty})
+	defer c.Close()
 
 	ctx := context.Background()
 
@@ -185,11 +179,9 @@ func TestCache_CircuitBreaker_OpensAfterFailures(t *testing.T) {
 }
 
 func TestCache_L2Miss_UsesErrCacheMiss(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 	_, ok := c.Get(ctx, "not-here")

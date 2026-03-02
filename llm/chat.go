@@ -7,6 +7,44 @@ import (
 	"strings"
 )
 
+// Message is a chat message.
+type Message struct {
+	Role       string     `json:"role"`
+	Content    any        `json:"content"` // string or []ContentPart for multimodal
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ContentPart is a part of a multimodal message.
+type ContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL holds an image reference for vision requests.
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// ImagePart is a convenience type for passing images to CompleteMultimodal.
+type ImagePart struct {
+	URL      string
+	MIMEType string // optional
+}
+
+// ChatRequest is a chat completion request. Exported for use with Middleware.
+type ChatRequest struct {
+	Model          string    `json:"model"`
+	Messages       []Message `json:"messages"`
+	Temperature    float64   `json:"temperature"`
+	MaxTokens      int       `json:"max_tokens"`
+	Stream         bool      `json:"stream,omitempty"`
+	Tools          []Tool    `json:"tools,omitempty"`
+	ToolChoice     any       `json:"tool_choice,omitempty"`
+	ResponseFormat any       `json:"response_format,omitempty"`
+}
+
 // Usage holds token usage from the API response.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`

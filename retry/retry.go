@@ -118,6 +118,41 @@ func shouldAbort(opts *Options, err error) bool {
 	return false
 }
 
+// applyJitter adds ±25% random variation to a delay.
+func applyJitter(d time.Duration) time.Duration {
+	quarter := int64(d) / 4 //nolint:mnd // ±25% jitter
+	return time.Duration(int64(d) - quarter + rand.Int64N(2*quarter+1))
+}
+
+// waitWithContext waits for the given delay, respecting context cancellation.
+// Uses opts.Timer if set (for tests), otherwise time.After.
+func waitWithContext(ctx context.Context, delay time.Duration, timer Timer) error {
+	afterCh := time.After(delay)
+	if timer != nil {
+		afterCh = timer.After(delay)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-afterCh:
+		return nil
+	}
+}
+
+// retryDelay computes the actual delay for a retry attempt, considering
+// RetryAfter hints and jitter.
+func retryDelay(baseDelay time.Duration, lastErr error, jitter bool) time.Duration {
+	delay := baseDelay
+	var ra *RetryAfterError
+	if errors.As(lastErr, &ra) && ra.Delay > 0 {
+		delay = ra.Delay
+	}
+	if jitter && delay > 0 {
+		delay = applyJitter(delay)
+	}
+	return delay
+}
+
 // Do retries fn up to MaxAttempts times with exponential backoff.
 // Respects context cancellation. Returns the last error if all attempts fail.
 func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, error) {
@@ -133,38 +168,16 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 	var lastErr error
 
 	for attempt := range opts.MaxAttempts {
-		// Check elapsed time budget before each retry.
 		if opts.MaxElapsedTime > 0 && attempt > 0 && time.Since(start) >= opts.MaxElapsedTime {
 			break
 		}
 
 		if attempt > 0 {
-			actualDelay := delay
-
-			// Override delay if fn returned RetryAfter hint.
-			var ra *RetryAfterError
-			if errors.As(lastErr, &ra) && ra.Delay > 0 {
-				actualDelay = ra.Delay
-			}
-
-			// Apply jitter (±25%).
-			if opts.Jitter && actualDelay > 0 {
-				quarter := int64(actualDelay) / 4
-				actualDelay = time.Duration(int64(actualDelay) - quarter + rand.Int64N(2*quarter+1))
-			}
-
-			// Wait using Timer or real time.
-			afterCh := time.After(actualDelay)
-			if opts.Timer != nil {
-				afterCh = opts.Timer.After(actualDelay)
-			}
-			select {
-			case <-ctx.Done():
+			actualDelay := retryDelay(delay, lastErr, opts.Jitter)
+			if err := waitWithContext(ctx, actualDelay, opts.Timer); err != nil {
 				var zero T
-				return zero, ctx.Err()
-			case <-afterCh:
+				return zero, err
 			}
-
 			delay = min(delay*2, opts.MaxDelay)
 		}
 
@@ -174,7 +187,6 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 		}
 		lastErr = err
 
-		// Check abort conditions.
 		if shouldAbort(&opts, lastErr) {
 			break
 		}
