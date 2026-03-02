@@ -424,11 +424,9 @@ func (m *mapL2) Del(_ context.Context, key string) error {
 func (m *mapL2) Close() error { return nil }
 
 func TestL2_WriteThrough(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 	c.Set(ctx, "key1", []byte("value1"))
@@ -446,12 +444,10 @@ func TestL2_WriteThrough(t *testing.T) {
 }
 
 func TestL2_ReadThrough(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
 	l2.data["pre-seeded"] = []byte("from-redis")
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 
@@ -482,11 +478,9 @@ func TestL2_ReadThrough(t *testing.T) {
 }
 
 func TestL2_Miss(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 	_, ok := c.Get(ctx, "nowhere")
@@ -501,11 +495,9 @@ func TestL2_Miss(t *testing.T) {
 }
 
 func TestL2_Delete(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 	c.Set(ctx, "del-me", []byte("data"))
@@ -521,11 +513,9 @@ func TestL2_Delete(t *testing.T) {
 }
 
 func TestL2_GetOrLoad(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 	got, err := c.GetOrLoad(ctx, "loaded", func(_ context.Context) ([]byte, error) {
@@ -551,12 +541,10 @@ func TestL2_GetOrLoad(t *testing.T) {
 }
 
 func TestL2_Stats(t *testing.T) {
-	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
-	defer c.Close()
-
 	l2 := newMapL2()
 	l2.data["exists"] = []byte("yes")
-	c.WithL2(l2)
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute, L2: l2})
+	defer c.Close()
 
 	ctx := context.Background()
 	c.Get(ctx, "exists") // L2 hit
@@ -572,6 +560,112 @@ func TestL2_Stats(t *testing.T) {
 	}
 	if stats.L2Misses != 1 {
 		t.Errorf("L2Misses = %d, want 1", stats.L2Misses)
+	}
+}
+
+// ttlCapL2 is a mock L2 that captures the last TTL passed to Set.
+type ttlCapL2 struct {
+	mapL2
+	lastTTL atomic.Int64 // nanoseconds
+}
+
+func newTTLCapL2() *ttlCapL2 {
+	return &ttlCapL2{mapL2: mapL2{data: make(map[string][]byte)}}
+}
+
+func (m *ttlCapL2) Set(ctx context.Context, key string, data []byte, ttl time.Duration) error {
+	m.lastTTL.Store(int64(ttl))
+	return m.mapL2.Set(ctx, key, data, ttl)
+}
+
+func TestSetWithTTL_ExpiresEarly(t *testing.T) {
+	c := cache.New(cache.Config{
+		L1MaxItems: 100,
+		L1TTL:      time.Minute, // global TTL = 1 minute
+	})
+	defer c.Close()
+	ctx := context.Background()
+
+	// Set one entry with global TTL, another with 50ms TTL.
+	c.Set(ctx, "long", []byte("stays"))
+	c.SetWithTTL(ctx, "short", []byte("goes"), 50*time.Millisecond)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Short-TTL entry should be gone.
+	if _, ok := c.Get(ctx, "short"); ok {
+		t.Error("short-TTL entry should have expired")
+	}
+	// Global-TTL entry should survive.
+	if _, ok := c.Get(ctx, "long"); !ok {
+		t.Error("global-TTL entry should still exist")
+	}
+}
+
+func TestSetWithTTL_L2ReceivesCustomTTL(t *testing.T) {
+	l2 := newTTLCapL2()
+	c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute, L2TTL: 24 * time.Hour, L2: l2})
+	defer c.Close()
+	ctx := context.Background()
+
+	customTTL := 15 * time.Minute
+	c.SetWithTTL(ctx, "key1", []byte("data"), customTTL)
+
+	got := time.Duration(l2.lastTTL.Load())
+	if got != customTTL {
+		t.Errorf("L2 received TTL %v, want %v", got, customTTL)
+	}
+}
+
+func TestSetWithTTL_ZeroFallsBackToGlobal(t *testing.T) {
+	l2 := newTTLCapL2()
+	c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute, L2TTL: 24 * time.Hour, L2: l2})
+	defer c.Close()
+	ctx := context.Background()
+
+	// Zero TTL should fall back to global L2TTL (24h).
+	c.SetWithTTL(ctx, "zero", []byte("data"), 0)
+
+	got := time.Duration(l2.lastTTL.Load())
+	if got != 24*time.Hour {
+		t.Errorf("L2 received TTL %v, want %v (global fallback)", got, 24*time.Hour)
+	}
+
+	// Entry should be alive (global L1TTL, not zero).
+	if _, ok := c.Get(ctx, "zero"); !ok {
+		t.Error("zero-TTL SetWithTTL should fall back to global TTL, entry should exist")
+	}
+}
+
+func TestGetOrLoadWithTTL(t *testing.T) {
+	c := cache.New(cache.Config{
+		L1MaxItems: 100,
+		L1TTL:      time.Minute,
+	})
+	defer c.Close()
+	ctx := context.Background()
+
+	got, err := c.GetOrLoadWithTTL(ctx, "load-me", 50*time.Millisecond,
+		func(_ context.Context) ([]byte, error) {
+			return []byte("loaded"), nil
+		})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != "loaded" {
+		t.Errorf("got %q, want %q", got, "loaded")
+	}
+
+	// Should be cached now.
+	if _, ok := c.Get(ctx, "load-me"); !ok {
+		t.Fatal("loaded value should be cached")
+	}
+
+	// Wait for custom TTL to expire.
+	time.Sleep(100 * time.Millisecond)
+
+	if _, ok := c.Get(ctx, "load-me"); ok {
+		t.Error("entry should have expired after custom TTL")
 	}
 }
 

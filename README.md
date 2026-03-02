@@ -199,6 +199,20 @@ stats := c.Stats()
 fmt.Printf("Hit ratio: %.1f%%, Evictions: %d\n", stats.HitRatio*100, stats.Evictions)
 ```
 
+**Per-key TTL** — override global TTL for individual entries:
+
+```go
+// Short TTL for fast-changing data (e.g. job listings)
+c.SetWithTTL(ctx, "jobs:123", data, 15*time.Minute)
+
+// Cache-aside with custom TTL
+data, err := c.GetOrLoadWithTTL(ctx, "company:456", 24*time.Hour,
+    func(ctx context.Context) ([]byte, error) {
+        return fetchCompanyData(ctx, "456")
+    },
+)
+```
+
 - L1 memory cache with S3-FIFO eviction for high hit rates
 - L2 Redis: optional, graceful degradation (L1-only if Redis unreachable)
 - Read-through: L1 miss → L2 hit → automatic L1 promotion
