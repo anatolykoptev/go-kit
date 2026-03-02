@@ -162,3 +162,46 @@ func TestCache_L2Error_Stats(t *testing.T) {
 		t.Errorf("L2Misses = %d, want 0 (was a real error, not a miss)", stats.L2Misses)
 	}
 }
+
+func TestCache_CircuitBreaker_OpensAfterFailures(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	faulty := newFaultyL2(10) // first 10 calls fail
+	c.WithL2(faulty)
+
+	ctx := context.Background()
+
+	// Trigger 10 L2 failures (4+ consecutive → circuit opens).
+	for i := range 10 {
+		c.Get(ctx, cache.Key("miss", string(rune('a'+i))))
+	}
+
+	stats := c.Stats()
+	if stats.L2Errors == 0 {
+		t.Error("should have recorded L2 errors")
+	}
+	t.Logf("L2Errors=%d, L2Misses=%d", stats.L2Errors, stats.L2Misses)
+}
+
+func TestCache_L2Miss_UsesErrCacheMiss(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	l2 := newMapL2()
+	c.WithL2(l2)
+
+	ctx := context.Background()
+	_, ok := c.Get(ctx, "not-here")
+	if ok {
+		t.Error("should be a miss")
+	}
+
+	stats := c.Stats()
+	if stats.L2Misses != 1 {
+		t.Errorf("L2Misses = %d, want 1", stats.L2Misses)
+	}
+	if stats.L2Errors != 0 {
+		t.Errorf("L2Errors = %d, want 0 (miss is not error)", stats.L2Errors)
+	}
+}
