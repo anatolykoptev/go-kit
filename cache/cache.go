@@ -151,8 +151,12 @@ func New(cfg Config) *Cache {
 	}
 
 	// Connect L2 if Redis configured.
+	// Guard: NewRedisL2 returns nil on failure — must NOT assign nil
+	// concrete pointer to interface (Go typed-nil trap causes SIGSEGV).
 	if cfg.RedisURL != "" {
-		c.l2 = NewRedisL2(cfg.RedisURL, cfg.RedisDB, cfg.Prefix)
+		if l2 := NewRedisL2(cfg.RedisURL, cfg.RedisDB, cfg.Prefix); l2 != nil {
+			c.l2 = l2
+		}
 	}
 
 	// Background cleanup every 1/10 of TTL, minimum 10s.
