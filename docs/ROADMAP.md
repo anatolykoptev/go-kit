@@ -54,7 +54,7 @@ See [design.md](design.md) for full competitive analysis and rationale.
 | 1 | Per-key TTL | cache | Low | High | **DONE** |
 | 2 | OnEvict callback | cache | Low | Medium | **DONE** |
 | 3 | ratelimit package | ratelimit | Medium | High | **DONE** |
-| 4 | Union types in Extract | llm | Medium | Medium | **P2** |
+| 4 | Union types in Extract | llm | Medium | Medium | **DONE** |
 | 5 | Streaming structured output | llm | High | Medium | **P2** |
 | 6 | Fibonacci backoff | retry | Low | Low | **P3** |
 | 7 | Doorkeeper bloom filter | cache | Medium | Low | **P3** |
@@ -163,7 +163,7 @@ March 2026 (immediate):
   W2-3  ratelimit package        — DONE
 
 April 2026:
-  W2-4  Union types in Extract   — 1 day
+  W2-4  Union types in Extract   — DONE
 
 Later / as needed:
   W2-5  Streaming structured     — 2-3 days

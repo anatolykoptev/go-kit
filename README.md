@@ -128,6 +128,24 @@ err := client.Extract(ctx, messages, &recipe,
     }),
 )
 
+// Union types — LLM chooses between multiple response types
+type SearchAction struct {
+    Query string `json:"query"`
+}
+type AnswerAction struct {
+    Answer string `json:"answer"`
+}
+result, err := client.ExtractOneOf(ctx, messages, []llm.VariantDef{
+    llm.Variant("search", SearchAction{}),
+    llm.Variant("answer", AnswerAction{}),
+})
+switch v := result.(type) {
+case *SearchAction:
+    fmt.Println("Search:", v.Query)
+case *AnswerAction:
+    fmt.Println("Answer:", v.Answer)
+}
+
 // Model-level fallback chains
 client = llm.NewClient("", "", "",
     llm.WithEndpoints([]llm.Endpoint{
@@ -154,6 +172,7 @@ client = llm.NewClient(baseURL, apiKey, model,
 - Tool/function calling via `Chat` + `WithTools`
 - Structured output via `ChatTyped` + auto JSON Schema
 - Extract with validation retry (Instructor-style, no Go library does this)
+- Union types via `ExtractOneOf` — LLM picks between response variants
 - Model-level endpoint fallback chains
 - Request/response middleware for logging, metrics, caching
 - Token usage reporting in `ChatResponse`

@@ -413,3 +413,54 @@ func TestIsRetryable(t *testing.T) {
 		t.Error("IsRetryable(MarkRetryable) should be true")
 	}
 }
+
+func TestFibonacciBackoff_Sequence(t *testing.T) {
+	timer := &instantTimer{}
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  7,
+		InitialDelay: 100 * time.Millisecond,
+		MaxDelay:     10 * time.Second,
+		Backoff:      retry.BackoffFibonacci,
+		Timer:        timer,
+	}, func() (string, error) {
+		return "", errors.New("fail")
+	})
+
+	// 7 attempts = 6 delays between them.
+	// Fibonacci sequence: 1,1,2,3,5,8 × 100ms = 100,100,200,300,500,800ms
+	expected := []time.Duration{
+		100 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		300 * time.Millisecond,
+		500 * time.Millisecond,
+		800 * time.Millisecond,
+	}
+	if len(timer.delays) != len(expected) {
+		t.Fatalf("got %d delays, want %d: %v", len(timer.delays), len(expected), timer.delays)
+	}
+	for i, want := range expected {
+		if timer.delays[i] != want {
+			t.Errorf("delay[%d] = %v, want %v", i, timer.delays[i], want)
+		}
+	}
+}
+
+func TestFibonacciBackoff_CappedAtMax(t *testing.T) {
+	timer := &instantTimer{}
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  10,
+		InitialDelay: 1 * time.Second,
+		MaxDelay:     5 * time.Second,
+		Backoff:      retry.BackoffFibonacci,
+		Timer:        timer,
+	}, func() (string, error) {
+		return "", errors.New("fail")
+	})
+
+	for i, d := range timer.delays {
+		if d > 5*time.Second {
+			t.Errorf("delay[%d] = %v, exceeds MaxDelay 5s", i, d)
+		}
+	}
+}
