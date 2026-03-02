@@ -735,3 +735,81 @@ func TestMiddleware_Chain(t *testing.T) {
 		t.Errorf("order = %q, want %q", got, want)
 	}
 }
+
+func TestChat_WithToolChoice(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		tc, ok := req["tool_choice"].(string)
+		if !ok || tc != "required" {
+			t.Errorf("tool_choice = %v, want %q", req["tool_choice"], "required")
+		}
+		chatHandler("ok", nil, "stop")(w, r)
+	})
+	c := llm.NewClient(srv.URL, "key", "model")
+	_, err := c.Chat(context.Background(),
+		[]llm.Message{{Role: "user", Content: "test"}},
+		llm.WithToolChoice("required"),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithHTTPClient(t *testing.T) {
+	var called bool
+	custom := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			called = true
+			return http.DefaultTransport.RoundTrip(r)
+		}),
+	}
+	srv := newTestServer(t, okHandler("ok"))
+	c := llm.NewClient(srv.URL, "key", "model", llm.WithHTTPClient(custom))
+	_, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("custom HTTP client transport was not used")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestWithMaxTokens(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["max_tokens"] != float64(256) {
+			t.Errorf("max_tokens = %v, want 256", req["max_tokens"])
+		}
+		okHandler("ok")(w, r)
+	})
+	c := llm.NewClient(srv.URL, "key", "model", llm.WithMaxTokens(256))
+	_, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStream_EmptyResponse(t *testing.T) {
+	srv := newTestServer(t, sseHandler(nil))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	stream, err := c.Stream(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer stream.Close()
+
+	_, ok := stream.Next()
+	if ok {
+		t.Error("expected Next() to return false for empty stream")
+	}
+	if err := stream.Err(); err != nil {
+		t.Errorf("unexpected stream error: %v", err)
+	}
+}

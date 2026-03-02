@@ -753,3 +753,15 @@ func TestHexE_Invalid(t *testing.T) {
 		t.Errorf("Type = %q, want %q", pe.Type, "hex")
 	}
 }
+
+func TestURL_InvalidFallsBackToDefault(t *testing.T) {
+	// url.Parse rarely fails, but a control char triggers an error.
+	t.Setenv("TEST_URL_BAD", string([]byte{0x7f}))
+	got := env.URL("TEST_URL_BAD", "https://fallback.example.com")
+	if got == nil {
+		t.Fatal("URL should fall back to default, not nil")
+	}
+	if got.Host != "fallback.example.com" {
+		t.Errorf("Host = %q, want %q", got.Host, "fallback.example.com")
+	}
+}
