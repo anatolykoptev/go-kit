@@ -3,6 +3,7 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,5 +73,92 @@ func TestNew_NilRedisL2_NoSIGSEGV(t *testing.T) {
 	stats := c.Stats()
 	if stats.L2Hits != 0 || stats.L2Misses != 0 {
 		t.Errorf("L2 should be disabled: hits=%d, misses=%d", stats.L2Hits, stats.L2Misses)
+	}
+}
+
+// faultyL2 simulates Redis failures for testing.
+type faultyL2 struct {
+	fails int // remaining failures before success
+	mu    sync.Mutex
+	data  map[string][]byte
+}
+
+func newFaultyL2(failCount int) *faultyL2 {
+	return &faultyL2{fails: failCount, data: make(map[string][]byte)}
+}
+
+func (f *faultyL2) Get(_ context.Context, key string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fails > 0 {
+		f.fails--
+		return nil, errors.New("connection refused")
+	}
+	v, ok := f.data[key]
+	if !ok {
+		return nil, cache.ErrCacheMiss
+	}
+	return v, nil
+}
+
+func (f *faultyL2) Set(_ context.Context, key string, data []byte, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fails > 0 {
+		return errors.New("connection refused")
+	}
+	f.data[key] = data
+	return nil
+}
+
+func (f *faultyL2) Del(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.data, key)
+	return nil
+}
+
+func (f *faultyL2) Close() error { return nil }
+
+func TestCache_L2Error_FallsThrough(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	faulty := newFaultyL2(100) // always fails
+	c.WithL2(faulty)
+
+	ctx := context.Background()
+
+	// Set should still work for L1 (L2 error is best-effort).
+	c.Set(ctx, "key", []byte("value"))
+
+	// Get from L1 should succeed despite L2 being broken.
+	data, ok := c.Get(ctx, "key")
+	if !ok || string(data) != "value" {
+		t.Errorf("L1 should work despite L2 failure: ok=%v, data=%q", ok, data)
+	}
+}
+
+func TestCache_L2Error_Stats(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 10, L1TTL: time.Minute})
+	defer c.Close()
+
+	faulty := newFaultyL2(100)
+	c.WithL2(faulty)
+
+	ctx := context.Background()
+
+	// L1 miss + L2 error should count as L2 error, not L2 miss.
+	_, ok := c.Get(ctx, "missing")
+	if ok {
+		t.Error("should miss")
+	}
+
+	stats := c.Stats()
+	if stats.L2Errors != 1 {
+		t.Errorf("L2Errors = %d, want 1", stats.L2Errors)
+	}
+	if stats.L2Misses != 0 {
+		t.Errorf("L2Misses = %d, want 0 (was a real error, not a miss)", stats.L2Misses)
 	}
 }

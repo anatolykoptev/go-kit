@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/sony/gobreaker"
 )
 
 // Sentinel errors for L2 cache operations.
@@ -33,6 +34,7 @@ type L2 interface {
 type RedisL2 struct {
 	rdb    *redis.Client
 	prefix string
+	cb     *gobreaker.TwoStepCircuitBreaker
 }
 
 // NewRedisL2 connects to Redis and returns an L2 store.
@@ -57,7 +59,22 @@ func NewRedisL2(redisURL string, db int, prefix string) *RedisL2 {
 		return nil
 	}
 
-	return &RedisL2{rdb: rdb, prefix: prefix}
+	cb := gobreaker.NewTwoStepCircuitBreaker(gobreaker.Settings{
+		Name:    "cache-l2",
+		Timeout: 30 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures > 3
+		},
+		OnStateChange: func(name string, from, to gobreaker.State) {
+			slog.Warn("cache: circuit breaker state change",
+				slog.String("name", name),
+				slog.String("from", from.String()),
+				slog.String("to", to.String()),
+			)
+		},
+	})
+
+	return &RedisL2{rdb: rdb, prefix: prefix, cb: cb}
 }
 
 func (r *RedisL2) key(k string) string {
@@ -69,41 +86,61 @@ func (r *RedisL2) key(k string) string {
 
 // Get retrieves a value from Redis by key.
 // Returns ErrCacheMiss if the key does not exist or receiver is nil.
+// Returns ErrL2Unavailable if the circuit breaker is open.
 func (r *RedisL2) Get(ctx context.Context, key string) ([]byte, error) {
 	if r == nil {
 		return nil, ErrCacheMiss
 	}
+	done, err := r.cb.Allow()
+	if err != nil {
+		return nil, ErrL2Unavailable
+	}
 	data, err := r.rdb.Get(ctx, r.key(key)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
+			done(true) // miss is not a failure
 			return nil, ErrCacheMiss
 		}
+		done(false)
 		return nil, fmt.Errorf("cache: L2 get %q: %w", key, err)
 	}
+	done(true)
 	return data, nil
 }
 
 // Set stores a value in Redis with the given TTL.
-// Returns ErrL2Unavailable if receiver is nil.
+// Returns ErrL2Unavailable if receiver is nil or circuit breaker is open.
 func (r *RedisL2) Set(ctx context.Context, key string, data []byte, ttl time.Duration) error {
 	if r == nil {
 		return ErrL2Unavailable
 	}
+	done, err := r.cb.Allow()
+	if err != nil {
+		return ErrL2Unavailable
+	}
 	if err := r.rdb.Set(ctx, r.key(key), data, ttl).Err(); err != nil {
+		done(false)
 		return fmt.Errorf("cache: L2 set %q: %w", key, err)
 	}
+	done(true)
 	return nil
 }
 
 // Del removes a key from Redis.
-// Returns ErrL2Unavailable if receiver is nil.
+// Returns ErrL2Unavailable if receiver is nil or circuit breaker is open.
 func (r *RedisL2) Del(ctx context.Context, key string) error {
 	if r == nil {
 		return ErrL2Unavailable
 	}
+	done, err := r.cb.Allow()
+	if err != nil {
+		return ErrL2Unavailable
+	}
 	if err := r.rdb.Del(ctx, r.key(key)).Err(); err != nil {
+		done(false)
 		return fmt.Errorf("cache: L2 del %q: %w", key, err)
 	}
+	done(true)
 	return nil
 }
 
