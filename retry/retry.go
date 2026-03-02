@@ -26,6 +26,14 @@ type Timer interface {
 	After(d time.Duration) <-chan time.Time
 }
 
+// Backoff selects the delay growth strategy between retries.
+type Backoff int
+
+const (
+	BackoffExponential Backoff = iota // default: delay doubles each attempt
+	BackoffFibonacci                  // delay follows fibonacci: 1,1,2,3,5,8... × InitialDelay
+)
+
 // Options controls retry behavior.
 // Zero values are replaced by the corresponding Default* constants.
 type Options struct {
@@ -35,6 +43,7 @@ type Options struct {
 	MaxElapsedTime time.Duration // total wall-clock budget; 0 = no limit
 	Jitter         bool          // add ±25% random jitter to delay
 	Timer          Timer         // custom timer for tests; nil = real time.After
+	Backoff        Backoff       // backoff strategy (default: exponential)
 	AbortOn        []error       // never retry these errors (checked via errors.Is)
 	RetryableOnly  bool          // if true, only retry errors implementing Retryable
 }
@@ -165,6 +174,7 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 
 	start := time.Now()
 	delay := opts.InitialDelay
+	prevDelay := time.Duration(0) // for fibonacci tracking
 	var lastErr error
 
 	for attempt := range opts.MaxAttempts {
@@ -178,7 +188,12 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 				var zero T
 				return zero, err
 			}
-			delay = min(delay*2, opts.MaxDelay)
+			switch opts.Backoff {
+			case BackoffFibonacci:
+				prevDelay, delay = delay, min(prevDelay+delay, opts.MaxDelay)
+			default: // BackoffExponential
+				delay = min(delay*2, opts.MaxDelay)
+			}
 		}
 
 		result, err := fn()
