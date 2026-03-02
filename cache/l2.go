@@ -30,6 +30,12 @@ type L2 interface {
 	Close() error
 }
 
+const (
+	pingTimeout      = 3 * time.Second
+	cbTimeout        = 30 * time.Second
+	cbFailThreshold  = 3
+)
+
 // RedisL2 implements L2 using Redis.
 type RedisL2 struct {
 	rdb    *redis.Client
@@ -51,7 +57,7 @@ func NewRedisL2(redisURL string, db int, prefix string) *RedisL2 {
 	opts.DB = db
 
 	rdb := redis.NewClient(opts)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		slog.Warn("cache: redis unreachable, L2 disabled", slog.Any("error", err))
@@ -61,9 +67,9 @@ func NewRedisL2(redisURL string, db int, prefix string) *RedisL2 {
 
 	cb := gobreaker.NewTwoStepCircuitBreaker(gobreaker.Settings{
 		Name:    "cache-l2",
-		Timeout: 30 * time.Second,
+		Timeout: cbTimeout,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures > 3
+			return counts.ConsecutiveFailures > cbFailThreshold
 		},
 		OnStateChange: func(name string, from, to gobreaker.State) {
 			slog.Warn("cache: circuit breaker state change",
