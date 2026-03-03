@@ -1,6 +1,9 @@
 package ratelimit
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // ConcurrencyLimiter limits concurrent execution using a buffered channel as semaphore.
 // Send = acquire, receive = release. Goroutine-safe.
@@ -23,11 +26,11 @@ func NewConcurrencyLimiter(maxConcurrent int) *ConcurrencyLimiter {
 
 // Acquire blocks until a slot is available or ctx is cancelled.
 // Returns a release function and nil error on success.
-// The caller must call the release function when done.
+// The release function is idempotent — calling it more than once is a safe no-op.
 func (cl *ConcurrencyLimiter) Acquire(ctx context.Context) (func(), error) {
 	select {
 	case cl.sem <- struct{}{}:
-		return cl.release, nil
+		return cl.onceRelease(), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -35,13 +38,20 @@ func (cl *ConcurrencyLimiter) Acquire(ctx context.Context) (func(), error) {
 
 // TryAcquire attempts to acquire a slot without blocking.
 // Returns a release function and true if successful, nil and false otherwise.
+// The release function is idempotent — calling it more than once is a safe no-op.
 func (cl *ConcurrencyLimiter) TryAcquire() (func(), bool) {
 	select {
 	case cl.sem <- struct{}{}:
-		return cl.release, true
+		return cl.onceRelease(), true
 	default:
 		return nil, false
 	}
+}
+
+// onceRelease returns a function that calls release exactly once.
+func (cl *ConcurrencyLimiter) onceRelease() func() {
+	var once sync.Once
+	return func() { once.Do(cl.release) }
 }
 
 // release returns one slot to the semaphore.
