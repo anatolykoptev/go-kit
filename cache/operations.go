@@ -77,7 +77,7 @@ func (c *Cache) setInternal(ctx context.Context, key string, data []byte, l1TTL,
 	if e, ok := c.items[key]; ok {
 		e.data = data
 		e.expiresAt = time.Now().Add(c.jitteredTTL(l1TTL))
-		if len(tags) > 0 || len(e.tags) > 0 {
+		if len(tags) > 0 {
 			c.updateTags(key, e.tags, tags)
 			e.tags = tags
 		}
