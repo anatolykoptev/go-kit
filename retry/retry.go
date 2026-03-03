@@ -42,6 +42,7 @@ type Options struct {
 	AbortOn        []error       // never retry these errors (checked via errors.Is)
 	RetryableOnly  bool          // if true, only retry errors implementing Retryable
 	OnRetry        func(attempt int, err error) // called after each failed attempt
+	RetryIf        func(error) bool // custom predicate; overrides AbortOn + RetryableOnly
 }
 
 func (o *Options) applyDefaults() {

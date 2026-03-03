@@ -15,7 +15,8 @@ go get github.com/anatolykoptev/go-kit
 | [`cache`](#cache) | L1 memory + L2 Redis tiered cache with S3-FIFO eviction | stdlib (L2: redis) |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks, rates, histograms, TTL | stdlib |
-| [`ratelimit`](#ratelimit) | Token bucket rate limiter with per-key support | stdlib |
+| [`hedge`](#hedge) | Hedged requests — race primary vs backup, first success wins | stdlib |
+| [`ratelimit`](#ratelimit) | Token bucket rate limiter, per-key support, concurrency limiter | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
 
 All packages are independent — no internal cross-imports. Import only what you need.
@@ -271,6 +272,26 @@ c := cache.New(cache.Config{
 })
 ```
 
+### hedge
+
+```go
+import "github.com/anatolykoptev/go-kit/hedge"
+
+// Start fn; if no response after 1s, launch a second call in parallel.
+// First success wins, loser is cancelled automatically.
+result, err := hedge.Do(ctx, time.Second, func(ctx context.Context) (string, error) {
+    return callLLM(ctx)
+})
+
+// Zero/negative delay: run fn once, no goroutines.
+result, err := hedge.Do(ctx, 0, fn)
+```
+
+- Generic `Do[T any]` — works with any return type
+- Shared derived context — `defer cancel()` auto-cleans loser goroutine
+- Primary fails before delay — returns error immediately, no hedge
+- Buffered channel prevents goroutine leaks
+
 ### ratelimit
 
 ```go
@@ -296,9 +317,25 @@ kl.Wait(ctx, "api.twitter.com")
 kl.StartCleanup(time.Minute, 10*time.Minute)
 ```
 
+**Concurrency limiter** (bulkhead pattern):
+
+```go
+// Limit to 5 concurrent operations
+cl := ratelimit.NewConcurrencyLimiter(5)
+release, err := cl.Acquire(ctx) // blocking; respects context
+if err != nil { return err }
+defer release()
+
+// Non-blocking variant
+release, ok := cl.TryAcquire()
+cl.Available() // free slots
+cl.Size()      // max slots
+```
+
 - Token bucket algorithm, zero external deps
 - Non-blocking `Allow()` and blocking `Wait(ctx)`
 - Per-key limiters with automatic idle cleanup
+- Concurrency limiter (semaphore-based, blocking + non-blocking acquire)
 - Goroutine-safe
 
 ### retry
@@ -347,10 +384,20 @@ retry.Do(ctx, retry.Options{
         log.Printf("attempt %d failed: %v", attempt, err)
     },
 }, fn)
+
+// RetryIf — custom predicate (overrides AbortOn + RetryableOnly)
+retry.Do(ctx, retry.Options{
+    MaxAttempts: 5,
+    RetryIf: func(err error) bool {
+        var netErr net.Error
+        return errors.As(err, &netErr) && netErr.Temporary()
+    },
+}, fn)
 ```
 
 - AbortOn: never retry specific errors (e.g. context.DeadlineExceeded)
 - RetryableOnly + MarkRetryable: opt-in retry mode for production safety
+- RetryIf: custom predicate — full control over which errors to retry
 - Permanent(err): signal from fn to stop retrying immediately
 - OnRetry callback: logging/metrics per failed attempt
 - Context error wrapping: `errors.Is(err, context.DeadlineExceeded)` works on timeout

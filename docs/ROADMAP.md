@@ -57,7 +57,7 @@ See [competitive-analysis.md](competitive-analysis.md) for full breakdown.
 | # | Feature | Package | Source | Effort | Rationale |
 |---|---------|---------|--------|--------|-----------|
 | W3-1 | Schema constraint tags | llm | instructor-go, bellman | M | **DONE** — LLM sees `minimum`, `enum`, `description` in schema → dramatically better structured output quality |
-| W3-2 | Hedge policy | new: `hedge` | failsafe-go | M | Start 2nd LLM request after timeout, take first response. Cuts p99 latency 2-3x |
+| W3-2 | Hedge policy | new: `hedge` | failsafe-go | M | **DONE** — Start 2nd LLM request after timeout, take first response. Cuts p99 latency 2-3x |
 | W3-3 | Structured LLM errors | llm | go-openai | S | **DONE** — `APIError{StatusCode, Type, Body}` instead of `fmt.Errorf`. Callers can `errors.As` and branch |
 | W3-4 | Tag-based cache invalidation | cache | eko/gocache | M | `Set(key, val, WithTags("user:123"))` → `InvalidateByTag("user:123")`. Removes manual key tracking |
 
@@ -66,8 +66,8 @@ See [competitive-analysis.md](competitive-analysis.md) for full breakdown.
 | # | Feature | Package | Source | Effort | Rationale |
 |---|---------|---------|--------|--------|-----------|
 | W3-5 | OnRetry callback | retry | avast/retry-go | S | **DONE** — `OnRetry func(attempt int, err error)` for logging/metrics per attempt |
-| W3-6 | RetryIf predicate | retry | avast/retry-go | S | `RetryIf func(error) bool` — more flexible than AbortOn + RetryableOnly combined |
-| W3-7 | Concurrency limiter (bulkhead) | ratelimit | failsafe-go | S | `NewConcurrencyLimiter(5)` — "max N in-flight", complements token bucket |
+| W3-6 | RetryIf predicate | retry | avast/retry-go | S | **DONE** — `RetryIf func(error) bool` — more flexible than AbortOn + RetryableOnly combined |
+| W3-7 | Concurrency limiter (bulkhead) | ratelimit | failsafe-go | S | **DONE** — `NewConcurrencyLimiter(5)` — "max N in-flight", complements token bucket |
 | W3-8 | Typed cache Get/Set | cache | eko/gocache | S | `GetJSON[T](key)` / `SetJSON(key, val)` — auto-marshal, removes boilerplate |
 | W3-9 | Permanent(err) from fn | retry | cenkalti/backoff | S | **DONE** — fn returns `retry.Permanent(err)` → never retry. Better than pre-declaring AbortOn |
 | W3-10 | Context error wrapping | retry | avast/retry-go | S | **DONE** — `fmt.Errorf("after %d attempts: %w: %v", n, ctx.Err(), lastErr)` for diagnostics |
@@ -179,10 +179,10 @@ April 2026 (done):
   W3-9  Permanent(err) from fn     — DONE
   W3-10 Context error wrapping     — DONE
 
-May 2026:
-  W3-2  Hedge policy               — 1-2 days
-  W3-6  RetryIf predicate          — 0.5 day
-  W3-7  Concurrency limiter        — 1 day
+May 2026 (done):
+  W3-2  Hedge policy               — DONE
+  W3-6  RetryIf predicate          — DONE
+  W3-7  Concurrency limiter        — DONE
 
 Later / as needed:
   W3-4  Tag-based invalidation     — 1-2 days

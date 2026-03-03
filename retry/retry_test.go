@@ -607,3 +607,80 @@ func TestDo_ContextWrapping_NoContextErr(t *testing.T) {
 		t.Errorf("err = %v, want 'fail'", err)
 	}
 }
+
+// --- RetryIf tests ---
+
+func TestDo_RetryIf_Retries(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: time.Millisecond,
+		Timer:        &instantTimer{},
+		RetryIf:      func(err error) bool { return err.Error() == "transient" },
+	}, func() (string, error) {
+		attempts++
+		return "", errors.New("transient")
+	})
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (RetryIf returned true)", attempts)
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDo_RetryIf_Aborts(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts: 5,
+		RetryIf:     func(err error) bool { return err.Error() != "fatal" },
+	}, func() (string, error) {
+		attempts++
+		return "", errors.New("fatal")
+	})
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (RetryIf returned false)", attempts)
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDo_RetryIf_OverridesAbortOn(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: time.Millisecond,
+		Timer:        &instantTimer{},
+		AbortOn:      []error{context.DeadlineExceeded},
+		RetryIf:      func(error) bool { return true }, // always retry
+	}, func() (string, error) {
+		attempts++
+		return "", context.DeadlineExceeded
+	})
+	// RetryIf overrides AbortOn — should retry all 3 attempts.
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (RetryIf overrides AbortOn)", attempts)
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDo_RetryIf_PermanentTakesPrecedence(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts: 5,
+		RetryIf:     func(error) bool { return true }, // always retry
+	}, func() (string, error) {
+		attempts++
+		return "", retry.Permanent(errors.New("fatal"))
+	})
+	// Permanent is checked before shouldAbort, so it takes precedence.
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (Permanent takes precedence over RetryIf)", attempts)
+	}
+	if err == nil || err.Error() != "fatal" {
+		t.Errorf("err = %v, want 'fatal'", err)
+	}
+}

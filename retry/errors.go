@@ -63,6 +63,9 @@ func IsRetryable(err error) bool {
 }
 
 func shouldAbort(opts *Options, err error) bool {
+	if opts.RetryIf != nil {
+		return !opts.RetryIf(err)
+	}
 	for _, target := range opts.AbortOn {
 		if errors.Is(err, target) {
 			return true
