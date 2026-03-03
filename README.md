@@ -102,6 +102,12 @@ for _, call := range resp.ToolCalls { ... }
 fmt.Printf("Tokens: %d\n", resp.Usage.TotalTokens)
 
 // Structured output — auto-generates JSON Schema from struct
+// Schema constraint tags enrich the JSON Schema for better LLM output:
+type User struct {
+    Name string `json:"name" jsonschema:"description=Full legal name"`
+    Age  int    `json:"age"  jsonschema:"minimum=0,maximum=150"`
+    Role string `json:"role" jsonschema:"enum=admin|user|guest"`
+}
 var recipe Recipe
 err := client.ChatTyped(ctx, messages, &recipe)
 
@@ -166,6 +172,7 @@ client = llm.NewClient(baseURL, apiKey, model,
 )
 ```
 
+- Structured errors: `APIError{StatusCode, Type, Body, Retryable}` — use `errors.As` to branch on error type
 - Retry on 429/5xx with exponential backoff
 - Automatic fallback key cycling
 - SSE streaming via `Stream`/`Next`
@@ -178,6 +185,7 @@ client = llm.NewClient(baseURL, apiKey, model,
 - Token usage reporting in `ChatResponse`
 - Multimodal support via `CompleteMultimodal`
 - JSON extraction from LLM output via `ExtractJSON`
+- Schema constraint tags: `jsonschema:"description=...,minimum=0,enum=a|b|c"` for richer schemas
 
 ### cache
 
@@ -323,10 +331,29 @@ retry.Do(ctx, retry.Options{
 retry.Do(ctx, retry.Options{RetryableOnly: true}, func() (T, error) {
     return result, retry.MarkRetryable(err) // will retry
 })
+
+// Permanent error — stop retrying immediately
+retry.Do(ctx, retry.Options{MaxAttempts: 5}, func() (T, error) {
+    if isFatal(err) {
+        return zero, retry.Permanent(err) // unwrapped and returned
+    }
+    return zero, err
+})
+
+// OnRetry callback — log each failed attempt
+retry.Do(ctx, retry.Options{
+    MaxAttempts: 5,
+    OnRetry: func(attempt int, err error) {
+        log.Printf("attempt %d failed: %v", attempt, err)
+    },
+}, fn)
 ```
 
 - AbortOn: never retry specific errors (e.g. context.DeadlineExceeded)
 - RetryableOnly + MarkRetryable: opt-in retry mode for production safety
+- Permanent(err): signal from fn to stop retrying immediately
+- OnRetry callback: logging/metrics per failed attempt
+- Context error wrapping: `errors.Is(err, context.DeadlineExceeded)` works on timeout
 
 ### metrics
 
