@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -462,5 +463,147 @@ func TestFibonacciBackoff_CappedAtMax(t *testing.T) {
 		if d > 5*time.Second {
 			t.Errorf("delay[%d] = %v, exceeds MaxDelay 5s", i, d)
 		}
+	}
+}
+
+// --- OnRetry tests ---
+
+func TestDo_OnRetry(t *testing.T) {
+	timer := &instantTimer{}
+	var calls []int
+	var errs []string
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  3,
+		InitialDelay: time.Millisecond,
+		Timer:        timer,
+		OnRetry: func(attempt int, err error) {
+			calls = append(calls, attempt)
+			errs = append(errs, err.Error())
+		},
+	}, func() (string, error) {
+		return "", errors.New("fail")
+	})
+	// OnRetry called for attempts 0, 1, 2
+	if len(calls) != 3 {
+		t.Errorf("OnRetry called %d times, want 3", len(calls))
+	}
+}
+
+func TestDo_OnRetry_NotCalledOnSuccess(t *testing.T) {
+	called := false
+	_, _ = retry.Do(context.Background(), retry.Options{
+		OnRetry: func(int, error) { called = true },
+	}, func() (string, error) {
+		return "ok", nil
+	})
+	if called {
+		t.Error("OnRetry should not be called on success")
+	}
+}
+
+func TestDo_OnRetry_Nil(t *testing.T) {
+	// nil OnRetry should not panic
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  2,
+		InitialDelay: time.Millisecond,
+		Timer:        &instantTimer{},
+	}, func() (string, error) {
+		return "", errors.New("fail")
+	})
+}
+
+// --- Permanent error tests ---
+
+func TestDo_Permanent(t *testing.T) {
+	attempts := 0
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts: 5,
+		Timer:       &instantTimer{},
+	}, func() (string, error) {
+		attempts++
+		return "", retry.Permanent(errors.New("fatal"))
+	})
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1", attempts)
+	}
+	if err == nil || err.Error() != "fatal" {
+		t.Errorf("err = %v, want 'fatal'", err)
+	}
+}
+
+func TestPermanent_Nil(t *testing.T) {
+	if retry.Permanent(nil) != nil {
+		t.Error("Permanent(nil) should return nil")
+	}
+}
+
+func TestIsPermanent(t *testing.T) {
+	if retry.IsPermanent(errors.New("normal")) {
+		t.Error("normal error should not be permanent")
+	}
+	if !retry.IsPermanent(retry.Permanent(errors.New("fatal"))) {
+		t.Error("Permanent error should be permanent")
+	}
+}
+
+func TestPermanent_Unwrap(t *testing.T) {
+	inner := errors.New("inner")
+	err := retry.Permanent(inner)
+	// After Do unwraps, the returned error should be the inner error
+	_, retErr := retry.Do(context.Background(), retry.Options{MaxAttempts: 3}, func() (string, error) {
+		return "", err
+	})
+	if !errors.Is(retErr, inner) {
+		t.Errorf("unwrapped error should be inner: got %v", retErr)
+	}
+}
+
+func TestPermanent_NoOnRetry(t *testing.T) {
+	called := false
+	_, _ = retry.Do(context.Background(), retry.Options{
+		MaxAttempts: 5,
+		OnRetry:     func(int, error) { called = true },
+	}, func() (string, error) {
+		return "", retry.Permanent(errors.New("fatal"))
+	})
+	if called {
+		t.Error("OnRetry should not be called for permanent errors")
+	}
+}
+
+// --- Context wrapping tests ---
+
+func TestDo_ContextWrapping_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	_, err := retry.Do(ctx, retry.Options{
+		MaxAttempts:  5,
+		InitialDelay: 100 * time.Millisecond,
+	}, func() (string, error) {
+		calls++
+		if calls == 1 {
+			cancel()
+		}
+		return "", errors.New("fail")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err should wrap context.Canceled, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "after") {
+		t.Errorf("err should contain attempt count, got: %v", err)
+	}
+}
+
+func TestDo_ContextWrapping_NoContextErr(t *testing.T) {
+	_, err := retry.Do(context.Background(), retry.Options{
+		MaxAttempts:  2,
+		InitialDelay: time.Millisecond,
+		Timer:        &instantTimer{},
+	}, func() (string, error) {
+		return "", errors.New("fail")
+	})
+	// No context error — should return raw lastErr
+	if err.Error() != "fail" {
+		t.Errorf("err = %v, want 'fail'", err)
 	}
 }

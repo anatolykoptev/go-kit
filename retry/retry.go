@@ -1,12 +1,9 @@
 // Package retry provides generic retry logic with exponential backoff.
-// Zero external dependencies. Designed to be used by any package that makes
-// fallible I/O calls (LLM client, HTTP APIs, database operations).
 package retry
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -21,7 +18,6 @@ const (
 )
 
 // Timer abstracts time.After for testability.
-// Implement this to control delays in tests.
 type Timer interface {
 	After(d time.Duration) <-chan time.Time
 }
@@ -34,8 +30,7 @@ const (
 	BackoffFibonacci                  // delay follows fibonacci: 1,1,2,3,5,8... × InitialDelay
 )
 
-// Options controls retry behavior.
-// Zero values are replaced by the corresponding Default* constants.
+// Options controls retry behavior. Zero values use Default* constants.
 type Options struct {
 	MaxAttempts    int
 	InitialDelay   time.Duration
@@ -46,6 +41,7 @@ type Options struct {
 	Backoff        Backoff       // backoff strategy (default: exponential)
 	AbortOn        []error       // never retry these errors (checked via errors.Is)
 	RetryableOnly  bool          // if true, only retry errors implementing Retryable
+	OnRetry        func(attempt int, err error) // called after each failed attempt
 }
 
 func (o *Options) applyDefaults() {
@@ -60,73 +56,6 @@ func (o *Options) applyDefaults() {
 	}
 }
 
-// RetryAfterError wraps an error with a retry-after duration hint.
-// Return this from fn to override the computed backoff for the next attempt.
-type RetryAfterError struct {
-	Delay time.Duration
-	Err   error
-}
-
-func (e *RetryAfterError) Error() string { return e.Err.Error() }
-func (e *RetryAfterError) Unwrap() error { return e.Err }
-
-// RetryAfter wraps an error with a retry-after duration.
-// When Do receives this error, it uses d instead of the exponential backoff.
-func RetryAfter(d time.Duration, err error) error {
-	return &RetryAfterError{Delay: d, Err: err}
-}
-
-// HTTPError is returned when an HTTP response has a retryable status code.
-type HTTPError struct {
-	StatusCode int
-}
-
-func (e *HTTPError) Error() string {
-	return fmt.Sprintf("retryable HTTP status %d", e.StatusCode)
-}
-
-// Retryable is an interface that errors can implement to signal
-// whether they should be retried. Used with Options.RetryableOnly.
-type Retryable interface {
-	Retryable() bool
-}
-
-type retryableError struct {
-	err error
-}
-
-func (e *retryableError) Error() string   { return e.err.Error() }
-func (e *retryableError) Unwrap() error   { return e.err }
-func (e *retryableError) Retryable() bool { return true }
-
-// MarkRetryable wraps an error to signal it should be retried.
-// Use with Options.RetryableOnly = true.
-func MarkRetryable(err error) error {
-	return &retryableError{err: err}
-}
-
-// IsRetryable reports whether err should be retried.
-// Returns true if err implements Retryable and Retryable() returns true.
-func IsRetryable(err error) bool {
-	var r Retryable
-	if errors.As(err, &r) {
-		return r.Retryable()
-	}
-	return false
-}
-
-func shouldAbort(opts *Options, err error) bool {
-	for _, target := range opts.AbortOn {
-		if errors.Is(err, target) {
-			return true
-		}
-	}
-	if opts.RetryableOnly && !IsRetryable(err) {
-		return true
-	}
-	return false
-}
-
 // applyJitter adds ±25% random variation to a delay.
 func applyJitter(d time.Duration) time.Duration {
 	quarter := int64(d) / 4 //nolint:mnd // ±25% jitter
@@ -134,7 +63,6 @@ func applyJitter(d time.Duration) time.Duration {
 }
 
 // waitWithContext waits for the given delay, respecting context cancellation.
-// Uses opts.Timer if set (for tests), otherwise time.After.
 func waitWithContext(ctx context.Context, delay time.Duration, timer Timer) error {
 	afterCh := time.After(delay)
 	if timer != nil {
@@ -148,8 +76,7 @@ func waitWithContext(ctx context.Context, delay time.Duration, timer Timer) erro
 	}
 }
 
-// retryDelay computes the actual delay for a retry attempt, considering
-// RetryAfter hints and jitter.
+// retryDelay computes the actual delay for a retry attempt.
 func retryDelay(baseDelay time.Duration, lastErr error, jitter bool) time.Duration {
 	delay := baseDelay
 	var ra *RetryAfterError
@@ -176,6 +103,7 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 	delay := opts.InitialDelay
 	prevDelay := time.Duration(0) // for fibonacci tracking
 	var lastErr error
+	attempts := 0
 
 	for attempt := range opts.MaxAttempts {
 		if opts.MaxElapsedTime > 0 && attempt > 0 && time.Since(start) >= opts.MaxElapsedTime {
@@ -186,7 +114,7 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 			actualDelay := retryDelay(delay, lastErr, opts.Jitter)
 			if err := waitWithContext(ctx, actualDelay, opts.Timer); err != nil {
 				var zero T
-				return zero, err
+				return zero, wrapContextErr(ctx, attempts, lastErr)
 			}
 			switch opts.Backoff {
 			case BackoffFibonacci:
@@ -197,10 +125,23 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 		}
 
 		result, err := fn()
+		attempts++
 		if err == nil {
 			return result, nil
 		}
+
+		// Permanent error: stop immediately, return unwrapped error.
+		var pe *permanentError
+		if errors.As(err, &pe) {
+			var zero T
+			return zero, pe.err
+		}
+
 		lastErr = err
+
+		if opts.OnRetry != nil {
+			opts.OnRetry(attempt, lastErr)
+		}
 
 		if shouldAbort(&opts, lastErr) {
 			break
@@ -208,7 +149,7 @@ func Do[T any](ctx context.Context, opts Options, fn func() (T, error)) (T, erro
 	}
 
 	var zero T
-	return zero, lastErr
+	return zero, wrapContextErr(ctx, attempts, lastErr)
 }
 
 // isRetryableStatus reports whether the HTTP status code warrants a retry.
@@ -226,7 +167,6 @@ func isRetryableStatus(code int) bool {
 }
 
 // HTTP retries an HTTP request function, treating 429 and 5xx as retryable.
-// Returns the successful response, or the last error after exhausting attempts.
 // The caller is responsible for closing the response body on success.
 func HTTP(ctx context.Context, opts Options, fn func() (*http.Response, error)) (*http.Response, error) {
 	return Do(ctx, opts, func() (*http.Response, error) {
