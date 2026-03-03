@@ -18,155 +18,174 @@ See also: [architecture.md](architecture.md) | [design.md](design.md)
 | 7 | mcpserver | ~560 LOC | 7 (separate repo: go-mcpserver) |
 | **Total** | | **~3,310 LOC** | **8 repos** |
 
-## Competitive Improvements (all complete)
-
-Every package upgraded to be competitive with best-in-class Go libraries.
-See [design.md](design.md) for full competitive analysis and rationale.
-
-| Package | Key additions |
-|---------|--------------|
-| env | Error variants (`*E`, `Must*`), Source interface, File, Expand, Base64/Hex |
-| llm | Streaming, tool calling, structured output, Extract[T], endpoint fallback, middleware |
-| cache | S3-FIFO eviction, sharded map, singleflight, TTL jitter, L2 Redis interface, per-key TTL |
-| retry | RetryAfter, MaxElapsedTime, Jitter, Timer, AbortOn, RetryableOnly |
-| metrics | Gauge, Timer, Labels, Sink, Rate/EWMA, Histogram, TTL, SnapshotAndReset |
-| strutil | TruncateMiddle, case conversions, WordWrap, Scrub, ContainsAll |
-
-## Migration Status (v0.6.0)
+## Migration Status
 
 | Repo | Imported | Remaining |
 |------|----------|-----------|
-| go-search | cache, env, strutil | llm, metrics, retry |
-| go-job | cache, env, llm, metrics, strutil | retry |
-| go-wp | cache, env, llm, metrics, strutil | retry |
-| go-code | cache, env, llm | metrics, retry, strutil |
-| go-hully | cache, env, metrics, strutil | llm, retry |
-| go-startup | cache, env, llm, metrics, strutil | retry |
-| go-content | env, metrics | llm, cache, retry |
-| gigiena-teksta | env, metrics | llm, cache, retry |
+| go-search | cache, env, strutil | — (llm uses go-engine) |
+| go-job | cache, env, llm, metrics, strutil | — |
+| go-wp | cache, env, llm, metrics, strutil | — |
+| go-code | cache, env, llm | — |
+| go-hully | cache, env, llm, metrics, strutil | — |
+| go-startup | cache, env, llm, metrics, retry, strutil | — |
+| go-content | env, llm, metrics | — |
+| gigiena-teksta | env, llm, metrics | — |
 
 ---
 
-## Wave 2: Active Items (March 2026)
+## Wave 2 (complete)
 
-| # | Feature | Package | Effort | Impact | Status |
-|---|---------|---------|--------|--------|--------|
-| 1 | Per-key TTL | cache | Low | High | **DONE** |
-| 2 | OnEvict callback | cache | Low | Medium | **DONE** |
-| 3 | ratelimit package | ratelimit | Medium | High | **DONE** |
-| 4 | Union types in Extract | llm | Medium | Medium | **DONE** |
-| 5 | Streaming structured output | llm | High | Medium | **P2** |
-| 6 | Fibonacci backoff | retry | Low | Low | **P3** |
-| 7 | Doorkeeper bloom filter | cache | Medium | Low | **P3** |
+| # | Feature | Package | Status |
+|---|---------|---------|--------|
+| 1 | Per-key TTL | cache | **DONE** |
+| 2 | OnEvict callback | cache | **DONE** |
+| 3 | ratelimit package | ratelimit | **DONE** |
+| 4 | Union types (ExtractOneOf) | llm | **DONE** |
+| 5 | StreamExtract + partialJSON | llm | **DONE** |
+| 6 | Fibonacci backoff | retry | **DONE** |
+| 7 | Doorkeeper bloom filter | cache | **DEFERRED** — ghost queue sufficient |
 
-### W2-2. cache: OnEvict Callback (P1)
+---
 
-**Gap**: no way to react when entries are evicted (metrics, dependent invalidation).
+## Wave 3: Competitive Edge (planned)
 
-Competitors: golang-fifo `SetOnEvicted(key, value, reason)`,
-theine-go `RemovalListener`, otter `WithDeletionListener`.
+Based on analysis of 19 competing libraries across Go and Python ecosystems.
+See [competitive-analysis.md](competitive-analysis.md) for full breakdown.
+
+### Tier 1 — High Impact
+
+| # | Feature | Package | Source | Effort | Rationale |
+|---|---------|---------|--------|--------|-----------|
+| W3-1 | Schema constraint tags | llm | instructor-go, bellman | M | LLM sees `minimum`, `enum`, `description` in schema → dramatically better structured output quality |
+| W3-2 | Hedge policy | new: `hedge` | failsafe-go | M | Start 2nd LLM request after timeout, take first response. Cuts p99 latency 2-3x |
+| W3-3 | Structured LLM errors | llm | go-openai | S | `APIError{StatusCode, Type, Body}` instead of `fmt.Errorf`. Callers can `errors.As` and branch |
+| W3-4 | Tag-based cache invalidation | cache | eko/gocache | M | `Set(key, val, WithTags("user:123"))` → `InvalidateByTag("user:123")`. Removes manual key tracking |
+
+### Tier 2 — Quality of Life
+
+| # | Feature | Package | Source | Effort | Rationale |
+|---|---------|---------|--------|--------|-----------|
+| W3-5 | OnRetry callback | retry | avast/retry-go | S | `OnRetry func(attempt int, err error)` for logging/metrics per attempt |
+| W3-6 | RetryIf predicate | retry | avast/retry-go | S | `RetryIf func(error) bool` — more flexible than AbortOn + RetryableOnly combined |
+| W3-7 | Concurrency limiter (bulkhead) | ratelimit | failsafe-go | S | `NewConcurrencyLimiter(5)` — "max N in-flight", complements token bucket |
+| W3-8 | Typed cache Get/Set | cache | eko/gocache | S | `GetJSON[T](key)` / `SetJSON(key, val)` — auto-marshal, removes boilerplate |
+| W3-9 | Permanent(err) from fn | retry | cenkalti/backoff | S | fn returns `retry.Permanent(err)` → never retry. Better than pre-declaring AbortOn |
+| W3-10 | Context error wrapping | retry | avast/retry-go | S | `fmt.Errorf("after %d attempts: %w: %v", n, ctx.Err(), lastErr)` for diagnostics |
+
+### Tier 3 — Future / Experimental
+
+| # | Feature | Package | Source | Notes |
+|---|---------|---------|--------|-------|
+| W3-11 | Tool call mode for Extract | llm | instructor-go | `ModeToolCall` vs `ModeJSON` — some models more reliable with tool calling |
+| W3-12 | Classify / Generate helpers | llm | marvin (Python) | `Classify(text, labels)`, `Generate(n, target)` — semantic taxonomy |
+| W3-13 | Composable policy chain | new: `resilience` | failsafe-go | `Run(fn, retry, circuitBreaker, timeout)` — generic policy composition |
+| W3-14 | Adaptive rate limiter | ratelimit | failsafe-go | Auto-adjusts limits based on observed latency/error rate |
+| W3-15 | Prometheus/OTEL metrics export | metrics | eko/gocache | Export Stats as Prometheus counters, not just text |
+
+---
+
+### W3-1. llm: Schema Constraint Tags
+
+**Gap**: `SchemaOf()` reads only `json` tags. LLMs produce better output when the schema
+includes `description`, `minimum`, `maximum`, `enum`, `pattern`.
+
+**Competitors**: instructor-go uses `jsonschema` package tags. bellman uses
+`json-description`, `json-enum`, `json-minimum`. Both generate richer schemas.
 
 ```go
-type EvictReason int
-const (
-    EvictExpired  EvictReason = iota
-    EvictCapacity
-    EvictExplicit
-)
+type User struct {
+    Name string  `json:"name" jsonschema:"description=Full legal name"`
+    Age  int     `json:"age"  jsonschema:"minimum=0,maximum=150"`
+    Role string  `json:"role" jsonschema:"enum=admin|user|guest"`
+}
+// SchemaOf(&User{}) now emits:
+// {"properties":{"name":{"type":"string","description":"Full legal name"}, ...}}
+```
 
-type Config struct {
-    // ...existing...
-    OnEvict func(key string, data []byte, reason EvictReason)
+Effort: extend `typeSchema()` and `structSchema()` in `schema.go` to parse
+`jsonschema` struct tag. ~80 LOC.
+
+### W3-2. Hedge Policy
+
+**Gap**: LLM APIs have high p99 variance (5s median, 30s+ tail).
+No way to mitigate without manual goroutine management.
+
+**Competitor**: failsafe-go `hedge.With(time.Second).Get(fn)`.
+
+```go
+package hedge
+
+// Do starts fn. If it hasn't returned after delay, starts fn again
+// in parallel. Returns the first successful result, cancels the other.
+func Do[T any](ctx context.Context, delay time.Duration, fn func(context.Context) (T, error)) (T, error)
+```
+
+Effort: ~80 LOC. Uses `context.WithCancel` + goroutine + select.
+
+### W3-3. llm: Structured Error Types
+
+**Gap**: LLM errors are `fmt.Errorf("llm: HTTP %d: %s")`. Callers must
+parse strings to detect rate limits vs auth failures vs server errors.
+
+```go
+type APIError struct {
+    StatusCode int
+    Body       string
+    Type       string // "rate_limit_error", "invalid_api_key", etc.
+    Retryable  bool
+}
+func (e *APIError) Error() string { ... }
+
+// Usage:
+var apiErr *llm.APIError
+if errors.As(err, &apiErr) && apiErr.StatusCode == 401 {
+    // rotate API key
 }
 ```
 
-Effort: ~50 LOC
+Effort: ~40 LOC. Replace `fmt.Errorf` in `transport.go` with `&APIError{}`.
 
-### W2-3. ratelimit: New Package (P1)
+### W3-4. cache: Tag-Based Invalidation
 
-**Gap**: all go-* services hit rate-limited APIs (LinkedIn, Twitter, LLM).
-Each service uses ad-hoc sleeps or retry. No shared rate limiter.
+**Gap**: deletion is key-by-key. When a user profile changes, you must
+manually track and delete all related cache keys.
 
-Design: token bucket (`time.Ticker` based), zero external deps.
-
-```go
-package ratelimit
-
-func New(rate float64, burst int) *Limiter
-func (l *Limiter) Wait(ctx context.Context) error
-func (l *Limiter) Allow() bool
-
-// Per-key rate limiting (per-domain, per-API-key)
-func NewKeyLimiter(rate float64, burst int) *KeyLimiter
-func (kl *KeyLimiter) Wait(ctx context.Context, key string) error
-```
-
-Note: consider wrapping `golang.org/x/time/rate` if acceptable as dep.
-Otherwise ~150 LOC from scratch.
-
-### W2-4. llm: Union Types in Extract (P2)
-
-**Gap**: `Extract[T]()` returns one fixed type. Agent patterns need LLM to choose
-between multiple response types.
-
-Competitor: instructor-go `CreateChatCompletionUnion()`.
+**Competitor**: eko/gocache `store.WithTags("user", "profile")`.
 
 ```go
-result, err := llm.ExtractOneOf(ctx, messages,
-    llm.UnionType[SearchAction]("search"),
-    llm.UnionType[AnswerAction]("answer"),
-)
-switch v := result.(type) {
-case *SearchAction: ...
-case *AnswerAction: ...
-}
+c.SetWithTags(ctx, "user:123:profile", data, []string{"user:123"})
+c.SetWithTags(ctx, "user:123:posts", data, []string{"user:123"})
+
+// One call invalidates both:
+c.InvalidateByTag(ctx, "user:123")
 ```
 
-### W2-5. llm: Streaming Structured Output (P2)
-
-**Gap**: `Stream()` returns raw text. `Extract[T]()` waits for full response.
-No progressive parsing of partial JSON during streaming.
-
-Competitor: instructor-go `CreateChatCompletionStream()` + `stream.Scan(&partial)`.
-
-```go
-stream, err := client.StreamExtract(ctx, messages, &target)
-for stream.Next() {
-    partial := stream.Partial()
-}
-final := stream.Value()
-```
-
-Effort: ~300 LOC (partial JSON parser)
-
-### W2-6. retry: Fibonacci Backoff (P3)
-
-Gentler curve than exponential (1,1,2,3,5,8 vs 1,2,4,8,16,32).
-Reference: sethvargo/go-retry `NewFibonacci()`. Effort: ~20 LOC.
-
-### W2-7. cache: Doorkeeper Bloom Filter (P3)
-
-Ghost queue protects against one-hit wonders but uses memory (map of keys).
-Bloom filter is more space-efficient for high-cardinality workloads.
-
-**Deferred** — ghost queue sufficient for current workloads (~1000 items).
-Revisit if L1MaxItems grows to 100K+.
+Effort: ~100 LOC. Add `tags map[string]map[string]bool` to cache, update
+Set/Delete to maintain the index.
 
 ---
 
 ## Timeline
 
 ```
-March 2026 (immediate):
-  W2-1  Per-key TTL              — DONE
-  W2-2  OnEvict callback         — DONE
-  W2-3  ratelimit package        — DONE
+March 2026 (done):
+  W2-1..W2-6  All Wave 2 items complete
+  Migration   go-content, gigiena-teksta, go-hully, go-startup migrated
 
 April 2026:
-  W2-4  Union types in Extract   — DONE
+  W3-1  Schema constraint tags     — 1 day
+  W3-3  Structured LLM errors      — 0.5 day
+  W3-5  OnRetry callback           — 0.5 day
+  W3-9  Permanent(err) from fn     — 0.5 day
+  W3-10 Context error wrapping     — 0.5 day
+
+May 2026:
+  W3-2  Hedge policy               — 1-2 days
+  W3-6  RetryIf predicate          — 0.5 day
+  W3-7  Concurrency limiter        — 1 day
 
 Later / as needed:
-  W2-5  Streaming structured     — 2-3 days
-  W2-6  Fibonacci backoff        — 0.5 day
-  W2-7  Doorkeeper bloom filter  — defer
+  W3-4  Tag-based invalidation     — 1-2 days
+  W3-8  Typed cache Get/Set        — 0.5 day
+  W3-11..W3-15  Tier 3 items
 ```

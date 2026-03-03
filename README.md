@@ -426,10 +426,10 @@ ok = strutil.ContainsAny("hello world", []string{"world"}) // true
 | [go-job](https://github.com/anatolykoptev/go-job) | cache, env, llm, metrics, strutil |
 | [go-wp](https://github.com/anatolykoptev/go-wp) | cache, env, llm, metrics, strutil |
 | [go-code](https://github.com/anatolykoptev/go-code) | cache, env, llm |
-| [go-hully](https://github.com/anatolykoptev/go-hully) | cache, env, metrics, strutil |
-| [go-startup](https://github.com/anatolykoptev/go-startup) | cache, env, llm, metrics, strutil |
-| [go-content](https://github.com/anatolykoptev/go-content) | env, metrics |
-| [gigiena-teksta](https://github.com/anatolykoptev/gigiena-teksta) | env, metrics |
+| [go-hully](https://github.com/anatolykoptev/go-hully) | cache, env, llm, metrics, strutil |
+| [go-startup](https://github.com/anatolykoptev/go-startup) | cache, env, llm, metrics, retry, strutil |
+| [go-content](https://github.com/anatolykoptev/go-content) | env, llm, metrics |
+| [gigiena-teksta](https://github.com/anatolykoptev/gigiena-teksta) | env, llm, metrics |
 
 ## License
 
