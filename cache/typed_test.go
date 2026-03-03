@@ -131,6 +131,36 @@ func TestGetOrLoadJSON_LoaderError(t *testing.T) {
 	}
 }
 
+func TestSetJSONWithTTL(t *testing.T) {
+	c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute})
+	defer c.Close()
+	ctx := context.Background()
+
+	want := testUser{Name: "TTL", Age: 99}
+	if err := cache.SetJSONWithTTL(c, ctx, "ttl:1", want, 50*time.Millisecond); err != nil {
+		t.Fatalf("SetJSONWithTTL: %v", err)
+	}
+
+	// Should be retrievable immediately.
+	got, ok, err := cache.GetJSON[testUser](c, ctx, "ttl:1")
+	if err != nil {
+		t.Fatalf("GetJSON: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected cache hit")
+	}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+
+	// Should expire after TTL.
+	time.Sleep(60 * time.Millisecond)
+	_, ok, _ = cache.GetJSON[testUser](c, ctx, "ttl:1")
+	if ok {
+		t.Error("expected cache miss after TTL expiry")
+	}
+}
+
 func TestSetJSON_Slice(t *testing.T) {
 	c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute})
 	defer c.Close()
