@@ -252,6 +252,30 @@ data, err := c.GetOrLoadWithTTL(ctx, "company:456", 24*time.Hour,
 - Evictions counter + HitRatio in Stats
 - Background cleanup, TTL expiry
 - OnEvict callback for eviction notifications (expired, capacity, explicit)
+- Tag-based invalidation: group entries by tags, invalidate in bulk
+- Typed JSON helpers: generic `SetJSON`/`GetJSON`/`GetOrLoadJSON`
+
+**Tag-based invalidation** — group and invalidate related entries:
+
+```go
+c.SetWithTags(ctx, "user:1:profile", data, []string{"user:1", "profile"})
+c.SetWithTags(ctx, "user:1:settings", data, []string{"user:1"})
+
+n := c.InvalidateByTag(ctx, "user:1") // removes both entries, returns 2
+tags := c.Tags("user:1:profile")      // []string{"user:1", "profile"}
+```
+
+**Typed JSON cache** — generic wrappers over `[]byte` API:
+
+```go
+cache.SetJSON(c, ctx, "user:1", User{Name: "Alice", Age: 30})
+
+user, ok, err := cache.GetJSON[User](c, ctx, "user:1")
+
+user, err := cache.GetOrLoadJSON[User](c, ctx, "user:1", func(ctx context.Context) (User, error) {
+    return fetchUser(ctx, 1)
+})
+```
 
 **OnEvict callback** — react to cache evictions:
 
