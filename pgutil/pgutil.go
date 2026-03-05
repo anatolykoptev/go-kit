@@ -16,12 +16,13 @@ import (
 
 // Default retry parameters for postgres startup connections.
 const (
-	DefaultMaxAttempts = 10
-	DefaultInitDelay   = time.Second
-	DefaultMaxDelay    = 30 * time.Second
+	DefaultMaxAttempts      = 10
+	DefaultInitDelay        = time.Second
+	DefaultMaxDelay         = 30 * time.Second
+	DefaultHealthInterval   = 15 * time.Second
 )
 
-// Options configures the Connect behavior.
+// Options configures the Connect and Lazy behavior.
 type Options struct {
 	// MaxAttempts overrides the default retry count (10).
 	MaxAttempts int
@@ -37,6 +38,9 @@ type Options struct {
 	Logger *slog.Logger
 	// Name is used in log messages (e.g. "postgres", "billing-db").
 	Name string
+	// HealthInterval sets the health check period for Lazy (default 15s).
+	// Only used by Lazy, ignored by Connect.
+	HealthInterval time.Duration
 }
 
 func (o *Options) applyDefaults() {
@@ -54,6 +58,9 @@ func (o *Options) applyDefaults() {
 	}
 	if o.Name == "" {
 		o.Name = "postgres"
+	}
+	if o.HealthInterval <= 0 {
+		o.HealthInterval = DefaultHealthInterval
 	}
 }
 
