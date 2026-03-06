@@ -18,15 +18,21 @@ func CheckHTTPStatus(body []byte, status int) string {
 	return fmt.Sprintf("HTTP %d: %s", status, TruncateStr(string(body), truncLen))
 }
 
-// jsonMessage extracts "message" from a JSON object body (e.g. WordPress REST errors).
+// jsonMessage extracts "code" (or "message") from a JSON error body.
+// Prefers "code" because it is always English (e.g. "rest_post_invalid_id"),
+// while "message" follows the server locale and may contain non-ASCII escapes.
 func jsonMessage(body []byte) string {
 	var obj struct {
+		Code    string `json:"code"`
 		Message string `json:"message"`
 	}
-	if json.Unmarshal(body, &obj) == nil && obj.Message != "" {
-		return obj.Message
+	if json.Unmarshal(body, &obj) != nil {
+		return ""
 	}
-	return ""
+	if obj.Code != "" {
+		return obj.Code
+	}
+	return obj.Message
 }
 
 // SafeDate truncates an ISO date string to YYYY-MM-DD, or returns "unknown" for empty.
