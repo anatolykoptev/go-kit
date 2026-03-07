@@ -189,10 +189,19 @@ func TestExtractJSON(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"plain json", `{"key": "value"}`, `{"key": "value"}`},
-		{"markdown fence", fence + "json\n{\"a\": 1}\n" + fence, `{"a": 1}`},
-		{"text around json", `some text {"x": 2} more text`, `{"x": 2}`},
+		{"plain object", `{"key": "value"}`, `{"key": "value"}`},
+		{"markdown fence object", fence + "json\n{\"a\": 1}\n" + fence, `{"a": 1}`},
+		{"text around object", `some text {"x": 2} more text`, `{"x": 2}`},
 		{"no json", "just text", "just text"},
+		// Array support
+		{"plain array", `[{"a":1},{"b":2}]`, `[{"a":1},{"b":2}]`},
+		{"markdown fence array", fence + "json\n[{\"a\": 1}]\n" + fence, `[{"a": 1}]`},
+		{"text around array", `Here is the result: [1, 2, 3] done`, `[1, 2, 3]`},
+		{"plain fence array", fence + "\n[1,2,3]\n" + fence, `[1,2,3]`},
+		// Object before array — object wins
+		{"object before array", `{"items": [1,2]}`, `{"items": [1,2]}`},
+		// Array before object
+		{"array before object", `results: [{"a":1}] then {"b":2}`, `[{"a":1}] then {"b":2}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
