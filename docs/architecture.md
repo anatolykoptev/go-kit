@@ -48,7 +48,7 @@ go-kit (stdlib + redis), go-mcpserver (mcp-go)
   ↑
 go-stealth, go-imagefy, go-enriche, go-engine (domain libs)
   ↑
-go-search, go-code, go-wp, go-job, go-startup, go-hully, go-content, gigiena-teksta
+go-search, go-code, go-wp, go-job, go-startup, go-hully, go-nerv, gigiena-teksta
 ```
 
 ## Migration Strategy
