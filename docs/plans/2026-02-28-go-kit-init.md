@@ -77,7 +77,7 @@ git commit -m "init: go-kit module with docs and tooling"
 
 ### Task 2: env — Environment Variable Parsing
 
-**Context:** Every go-* repo (8 total) duplicates env/envInt/envList helpers. go-wp has the cleanest version (`internal/envutil/`). go-code has the best `envList` (trims whitespace, drops empty). go-hully adds `Int64List`. go-content adds `Duration` and `Float`.
+**Context:** Every go-* repo (8 total) duplicates env/envInt/envList helpers. go-wp has the cleanest version (`internal/envutil/`). go-code has the best `envList` (trims whitespace, drops empty). go-hully adds `Int64List`. go-nerv adds `Duration` and `Float`.
 
 **Files:**
 - Create: `env/env.go`
@@ -396,7 +396,7 @@ git commit -m "feat(env): add environment variable parsing package
 
 Replaces duplicated env/envInt/envList helpers across 8 go-* repos.
 Best-of-breed: go-wp envutil API, go-code List (trim+drop empty),
-go-hully Int64List, go-content Duration/Float."
+go-hully Int64List, go-nerv Duration/Float."
 ```
 
 ---
