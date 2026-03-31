@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -448,4 +449,95 @@ func TestCompactForTelegram(t *testing.T) {
 			t.Errorf("truncated marker missing")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Truncate
+// ---------------------------------------------------------------------------
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name   string
+		s      string
+		maxLen int
+		want   string
+	}{
+		{"short", "hello", 10, "hello"},
+		{"exact", "hello", 5, "hello"},
+		{"truncated", "hello world", 8, "hello..."},
+		{"cyrillic", "Привет мир", 7, "Прив..."},
+		{"emoji clamp", "🔥🎉🚀💎", 3, "🔥🎉🚀💎"}, // maxLen<4 → clamped to 4, len=4 fits
+		{"emoji truncated", "🔥🎉🚀💎🌟", 4, "🔥..."},
+		{"empty", "", 5, ""},
+		{"tiny maxLen", "hello", 1, "h..."},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Truncate(tc.s, tc.maxLen)
+			if got != tc.want {
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tc.s, tc.maxLen, got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ParseChatID
+// ---------------------------------------------------------------------------
+
+func TestParseChatID(t *testing.T) {
+	tests := []struct {
+		name    string
+		s       string
+		want    int64
+		wantErr bool
+	}{
+		{"positive", "12345", 12345, false},
+		{"negative", "-100123", -100123, false},
+		{"zero", "0", 0, false},
+		{"invalid", "abc", 0, true},
+		{"empty", "", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseChatID(tc.s)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ParseChatID(%q) error = %v, wantErr %v", tc.s, err, tc.wantErr)
+				return
+			}
+			if got != tc.want {
+				t.Errorf("ParseChatID(%q) = %d, want %d", tc.s, got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IsTransientError
+// ---------------------------------------------------------------------------
+
+func TestIsTransientError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"429", errors.New("429 Too Many Requests"), true},
+		{"502", errors.New("502 Bad Gateway"), true},
+		{"timeout", errors.New("context deadline exceeded (timeout)"), true},
+		{"eof", errors.New("unexpected EOF"), true},
+		{"flood", errors.New("FLOOD_WAIT_30"), true},
+		{"permanent", errors.New("chat not found"), false},
+		{"auth", errors.New("Unauthorized"), false},
+		{"bad request", errors.New("Bad Request: message is too long"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsTransientError(tc.err)
+			if got != tc.want {
+				t.Errorf("IsTransientError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
 }

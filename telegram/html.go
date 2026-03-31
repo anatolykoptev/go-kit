@@ -3,6 +3,7 @@
 package telegram
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -21,6 +22,12 @@ const (
 	// truncateSuffixReserve is the number of runes reserved for the
 	// "... _(truncated)_" suffix when hard-truncating.
 	truncateSuffixReserve = 30
+
+	// truncateMinLen is the minimum maxLen for Truncate (room for 1 rune + "...").
+	truncateMinLen = 4
+
+	// truncateSuffixLen is the rune length of the "..." suffix.
+	truncateSuffixLen = 3
 )
 
 // trackedTags is the set of Telegram-supported formatting tags.
@@ -374,6 +381,55 @@ func popMatchingTag(stack []string, closeTag string) []string {
 		}
 	}
 	return stack
+}
+
+// Truncate shortens s to maxLen runes, appending "..." if truncated.
+func Truncate(s string, maxLen int) string {
+	if maxLen < truncateMinLen {
+		maxLen = truncateMinLen
+	}
+	if utf8.RuneCountInString(s) <= maxLen {
+		return s
+	}
+	off := runeOffset(s, maxLen-truncateSuffixLen)
+	return s[:off] + "..."
+}
+
+// ParseChatID parses a string chat ID to int64.
+func ParseChatID(s string) (int64, error) {
+	var id int64
+	_, err := fmt.Sscanf(s, "%d", &id)
+	if err != nil {
+		return 0, fmt.Errorf("invalid chat ID %q: %w", s, err)
+	}
+	return id, nil
+}
+
+// IsTransientError returns true if the error looks like a transient
+// Telegram API error that should be retried (429, 502, timeout, etc.).
+func IsTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, pattern := range transientPatterns {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+var transientPatterns = []string{
+	"429",
+	"Too Many Requests",
+	"502",
+	"Bad Gateway",
+	"timeout",
+	"Timeout",
+	"connection reset",
+	"EOF",
+	"FLOOD_WAIT",
 }
 
 // unclosedTags returns opening tags (e.g. "<b>", "<code>") that remain
