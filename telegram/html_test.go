@@ -71,6 +71,11 @@ func TestRepairHTMLNesting(t *testing.T) {
 			in:   "text<b",
 			want: "text<b",
 		},
+		{
+			name: "interleaved anchor preserves href on reopen",
+			in:   `<a href="https://x.com"><b>text</a></b>`,
+			want: `<a href="https://x.com"><b>text</b></a><b></b>`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,6 +84,17 @@ func TestRepairHTMLNesting(t *testing.T) {
 				t.Errorf("RepairHTMLNesting(%q)\n  got:  %q\n  want: %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRepairHTMLNesting_AnchorPreservesHref(t *testing.T) {
+	// <a href="url"><b>text</a></b> — interleaved. When </a> closes,
+	// <b> should be closed and reopened, and <a> should be properly closed.
+	// After </b>, the reopened <b> should close normally.
+	input := `<a href="https://x.com"><b>text</a></b>`
+	got := RepairHTMLNesting(input)
+	if !strings.Contains(got, `href="https://x.com"`) {
+		t.Errorf("href lost in nesting repair: %q", got)
 	}
 }
 
@@ -145,6 +161,31 @@ func TestSplitMessage(t *testing.T) {
 			t.Fatalf("expected at least 2 chunks for long no-newline content, got %d", len(chunks))
 		}
 	})
+}
+
+func TestSplitMessage_AnchorPreservesHref(t *testing.T) {
+	// Opening tag is 30 runes, 10 x's + newline + 10 y's + </a>.
+	// maxLen=45 so the split happens at the newline (rune 41), not inside the tag.
+	msg := `<a href="https://example.com">` + strings.Repeat("x", 10) + "\n" + strings.Repeat("y", 10) + "</a>"
+	chunks := SplitMessage(msg, 45)
+	if len(chunks) < 2 {
+		t.Fatalf("expected >=2 chunks, got %d", len(chunks))
+	}
+	if !strings.Contains(chunks[1], `href="https://example.com"`) {
+		t.Errorf("second chunk lost href: %q", chunks[1])
+	}
+}
+
+func TestSplitMessage_ChunkDoesNotExceedMaxLen(t *testing.T) {
+	// 3 nested tags = significant overhead when reopened/closed across chunks.
+	msg := "<b><i><s>" + strings.Repeat("x", 20) + "\n" + strings.Repeat("y", 20) + "</s></i></b>"
+	chunks := SplitMessage(msg, 30)
+	for i, ch := range chunks {
+		rc := utf8.RuneCountInString(ch)
+		if rc > 30 {
+			t.Errorf("chunk %d exceeds maxLen 30: %d runes: %q", i, rc, ch)
+		}
+	}
 }
 
 func TestSplitMessage_CyrillicRuneSafe(t *testing.T) {

@@ -106,8 +106,9 @@ func CompactForTelegram(text string, maxChars int) string {
 
 // tagPos records an open HTML tag and its position in the output buffer.
 type tagPos struct {
-	tag   string
-	start int
+	tag     string // tag name: "b", "i", "a", etc.
+	openTag string // full opening tag: `<a href="...">`, `<b>`, etc.
+	start   int
 }
 
 // RepairHTMLNesting fixes malformed HTML tag nesting from regex-based conversion.
@@ -174,9 +175,8 @@ func handleCloseTag(tag string, stack []tagPos, result *strings.Builder) []tagPo
 
 	reopened := make([]tagPos, 0, len(stack)-matchIdx-1)
 	for k := matchIdx + 1; k < len(stack); k++ {
-		reopenTag := "<" + stack[k].tag + ">"
-		result.WriteString(reopenTag)
-		reopened = append(reopened, tagPos{tag: stack[k].tag, start: result.Len()})
+		result.WriteString(stack[k].openTag)
+		reopened = append(reopened, tagPos{tag: stack[k].tag, openTag: stack[k].openTag, start: result.Len()})
 	}
 	return append(stack[:matchIdx], reopened...)
 }
@@ -189,7 +189,7 @@ func handleOpenTag(tag string, stack []tagPos, result *strings.Builder) []tagPos
 	parts := strings.Fields(tagContent)
 	result.WriteString(tag)
 	if len(parts) > 0 && trackedTags[parts[0]] {
-		stack = append(stack, tagPos{tag: parts[0], start: result.Len()})
+		stack = append(stack, tagPos{tag: parts[0], openTag: tag, start: result.Len()})
 	}
 	return stack
 }
@@ -254,9 +254,31 @@ func SplitMessage(text string, maxLen int) []string {
 			chunk += closers.String()
 		}
 
+		// Safety trim: tag repair may push chunk past maxLen.
+		if utf8.RuneCountInString(chunk) > maxLen {
+			chunk = trimChunkToLimit(chunk, maxLen)
+		}
+
 		result = append(result, chunk)
 	}
 	return result
+}
+
+// trimChunkToLimit trims an HTML chunk to fit within maxLen runes.
+// Cuts content at a rune boundary and repairs HTML nesting (adds closers).
+func trimChunkToLimit(chunk string, maxLen int) string {
+	if utf8.RuneCountInString(chunk) <= maxLen {
+		return chunk
+	}
+	reserve := 20
+	if maxLen < reserve+10 {
+		reserve = maxLen / 3
+	}
+	cutOff := runeOffset(chunk, maxLen-reserve)
+	if cutOff > len(chunk) {
+		cutOff = len(chunk)
+	}
+	return RepairHTMLNesting(chunk[:cutOff])
 }
 
 // parseTagName extracts the tag name from an opening tag string.
