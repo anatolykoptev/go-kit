@@ -221,3 +221,39 @@ func TestCloseUnclosedMarkdown_UnclosedBacktick(t *testing.T) {
 		t.Errorf("unclosed backtick: got %q, want %q", got, want)
 	}
 }
+
+func TestMarkdownToHTML_URLWithUnderscores(t *testing.T) {
+	got := MarkdownToHTML("[link](https://example.com/path_with_underscores)")
+	if strings.Contains(got, "<i>") {
+		t.Errorf("URL underscores became italic: %q", got)
+	}
+	if !strings.Contains(got, "path_with_underscores") {
+		t.Errorf("URL content lost: %q", got)
+	}
+	if !strings.Contains(got, `href="https://example.com/path_with_underscores"`) {
+		t.Errorf("href mangled: %q", got)
+	}
+}
+
+func TestMarkdownToHTML_ImageSyntax(t *testing.T) {
+	got := MarkdownToHTML("![alt text](https://example.com/image.png)")
+	if strings.Contains(got, "!<a") || strings.Contains(got, "!&lt;") {
+		t.Errorf("stray ! before link: %q", got)
+	}
+	if !strings.Contains(got, "alt text") {
+		t.Errorf("alt text lost: %q", got)
+	}
+	if !strings.Contains(got, "href=") {
+		t.Errorf("should produce a link: %q", got)
+	}
+}
+
+func TestMarkdownToHTML_BoldInsideLinkText(t *testing.T) {
+	got := MarkdownToHTML("[click **here**](https://example.com)")
+	if !strings.Contains(got, `href="https://example.com"`) {
+		t.Errorf("href mangled: %q", got)
+	}
+	if !strings.Contains(got, "<b>here</b>") {
+		t.Errorf("bold inside link text should work: %q", got)
+	}
+}
