@@ -3,6 +3,7 @@ package telegram
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -144,6 +145,46 @@ func TestSplitMessage(t *testing.T) {
 			t.Fatalf("expected at least 2 chunks for long no-newline content, got %d", len(chunks))
 		}
 	})
+}
+
+func TestSplitMessage_CyrillicRuneSafe(t *testing.T) {
+	msg := "АБВГДЕЖЗИК" // 10 Cyrillic chars, 20 bytes
+	chunks := SplitMessage(msg, 7)
+	for i, ch := range chunks {
+		if !utf8.ValidString(ch) {
+			t.Errorf("chunk %d is not valid UTF-8: %q", i, ch)
+		}
+	}
+	if utf8.RuneCountInString(chunks[0]) > 7 {
+		t.Errorf("first chunk too long: %d runes", utf8.RuneCountInString(chunks[0]))
+	}
+}
+
+func TestSplitMessage_EmojiRuneSafe(t *testing.T) {
+	msg := "\U0001F525\U0001F389\U0001F680"
+	chunks := SplitMessage(msg, 2)
+	for i, ch := range chunks {
+		if !utf8.ValidString(ch) {
+			t.Errorf("chunk %d is not valid UTF-8: %q", i, ch)
+		}
+	}
+	if len(chunks) < 2 {
+		t.Errorf("expected >=2 chunks, got %d", len(chunks))
+	}
+}
+
+func TestSplitMessage_CharCountNotBytes(t *testing.T) {
+	msg := strings.Repeat("\u0411", 100) // 100 Cyrillic chars = 200 bytes
+	chunks := SplitMessage(msg, 50)
+	if len(chunks) != 2 {
+		t.Errorf("expected 2 chunks, got %d", len(chunks))
+	}
+	for i, ch := range chunks {
+		rc := utf8.RuneCountInString(ch)
+		if rc > 50 {
+			t.Errorf("chunk %d has %d runes, want <=50", i, rc)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

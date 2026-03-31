@@ -5,6 +5,7 @@ package telegram
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // MaxMessageLen is the Telegram Bot API limit for a single message.
@@ -13,6 +14,13 @@ const MaxMessageLen = 4096
 const (
 	// htmlTagMinLen is the minimum length of an HTML tag (e.g. "<b>").
 	htmlTagMinLen = 3
+
+	// compactMinChars is the minimum allowed maxChars for CompactForTelegram.
+	compactMinChars = 50
+
+	// truncateSuffixReserve is the number of runes reserved for the
+	// "... _(truncated)_" suffix when hard-truncating.
+	truncateSuffixReserve = 30
 )
 
 // trackedTags is the set of Telegram-supported formatting tags.
@@ -63,28 +71,33 @@ func StripHTMLTags(s string) string {
 
 // CompactForTelegram truncates verbose LLM responses for Telegram delivery.
 // Runs on raw markdown BEFORE HTML conversion. Pass-through if text <= maxChars.
+// maxChars is measured in runes (Unicode code points), not bytes.
 func CompactForTelegram(text string, maxChars int) string {
-	if len(text) <= maxChars {
+	if maxChars < compactMinChars {
+		maxChars = compactMinChars
+	}
+	if utf8.RuneCountInString(text) <= maxChars {
 		return text
 	}
 
 	// Strip large code blocks (>500 chars) -- replace with one-liner.
 	text = reLargeCodeBlock.ReplaceAllString(text, "```\n(code block trimmed)\n```")
 
-	if len(text) <= maxChars {
+	if utf8.RuneCountInString(text) <= maxChars {
 		return text
 	}
 
 	// Find first verbose section heading and truncate there.
 	if loc := reVerboseSection.FindStringIndex(text); loc != nil && loc[0] > 200 {
 		text = strings.TrimRight(text[:loc[0]], "\n ") + "\n\n... _(truncated)_"
-		if len(text) <= maxChars {
+		if utf8.RuneCountInString(text) <= maxChars {
 			return text
 		}
 	}
 
 	// Hard truncate at maxChars on a newline boundary.
-	cut := text[:maxChars-30]
+	cutOff := runeOffset(text, maxChars-truncateSuffixReserve)
+	cut := text[:cutOff]
 	if nl := strings.LastIndex(cut, "\n"); nl > len(cut)/2 {
 		cut = cut[:nl]
 	}
@@ -181,25 +194,38 @@ func handleOpenTag(tag string, stack []tagPos, result *strings.Builder) []tagPos
 	return stack
 }
 
-// SplitMessage splits text into chunks respecting maxLen, preferring newline
-// boundaries. Second pass fixes HTML tags across chunk boundaries by closing
-// open tags at end of each chunk and reopening them at start of next chunk.
+// runeOffset returns the byte offset of the n-th rune in s.
+// If s has fewer than n runes, returns len(s).
+func runeOffset(s string, n int) int {
+	off := 0
+	for i := 0; i < n && off < len(s); i++ {
+		_, size := utf8.DecodeRuneInString(s[off:])
+		off += size
+	}
+	return off
+}
+
+// SplitMessage splits text into chunks respecting maxLen (in runes, not bytes),
+// preferring newline boundaries. Second pass fixes HTML tags across chunk
+// boundaries by closing open tags at end of each chunk and reopening them at
+// start of next chunk.
 func SplitMessage(text string, maxLen int) []string {
-	if len(text) <= maxLen {
+	if utf8.RuneCountInString(text) <= maxLen {
 		return []string{text}
 	}
 
 	// First pass: split on newline boundaries (raw, ignoring tags).
 	var rawChunks []string
 	for len(text) > 0 {
-		if len(text) <= maxLen {
+		if utf8.RuneCountInString(text) <= maxLen {
 			rawChunks = append(rawChunks, text)
 			break
 		}
-		chunk := text[:maxLen]
+		byteOff := runeOffset(text, maxLen)
+		chunk := text[:byteOff]
 		splitAt := strings.LastIndex(chunk, "\n")
 		if splitAt <= 0 {
-			splitAt = maxLen
+			splitAt = byteOff
 		}
 		rawChunks = append(rawChunks, strings.TrimRight(text[:splitAt], "\n"))
 		text = strings.TrimLeft(text[splitAt:], "\n")
@@ -222,11 +248,7 @@ func SplitMessage(text string, maxLen int) []string {
 		if len(openTags) > 0 {
 			var closers strings.Builder
 			for i := len(openTags) - 1; i >= 0; i-- {
-				tagName := openTags[i][1 : len(openTags[i])-1]
-				// Strip attributes (e.g. <a href="..."> -> a).
-				if sp := strings.IndexByte(tagName, ' '); sp > 0 {
-					tagName = tagName[:sp]
-				}
+				tagName := parseTagName(openTags[i])
 				closers.WriteString("</" + tagName + ">")
 			}
 			chunk += closers.String()
