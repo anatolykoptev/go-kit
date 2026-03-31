@@ -22,7 +22,7 @@ var (
 	reBold        = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	reBoldUnder   = regexp.MustCompile(`__(.+?)__`)
 	reItalicStar  = regexp.MustCompile(`\*([^*\n]+)\*`)
-	reItalicUnder = regexp.MustCompile(`_([^_\n]+)_`)
+	reItalicUnder = regexp.MustCompile(`(^|[\s(])_([^_\n]+?)_([\s).,!?;:]|$)`)
 	reStrike      = regexp.MustCompile(`~~(.+?)~~`)
 	reListItem    = regexp.MustCompile(`(?m)^[-*]\s+`)
 	reHRule       = regexp.MustCompile(`(?m)^[-*_]{3,}\s*$`)
@@ -35,7 +35,7 @@ var (
 	reStripBold       = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	reStripBoldU      = regexp.MustCompile(`__(.+?)__`)
 	reStripItalicS    = regexp.MustCompile(`\*(.+?)\*`)
-	reStripItalicU    = regexp.MustCompile(`_(.+?)_`)
+	reStripItalicU    = regexp.MustCompile(`(^|[\s(])_([^_\n]+?)_([\s).,!?;:]|$)`)
 	reStripStrike     = regexp.MustCompile("~~(.+?)~~")
 	reStripInline     = regexp.MustCompile("`(.+?)`")
 	reStripHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+`)
@@ -104,7 +104,7 @@ func MarkdownToHTML(text string) string {
 
 	// 10. Italic (*text* and _text_) - after lists consumed the leading *.
 	text = reItalicStar.ReplaceAllString(text, "<i>$1</i>")
-	text = reItalicUnder.ReplaceAllString(text, "<i>$1</i>")
+	text = reItalicUnder.ReplaceAllString(text, "${1}<i>${2}</i>${3}")
 
 	// 11. Restore links (with inline formatting applied to link text).
 	text = restoreLinks(text, linkData)
@@ -145,7 +145,7 @@ func StripMarkdown(text string) string {
 	text = reStripBold.ReplaceAllString(text, "$1")
 	text = reStripBoldU.ReplaceAllString(text, "$1")
 	text = reStripItalicS.ReplaceAllString(text, "$1")
-	text = reStripItalicU.ReplaceAllString(text, "$1")
+	text = reStripItalicU.ReplaceAllString(text, "${1}${2}${3}")
 	text = reStripStrike.ReplaceAllString(text, "$1")
 	text = reStripInline.ReplaceAllString(text, "$1")
 	text = reStripHeading.ReplaceAllString(text, "")
@@ -323,6 +323,6 @@ func formatInline(text string) string {
 	text = reBoldUnder.ReplaceAllString(text, "<b>$1</b>")
 	text = reStrike.ReplaceAllString(text, "<s>$1</s>")
 	text = reItalicStar.ReplaceAllString(text, "<i>$1</i>")
-	text = reItalicUnder.ReplaceAllString(text, "<i>$1</i>")
+	text = reItalicUnder.ReplaceAllString(text, "${1}<i>${2}</i>${3}")
 	return text
 }

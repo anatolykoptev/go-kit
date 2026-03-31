@@ -210,75 +210,149 @@ func runeOffset(s string, n int) int {
 // boundaries by closing open tags at end of each chunk and reopening them at
 // start of next chunk.
 func SplitMessage(text string, maxLen int) []string {
+	if maxLen <= 0 {
+		return []string{text}
+	}
 	if utf8.RuneCountInString(text) <= maxLen {
 		return []string{text}
 	}
 
-	// First pass: split on newline boundaries (raw, ignoring tags).
-	var rawChunks []string
+	originalText := text
+	rawChunks := splitRawChunks(text, maxLen)
+	result := fixChunkTags(rawChunks, maxLen)
+	return filterEmptyChunks(result, originalText)
+}
+
+// splitRawChunks splits text on newline boundaries respecting maxLen,
+// avoiding splits inside HTML tags.
+func splitRawChunks(text string, maxLen int) []string {
+	var chunks []string
 	for len(text) > 0 {
 		if utf8.RuneCountInString(text) <= maxLen {
-			rawChunks = append(rawChunks, text)
+			chunks = append(chunks, text)
 			break
 		}
 		byteOff := runeOffset(text, maxLen)
-		chunk := text[:byteOff]
-		splitAt := strings.LastIndex(chunk, "\n")
+		splitAt := strings.LastIndex(text[:byteOff], "\n")
 		if splitAt <= 0 {
 			splitAt = byteOff
 		}
-		rawChunks = append(rawChunks, strings.TrimRight(text[:splitAt], "\n"))
+		splitAt = avoidTagSplit(text, splitAt)
+		chunks = append(chunks, strings.TrimRight(text[:splitAt], "\n"))
 		text = strings.TrimLeft(text[splitAt:], "\n")
 	}
+	return chunks
+}
 
-	// Second pass: fix HTML tags across chunk boundaries.
-	var openTags []string // tags open at end of previous chunk
+// avoidTagSplit adjusts splitAt so it doesn't fall inside an HTML tag.
+func avoidTagSplit(text string, splitAt int) int {
+	candidate := text[:splitAt]
+	lastOpen := strings.LastIndex(candidate, "<")
+	lastClose := strings.LastIndex(candidate, ">")
+	if lastOpen < 0 || lastOpen <= lastClose {
+		return splitAt
+	}
+	if lastOpen > 0 {
+		return lastOpen
+	}
+	// Tag starts at position 0 and exceeds the split point.
+	closeIdx := strings.IndexByte(text, '>')
+	if closeIdx >= 0 {
+		return closeIdx + 1
+	}
+	return splitAt
+}
+
+// fixChunkTags adds closing/reopening HTML tags across chunk boundaries
+// and trims oversized chunks.
+func fixChunkTags(rawChunks []string, maxLen int) []string {
+	var openTags []string
 	result := make([]string, 0, len(rawChunks))
-
 	for _, chunk := range rawChunks {
-		// Prepend reopening tags from previous chunk.
 		if len(openTags) > 0 {
 			chunk = strings.Join(openTags, "") + chunk
 		}
-
-		// Track which tags are open at end of this chunk.
 		openTags = unclosedTags(chunk)
-
-		// Append closing tags in reverse order.
-		if len(openTags) > 0 {
-			var closers strings.Builder
-			for i := len(openTags) - 1; i >= 0; i-- {
-				tagName := parseTagName(openTags[i])
-				closers.WriteString("</" + tagName + ">")
-			}
-			chunk += closers.String()
-		}
-
-		// Safety trim: tag repair may push chunk past maxLen.
+		chunk += buildClosers(openTags)
 		if utf8.RuneCountInString(chunk) > maxLen {
 			chunk = trimChunkToLimit(chunk, maxLen)
 		}
-
 		result = append(result, chunk)
 	}
 	return result
 }
 
+// buildClosers returns closing tags for all open tags in reverse order.
+func buildClosers(openTags []string) string {
+	if len(openTags) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := len(openTags) - 1; i >= 0; i-- {
+		b.WriteString("</" + parseTagName(openTags[i]) + ">")
+	}
+	return b.String()
+}
+
+// filterEmptyChunks removes whitespace-only chunks; falls back to original text.
+func filterEmptyChunks(chunks []string, fallback string) []string {
+	var filtered []string
+	for _, ch := range chunks {
+		if strings.TrimSpace(ch) != "" {
+			filtered = append(filtered, ch)
+		}
+	}
+	if len(filtered) == 0 {
+		return []string{fallback}
+	}
+	return filtered
+}
+
 // trimChunkToLimit trims an HTML chunk to fit within maxLen runes.
-// Cuts content at a rune boundary and repairs HTML nesting (adds closers).
+// Iteratively cuts the raw content (before tag repair) until the repaired
+// result fits. Uses a shrinking byte budget to guarantee convergence.
 func trimChunkToLimit(chunk string, maxLen int) string {
+	if maxLen <= 0 {
+		return chunk
+	}
 	if utf8.RuneCountInString(chunk) <= maxLen {
 		return chunk
 	}
-	reserve := 20
-	if maxLen < reserve+10 {
-		reserve = maxLen / 3
+
+	// Start with a byte budget equal to maxLen runes, then shrink.
+	budget := maxLen
+	const maxIter = 30
+	for i := 0; i < maxIter; i++ {
+		if budget < 1 {
+			budget = 1
+		}
+		cutOff := runeOffset(chunk, budget)
+		if cutOff > len(chunk) {
+			cutOff = len(chunk)
+		}
+		cut := chunk[:cutOff]
+
+		// Don't cut inside an HTML tag — back up to before the unclosed <.
+		lastOpen := strings.LastIndex(cut, "<")
+		lastClose := strings.LastIndex(cut, ">")
+		if lastOpen >= 0 && lastOpen > lastClose {
+			cut = cut[:lastOpen]
+		}
+
+		repaired := RepairHTMLNesting(cut)
+		if utf8.RuneCountInString(repaired) <= maxLen {
+			return repaired
+		}
+		// Shrink budget: remove more content to leave room for closing tags.
+		budget -= utf8.RuneCountInString(repaired) - maxLen + 1
 	}
-	cutOff := runeOffset(chunk, maxLen-reserve)
-	if cutOff > len(chunk) {
-		cutOff = len(chunk)
+	// Final fallback: strip all HTML tags and hard-truncate.
+	plain := StripHTMLTags(chunk)
+	if utf8.RuneCountInString(plain) > maxLen {
+		off := runeOffset(plain, maxLen)
+		plain = plain[:off]
 	}
-	return RepairHTMLNesting(chunk[:cutOff])
+	return plain
 }
 
 // parseTagName extracts the tag name from an opening tag string.
