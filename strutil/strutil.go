@@ -236,3 +236,56 @@ func wrapLine(sb *strings.Builder, line string, width int) {
 		lineLen += wordLen
 	}
 }
+
+// Lang represents a detected language code.
+type Lang string
+
+const (
+	LangEN Lang = "en"
+	LangRU Lang = "ru"
+	LangZH Lang = "zh"
+	LangES Lang = "es"
+)
+
+// DetectLang detects the dominant language of text.
+// Returns "ru" for Russian, "zh" for Chinese, "es" for Spanish, "en" otherwise.
+// Uses character ratio analysis with a 0.3 threshold. Ported from MemDB llm.DetectLang.
+func DetectLang(text string) Lang {
+	var cyrillic, chinese, ascii, spanish int
+	for _, r := range text {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			chinese++
+		case unicode.Is(unicode.Cyrillic, r):
+			cyrillic++
+		case r == 'ñ' || r == 'Ñ' || r == '¿' || r == '¡' ||
+			r == 'á' || r == 'é' || r == 'í' || r == 'ó' || r == 'ú' ||
+			r == 'Á' || r == 'É' || r == 'Í' || r == 'Ó' || r == 'Ú' || r == 'ü' || r == 'Ü':
+			spanish++
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			ascii++
+		}
+	}
+
+	if ascii == 0 {
+		if chinese > cyrillic && chinese > 0 {
+			return LangZH
+		}
+		if cyrillic > 0 {
+			return LangRU
+		}
+		return LangEN
+	}
+
+	ratio := func(count int) float64 { return float64(count) / float64(ascii) }
+	if ratio(chinese) > 0.3 {
+		return LangZH
+	}
+	if ratio(cyrillic) > 0.3 {
+		return LangRU
+	}
+	if ratio(spanish) > 0.05 {
+		return LangES
+	}
+	return LangEN
+}
