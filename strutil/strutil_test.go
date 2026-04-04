@@ -257,3 +257,45 @@ func TestWordWrap(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectLang_English(t *testing.T) {
+	if got := strutil.DetectLang("Hello World"); got != strutil.LangEN {
+		t.Errorf("got %q, want en", got)
+	}
+}
+
+func TestDetectLang_Russian(t *testing.T) {
+	if got := strutil.DetectLang("Привет мир как дела"); got != strutil.LangRU {
+		t.Errorf("got %q, want ru", got)
+	}
+}
+
+func TestDetectLang_Mixed(t *testing.T) {
+	if got := strutil.DetectLang("новые рестораны в Санкт-Петербурге 2026"); got != strutil.LangRU {
+		t.Errorf("got %q, want ru", got)
+	}
+}
+
+func TestDetectLang_Empty(t *testing.T) {
+	if got := strutil.DetectLang(""); got != strutil.LangEN {
+		t.Errorf("got %q, want en (default)", got)
+	}
+}
+
+func TestDetectLang_TechMixed(t *testing.T) {
+	if got := strutil.DetectLang("tree-sitter парсинг для Go"); got != strutil.LangRU {
+		t.Errorf("got %q, want ru", got)
+	}
+}
+
+func TestDetectLang_Spanish(t *testing.T) {
+	if got := strutil.DetectLang("¿Cómo configurar nginx?"); got != strutil.LangES {
+		t.Errorf("got %q, want es", got)
+	}
+}
+
+func TestDetectLang_SpanishTilde(t *testing.T) {
+	if got := strutil.DetectLang("año nuevo en España"); got != strutil.LangES {
+		t.Errorf("got %q, want es", got)
+	}
+}
