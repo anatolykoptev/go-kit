@@ -35,6 +35,9 @@ func (r *Registry) counter(name string) *atomic.Int64 {
 
 // Incr increments the named counter by 1.
 func (r *Registry) Incr(name string) {
+	if r == nil {
+		return
+	}
 	r.counter(name).Add(1)
 	if r.promBridge != nil {
 		r.promBridge.observeCounter(name, 1)
@@ -43,6 +46,9 @@ func (r *Registry) Incr(name string) {
 
 // Add adds delta to the named counter.
 func (r *Registry) Add(name string, delta int64) {
+	if r == nil {
+		return
+	}
 	r.counter(name).Add(delta)
 	if r.promBridge != nil {
 		r.promBridge.observeCounter(name, float64(delta))
@@ -51,12 +57,18 @@ func (r *Registry) Add(name string, delta int64) {
 
 // Value returns the current value of the named counter.
 func (r *Registry) Value(name string) int64 {
+	if r == nil {
+		return 0
+	}
 	return r.counter(name).Load()
 }
 
 // Snapshot returns a copy of all counters with their current values.
 // Only counters that have been written at least once are included.
 func (r *Registry) Snapshot() map[string]int64 {
+	if r == nil {
+		return nil
+	}
 	m := make(map[string]int64)
 	r.store.Range(func(k, v any) bool {
 		m[k.(string)] = v.(*atomic.Int64).Load() //nolint:forcetypeassert // invariant
@@ -67,6 +79,9 @@ func (r *Registry) Snapshot() map[string]int64 {
 
 // SnapshotAndReset returns current counter values and atomically resets them to zero.
 func (r *Registry) SnapshotAndReset() map[string]int64 {
+	if r == nil {
+		return nil
+	}
 	m := make(map[string]int64)
 	r.store.Range(func(k, v any) bool {
 		m[k.(string)] = v.(*atomic.Int64).Swap(0) //nolint:forcetypeassert // invariant
@@ -77,6 +92,9 @@ func (r *Registry) SnapshotAndReset() map[string]int64 {
 
 // Reset clears all counters and gauges. Intended for tests.
 func (r *Registry) Reset() {
+	if r == nil {
+		return
+	}
 	r.store.Range(func(k, _ any) bool { r.store.Delete(k); return true })
 	r.gauges.Range(func(k, _ any) bool { r.gauges.Delete(k); return true })
 	r.rates.Range(func(k, _ any) bool { r.rates.Delete(k); return true })
@@ -86,6 +104,9 @@ func (r *Registry) Reset() {
 
 // Format returns a human-readable summary of all counters and gauges, sorted by name.
 func (r *Registry) Format() string {
+	if r == nil {
+		return ""
+	}
 	counters := r.Snapshot()
 	gauges := r.GaugeSnapshot()
 	if len(counters) == 0 && len(gauges) == 0 {
@@ -116,6 +137,9 @@ func (r *Registry) Format() string {
 // TrackOperation increments callCounter, runs fn, and increments errCounter
 // if fn returns a non-nil error. The error from fn is always returned unchanged.
 func (r *Registry) TrackOperation(callCounter, errCounter string, fn func() error) error {
+	if r == nil {
+		return fn()
+	}
 	r.Incr(callCounter)
 	if err := fn(); err != nil {
 		r.Incr(errCounter)
@@ -138,6 +162,9 @@ type TimerHandle struct {
 // StartTimer starts a timer for the named metric.
 // Call Stop to record the duration. Usage: defer reg.StartTimer("api.latency").Stop()
 func (r *Registry) StartTimer(name string) *TimerHandle {
+	if r == nil {
+		return &TimerHandle{start: time.Now()}
+	}
 	return &TimerHandle{reg: r, name: name, start: time.Now()}
 }
 
@@ -150,6 +177,9 @@ func (r *Registry) StartTimer(name string) *TimerHandle {
 // co-exist under the same full name in DefaultRegisterer.
 func (h *TimerHandle) Stop() time.Duration {
 	d := time.Since(h.start)
+	if h.reg == nil {
+		return d
+	}
 	if h.reg.promBridge != nil {
 		h.reg.promBridge.observeHistogram(h.name, d.Seconds())
 		return d

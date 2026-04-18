@@ -7,11 +7,17 @@ import "time"
 // Each call resets the deadline. Use for per-endpoint or per-user metrics
 // that become stale.
 func (r *Registry) SetTTL(name string, ttl time.Duration) {
+	if r == nil {
+		return
+	}
 	r.ttls.Store(name, time.Now().Add(ttl).UnixNano())
 }
 
 // IncrWithTTL increments a counter and sets/refreshes its TTL.
 func (r *Registry) IncrWithTTL(name string, ttl time.Duration) {
+	if r == nil {
+		return
+	}
 	r.counter(name).Add(1)
 	r.ttls.Store(name, time.Now().Add(ttl).UnixNano())
 	if r.promBridge != nil {
@@ -21,6 +27,9 @@ func (r *Registry) IncrWithTTL(name string, ttl time.Duration) {
 
 // AddWithTTL adds delta to a counter and sets/refreshes its TTL.
 func (r *Registry) AddWithTTL(name string, delta int64, ttl time.Duration) {
+	if r == nil {
+		return
+	}
 	r.counter(name).Add(delta)
 	r.ttls.Store(name, time.Now().Add(ttl).UnixNano())
 	if r.promBridge != nil {
@@ -31,6 +40,9 @@ func (r *Registry) AddWithTTL(name string, delta int64, ttl time.Duration) {
 // CleanupExpired removes all metrics whose TTL has expired.
 // Returns the number of metrics removed.
 func (r *Registry) CleanupExpired() int {
+	if r == nil {
+		return 0
+	}
 	now := time.Now().UnixNano()
 	var removed int
 	r.ttls.Range(func(k, v any) bool {
