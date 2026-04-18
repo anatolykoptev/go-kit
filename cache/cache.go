@@ -43,6 +43,16 @@ type Config struct {
 	// Called outside the cache lock — safe to call cache methods.
 	// Must be goroutine-safe (may fire from multiple goroutines concurrently).
 	OnEvict func(key string, data []byte, reason EvictReason)
+
+	// MaxWeight is the maximum total weight of L1 entries in bytes.
+	// 0 (default) disables weight-based eviction entirely.
+	// Requires Weigher to be set; if Weigher is nil, MaxWeight is ignored.
+	MaxWeight int64
+
+	// Weigher computes the weight (e.g. byte size) of a cache entry.
+	// When nil (default), no weight tracking is performed and MaxWeight is ignored.
+	// The zero-value nil preserves exact existing behavior for all callers.
+	Weigher func(key string, data []byte) int64
 }
 
 func (c *Config) applyDefaults() {
@@ -69,6 +79,7 @@ type entry struct {
 	elem      *list.Element // back-ref in small or main list
 	inMain    bool          // false=small, true=main
 	tags      []string      // tag-based invalidation groups
+	weight    int64         // byte weight; 0 when Weigher is nil
 }
 
 // Cache is a tiered L1 (memory) + optional L2 (Redis) cache.
@@ -77,16 +88,18 @@ type Cache struct {
 	cfg Config
 
 	mu       sync.Mutex
-	items    map[string]*entry        // all active entries
-	small    *list.List               // probation queue (10% capacity)
-	main     *list.List               // main queue (90% capacity)
-	ghost    *list.List               // ghost queue (evicted keys, no values)
-	ghostMap map[string]*list.Element  // ghost key lookups
+	items    map[string]*entry              // all active entries
+	small    *list.List                     // probation queue (10% capacity)
+	main     *list.List                     // main queue (90% capacity)
+	ghost    *list.List                     // ghost queue (evicted keys, no values)
+	ghostMap map[string]*list.Element       // ghost key lookups
 	tagIndex map[string]map[string]struct{} // tag → set of keys
 
 	smallCap int // 10% of L1MaxItems
 	mainCap  int // 90% of L1MaxItems
 	ghostCap int // = mainCap
+
+	totalWeight int64 // protected by mu; 0 when Weigher is nil
 
 	hits      atomic.Int64
 	misses    atomic.Int64
@@ -183,4 +196,3 @@ func (c *Cache) Close() {
 		c.l2.Close()
 	}
 }
-
