@@ -14,11 +14,12 @@ import (
 
 // Registry holds named atomic counters and gauges.
 type Registry struct {
-	store      sync.Map // counters: *atomic.Int64
-	gauges     sync.Map // gauges: *Gauge
-	rates      sync.Map // rates: *Rate
-	histograms sync.Map // histograms: *Reservoir
-	ttls       sync.Map // name -> int64 (deadline UnixNano)
+	store      sync.Map    // counters: *atomic.Int64
+	gauges     sync.Map    // gauges: *Gauge
+	rates      sync.Map    // rates: *Rate
+	histograms sync.Map    // histograms: *Reservoir
+	ttls       sync.Map    // name -> int64 (deadline UnixNano)
+	promBridge *promBridge // nil unless created via NewPrometheusRegistry
 }
 
 // NewRegistry creates a new empty counter registry.

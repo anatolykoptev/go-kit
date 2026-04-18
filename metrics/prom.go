@@ -1,6 +1,14 @@
 package metrics
 
-import "strings"
+import (
+	"fmt"
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
 
 // parseLabeled разбирает имя метрики в синтаксисе kitmetrics.Label():
 //
@@ -30,4 +38,29 @@ func parseLabeled(s string) (name string, keys, vals []string) {
 		vals = append(vals, kv[eq+1:])
 	}
 	return name, keys, vals
+}
+
+// promBridge отражает операции Registry в prometheus.DefaultRegisterer.
+type promBridge struct {
+	namespace  string
+	counters   sync.Map // base name → prometheus.Counter or *prometheus.CounterVec
+	gauges     sync.Map // base name → prometheus.Gauge or *prometheus.GaugeVec
+	histograms sync.Map // base name → prometheus.Histogram or *prometheus.HistogramVec
+}
+
+var nsRe = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+
+// NewPrometheusRegistry создаёт Registry, дополнительно транслирующий операции
+// в prometheus.DefaultRegisterer под указанным namespace. namespace должен
+// соответствовать [a-zA-Z_:][a-zA-Z0-9_:]* — иначе panic.
+func NewPrometheusRegistry(namespace string) *Registry {
+	if !nsRe.MatchString(namespace) {
+		panic(fmt.Sprintf("metrics: invalid prometheus namespace %q", namespace))
+	}
+	return &Registry{promBridge: &promBridge{namespace: namespace}}
+}
+
+// MetricsHandler возвращает promhttp.Handler() на prometheus.DefaultRegisterer.
+func MetricsHandler() http.Handler {
+	return promhttp.Handler()
 }
