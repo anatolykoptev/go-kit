@@ -158,6 +158,16 @@ func (b *Breaker) tripToOpen() {
 	}
 }
 
+// ForceHalfOpen forces the breaker into half-open state regardless of its current
+// state or remaining cooldown. Intended for admin/operator-triggered resets.
+// The probe-slot counter is also reset so the next Allow() returns true.
+func (b *Breaker) ForceHalfOpen() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.state = StateHalfOpen
+	b.halfOpenInFlight = 0
+}
+
 // Must be called with b.mu held.
 func (b *Breaker) reset() {
 	b.state = StateClosed
