@@ -1,4 +1,3 @@
-// breaker/backoff.go
 package breaker
 
 import (
