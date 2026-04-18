@@ -19,6 +19,8 @@ go get github.com/anatolykoptev/go-kit
 | [`ratelimit`](#ratelimit) | Token bucket rate limiter, per-key support, concurrency limiter | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
 | [`fileopt`](#fileopt) | Lossless PDF/PNG/WebP byte-level optimization via gs+qpdf/oxipng/cwebp subprocess wrappers, with per-stage Prometheus metrics | stdlib + prometheus/client_golang |
+| [`breaker`](doc/breaker.md) | 3-state circuit breaker with exponential cooldown, jitter, probe slots, `Execute[T]` generic wrapper, `HTTPDoer` preset, and per-key `Pool` | stdlib |
+| [`eventbus`](doc/eventbus.md) | In-process pub/sub with dot-separated topics and wildcard pattern matching (`*`, `**`); 64-slot buffered channels, drop-on-full semantics | stdlib |
 
 All packages are independent — no internal cross-imports. Import only what you need.
 
