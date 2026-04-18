@@ -36,11 +36,17 @@ func (r *Registry) counter(name string) *atomic.Int64 {
 // Incr increments the named counter by 1.
 func (r *Registry) Incr(name string) {
 	r.counter(name).Add(1)
+	if r.promBridge != nil {
+		r.promBridge.observeCounter(name, 1)
+	}
 }
 
 // Add adds delta to the named counter.
 func (r *Registry) Add(name string, delta int64) {
 	r.counter(name).Add(delta)
+	if r.promBridge != nil {
+		r.promBridge.observeCounter(name, float64(delta))
+	}
 }
 
 // Value returns the current value of the named counter.
@@ -136,53 +142,19 @@ func (r *Registry) StartTimer(name string) *TimerHandle {
 }
 
 // Stop records the elapsed duration since StartTimer.
-// Sets gauge "name" to the duration in milliseconds (float64 for sub-ms precision).
-// Increments counter "name.count".
+// In non-prom Registry: sets gauge "name" to duration in milliseconds (float64
+// for sub-ms precision) and increments counter "name.count".
+// In prom-backed Registry (NewPrometheusRegistry): observes a histogram under
+// "name" in seconds and skips the legacy gauge/counter writes — prom histograms
+// natively expose `_count`/`_sum`/`_bucket`, and a gauge+histogram cannot
+// co-exist under the same full name in DefaultRegisterer.
 func (h *TimerHandle) Stop() time.Duration {
 	d := time.Since(h.start)
+	if h.reg.promBridge != nil {
+		h.reg.promBridge.observeHistogram(h.name, d.Seconds())
+		return d
+	}
 	h.reg.Gauge(h.name).Set(float64(d.Microseconds()) / 1000.0) //nolint:mnd // ms conversion
 	h.reg.Incr(h.name + ".count")
 	return d
-}
-
-// ---------------------------------------------------------------------------
-// TTL
-// ---------------------------------------------------------------------------
-
-// SetTTL marks a metric for automatic expiration. After ttl elapses,
-// CleanupExpired will remove the metric from all stores (counters, gauges).
-// Each call resets the deadline. Use for per-endpoint or per-user metrics
-// that become stale.
-func (r *Registry) SetTTL(name string, ttl time.Duration) {
-	r.ttls.Store(name, time.Now().Add(ttl).UnixNano())
-}
-
-// IncrWithTTL increments a counter and sets/refreshes its TTL.
-func (r *Registry) IncrWithTTL(name string, ttl time.Duration) {
-	r.counter(name).Add(1)
-	r.ttls.Store(name, time.Now().Add(ttl).UnixNano())
-}
-
-// AddWithTTL adds delta to a counter and sets/refreshes its TTL.
-func (r *Registry) AddWithTTL(name string, delta int64, ttl time.Duration) {
-	r.counter(name).Add(delta)
-	r.ttls.Store(name, time.Now().Add(ttl).UnixNano())
-}
-
-// CleanupExpired removes all metrics whose TTL has expired.
-// Returns the number of metrics removed.
-func (r *Registry) CleanupExpired() int {
-	now := time.Now().UnixNano()
-	var removed int
-	r.ttls.Range(func(k, v any) bool {
-		if v.(int64) < now { //nolint:forcetypeassert // invariant: only int64 stored
-			name := k.(string) //nolint:forcetypeassert // invariant
-			r.store.Delete(name)
-			r.gauges.Delete(name)
-			r.ttls.Delete(name)
-			removed++
-		}
-		return true
-	})
-	return removed
 }
