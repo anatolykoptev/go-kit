@@ -3,6 +3,7 @@ package metrics
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -63,4 +64,23 @@ func NewPrometheusRegistry(namespace string) *Registry {
 // MetricsHandler возвращает promhttp.Handler() на prometheus.DefaultRegisterer.
 func MetricsHandler() http.Handler {
 	return promhttp.Handler()
+}
+
+// FromEnv возвращает *Registry, prometheus-backed если:
+//   - PROM_NAMESPACE задан (используется как namespace), или
+//   - METRICS_PROM=1 (используется defaultNamespace).
+//
+// Иначе возвращает NewRegistry() без prom-bridge.
+// Паника если METRICS_PROM=1 и defaultNamespace пуст.
+func FromEnv(defaultNamespace string) *Registry {
+	if ns := os.Getenv("PROM_NAMESPACE"); ns != "" {
+		return NewPrometheusRegistry(ns)
+	}
+	if os.Getenv("METRICS_PROM") == "1" {
+		if defaultNamespace == "" {
+			panic("metrics: METRICS_PROM=1 requires non-empty defaultNamespace")
+		}
+		return NewPrometheusRegistry(defaultNamespace)
+	}
+	return NewRegistry()
 }
