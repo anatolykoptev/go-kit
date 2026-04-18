@@ -12,7 +12,7 @@ go get github.com/anatolykoptev/go-kit
 |---------|------|------|
 | [`env`](#env) | Environment variable parsing | stdlib |
 | [`llm`](#llm) | OpenAI-compatible LLM client with streaming, tool calling, structured output | stdlib |
-| [`cache`](#cache) | L1 memory + L2 Redis tiered cache with S3-FIFO eviction | stdlib (L2: redis) |
+| [`cache`](doc/cache.md) | L1 memory + L2 Redis tiered cache with S3-FIFO eviction, tag invalidation, byte-bounded (Weigher + MaxWeight) and idle (IdleTTL) eviction | stdlib (L2: redis) |
 | [`retry`](#retry) | Generic retry with exponential backoff | stdlib |
 | [`metrics`](#metrics) | Atomic counters, gauges, timers, labels, sinks, rates, histograms, TTL | stdlib |
 | [`hedge`](#hedge) | Hedged requests — race primary vs backup, first success wins | stdlib |
