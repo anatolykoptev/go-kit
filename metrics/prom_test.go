@@ -1,6 +1,11 @@
 package metrics
 
-import "testing"
+import (
+	"net/http/httptest"
+	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 func TestParseLabeled(t *testing.T) {
 	cases := []struct {
@@ -31,4 +36,33 @@ func TestParseLabeled(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestNewPrometheusRegistry_Constructs(t *testing.T) {
+	reg := NewPrometheusRegistry("testsvc")
+	if reg == nil {
+		t.Fatal("nil registry")
+	}
+	if reg.promBridge == nil {
+		t.Fatal("promBridge not initialized")
+	}
+	if reg.promBridge.namespace != "testsvc" {
+		t.Fatalf("namespace = %q, want %q", reg.promBridge.namespace, "testsvc")
+	}
+}
+
+func TestMetricsHandler_Serves(t *testing.T) {
+	h := MetricsHandler()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	_ = prometheus.DefaultRegisterer
+}
+
+func TestNewPrometheusRegistry_PanicsOnBadNamespace(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	NewPrometheusRegistry("bad-name")
 }
