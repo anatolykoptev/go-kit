@@ -481,6 +481,39 @@ func TestAddWithTTL(t *testing.T) {
 	}
 }
 
+func TestNilRegistry_Gauge_Timer_NoPanic(t *testing.T) {
+	var r *metrics.Registry
+
+	g := r.Gauge("x")
+	if g == nil {
+		t.Fatal("Gauge() on nil should return noop, not nil")
+	}
+	g.Set(42)
+	g.Add(1)
+	_ = g.Value()
+
+	h := r.StartTimer("t")
+	if h == nil {
+		t.Fatal("StartTimer() on nil should return noop")
+	}
+	_ = h.Stop()
+
+	hist := r.Histogram("h")
+	if hist == nil {
+		t.Fatal("Histogram() on nil should return noop")
+	}
+	hist.Update(1.0)
+	_ = hist.Percentile(0.99)
+	_ = hist.Count()
+
+	rate := r.Rate("r")
+	if rate == nil {
+		t.Fatal("Rate() on nil should return noop")
+	}
+	rate.Update(1)
+	_ = rate.M1()
+}
+
 func TestNilRegistry_Counters_NoPanic(t *testing.T) {
 	var r *metrics.Registry
 	r.Incr("x")

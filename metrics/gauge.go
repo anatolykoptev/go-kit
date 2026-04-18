@@ -15,6 +15,9 @@ type Gauge struct {
 
 // Set sets the gauge to v.
 func (g *Gauge) Set(v float64) {
+	if g == nil {
+		return
+	}
 	g.bits.Store(math.Float64bits(v))
 	if g.reg != nil && g.reg.promBridge != nil {
 		g.reg.promBridge.observeGauge(g.name, v, false)
@@ -22,10 +25,18 @@ func (g *Gauge) Set(v float64) {
 }
 
 // Value returns the current gauge value.
-func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
+func (g *Gauge) Value() float64 {
+	if g == nil {
+		return 0
+	}
+	return math.Float64frombits(g.bits.Load())
+}
 
 // Add adds delta to the gauge value.
 func (g *Gauge) Add(delta float64) {
+	if g == nil {
+		return
+	}
 	var newF float64
 	for {
 		old := g.bits.Load()
@@ -46,7 +57,11 @@ func (g *Gauge) Inc() { g.Add(1) }
 func (g *Gauge) Dec() { g.Add(-1) }
 
 // Gauge returns the named gauge, creating it on first access.
+// Returns a non-nil noop Gauge when called on a nil Registry.
 func (r *Registry) Gauge(name string) *Gauge {
+	if r == nil {
+		return &Gauge{}
+	}
 	v, _ := r.gauges.LoadOrStore(name, &Gauge{reg: r, name: name})
 	return v.(*Gauge) //nolint:forcetypeassert // invariant: only *Gauge stored
 }
