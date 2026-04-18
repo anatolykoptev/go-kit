@@ -481,6 +481,24 @@ func TestAddWithTTL(t *testing.T) {
 	}
 }
 
+func TestNilRegistry_Counters_NoPanic(t *testing.T) {
+	var r *metrics.Registry
+	r.Incr("x")
+	r.Add("x", 5)
+	_ = r.Value("x")
+	r.IncrWithTTL("x", time.Second)
+	r.AddWithTTL("x", 3, time.Second)
+	r.SetTTL("x", time.Second)
+	_ = r.CleanupExpired()
+	_ = r.Snapshot()
+	_ = r.SnapshotAndReset()
+	_ = r.Format()
+	r.Reset()
+	if err := r.TrackOperation("c", "e", func() error { return nil }); err != nil {
+		t.Fatalf("TrackOperation on nil should succeed, got %v", err)
+	}
+}
+
 func TestReset_IncludesRatesAndHistograms(t *testing.T) {
 	r := metrics.NewRegistry()
 	r.Rate("r").Update(1)

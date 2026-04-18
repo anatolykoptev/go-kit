@@ -53,6 +53,9 @@ func (r *Registry) Gauge(name string) *Gauge {
 
 // GaugeSnapshot returns a copy of all gauges with their current values.
 func (r *Registry) GaugeSnapshot() map[string]float64 {
+	if r == nil {
+		return nil
+	}
 	m := make(map[string]float64)
 	r.gauges.Range(func(k, v any) bool {
 		m[k.(string)] = v.(*Gauge).Value() //nolint:forcetypeassert // invariant
