@@ -12,7 +12,9 @@ func TestParseLabeled(t *testing.T) {
 		{"wp_rest_calls", "wp_rest_calls", nil, nil},
 		{"rpc{method=login}", "rpc", []string{"method"}, []string{"login"}},
 		{"rpc{service=auth,method=login}", "rpc", []string{"service", "method"}, []string{"auth", "login"}},
-		{"malformed{", "malformed{", nil, nil}, // invalid → treat as plain
+		{"malformed{", "malformed{", nil, nil},                    // invalid → treat as plain
+		{"rpc{method=}", "rpc", []string{"method"}, []string{""}}, // empty value allowed
+		{"rpc{method=,timeout=5s}", "rpc", []string{"method", "timeout"}, []string{"", "5s"}},
 	}
 	for _, c := range cases {
 		gotName, gotKeys, gotVals := parseLabeled(c.in)
