@@ -13,8 +13,20 @@ func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool) {
 
 	e, ok := c.items[key]
 	if ok && !time.Now().After(e.expiresAt) {
+		// IdleTTL check must happen BEFORE updating lastAccess.
+		if c.cfg.IdleTTL > 0 && time.Since(e.lastAccess) > c.cfg.IdleTTL {
+			expKey, expData := e.key, e.data
+			c.removeEntry(e)
+			c.mu.Unlock()
+			c.notifyEvict(expKey, expData, EvictExpired)
+			c.misses.Add(1)
+			return nil, false
+		}
 		if e.freq < maxFreq {
 			e.freq++
+		}
+		if c.cfg.IdleTTL > 0 {
+			e.lastAccess = time.Now()
 		}
 		data := e.data
 		c.mu.Unlock()
@@ -117,12 +129,14 @@ func (c *Cache) setInternal(ctx context.Context, key string, data []byte, l1TTL,
 	}
 
 	// Insert into small queue.
+	now := time.Now()
 	e := &entry{
-		key:       key,
-		data:      data,
-		expiresAt: time.Now().Add(c.jitteredTTL(l1TTL)),
-		freq:      initFreq,
-		tags:      tags,
+		key:        key,
+		data:       data,
+		expiresAt:  now.Add(c.jitteredTTL(l1TTL)),
+		freq:       initFreq,
+		tags:       tags,
+		lastAccess: now,
 	}
 	if c.cfg.Weigher != nil {
 		e.weight = c.cfg.Weigher(key, data)
