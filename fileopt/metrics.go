@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/anatolykoptev/go-kit/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Optimization subprocess stages. Each stage is tracked independently so
@@ -104,8 +104,10 @@ func RecordError(stage string, dur time.Duration) {
 	durationSeconds.WithLabelValues(stage).Observe(dur.Seconds())
 }
 
-// MetricsHandler returns the Prometheus /metrics exposition handler. Mount it
-// on an http.ServeMux at "/metrics" or use it with http.ListenAndServe.
+// MetricsHandler returns the Prometheus /metrics exposition handler.
+//
+// Deprecated: use metrics.MetricsHandler — single exported handler for the
+// whole go-kit module. Will be removed in the next major version.
 func MetricsHandler() http.Handler {
-	return promhttp.Handler()
+	return metrics.MetricsHandler()
 }
