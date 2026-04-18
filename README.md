@@ -18,6 +18,7 @@ go get github.com/anatolykoptev/go-kit
 | [`hedge`](#hedge) | Hedged requests — race primary vs backup, first success wins | stdlib |
 | [`ratelimit`](#ratelimit) | Token bucket rate limiter, per-key support, concurrency limiter | stdlib |
 | [`strutil`](#strutil) | Unicode-aware string helpers with case conversion | stdlib |
+| [`fileopt`](#fileopt) | Lossless PDF/PNG/WebP byte-level optimization via gs+qpdf/oxipng/cwebp subprocess wrappers, with per-stage Prometheus metrics | stdlib + prometheus/client_golang |
 
 All packages are independent — no internal cross-imports. Import only what you need.
 
@@ -528,6 +529,34 @@ ok = strutil.ContainsAny("hello world", []string{"world"}) // true
 | [go-startup](https://github.com/anatolykoptev/go-startup) | cache, env, llm, metrics, retry, strutil |
 | [go-nerv](https://github.com/anatolykoptev/go-nerv) | env, llm, metrics |
 | [gigiena-teksta](https://github.com/anatolykoptev/gigiena-teksta) | env, llm, metrics |
+
+## fileopt
+
+Lossless byte-level optimization for PDF/PNG/WebP via subprocess wrappers over `gs`+`qpdf`, `oxipng`, and `cwebp`. Designed for services that generate or receive documents and want to reduce payload size before disk writes, uploads, or LLM input.
+
+```go
+import "github.com/anatolykoptev/go-kit/fileopt"
+
+// Dispatch by extension
+opt, err := fileopt.OptimizeBytes(ctx, data,
+    fileopt.KindFromExt(filepath.Ext(filename)),
+    fileopt.LevelEbook, 80)
+
+// Or call specific optimizer
+opt, err := fileopt.OptimizePNG(ctx, data)
+opt, err := fileopt.OptimizePDF(ctx, data, fileopt.LevelEbook)
+opt, err := fileopt.OptimizeWebP(ctx, data, 80)
+
+// Expose Prometheus metrics
+mux.Handle("/metrics", fileopt.MetricsHandler())
+```
+
+**Guarantees:**
+- Lossless-by-default: size-bailout guard returns original when a stage would grow the file (cwebp gradient anti-pattern).
+- Content-aware: text-only PDFs skip gs stage (10-16× speedup; qpdf alone carries the work).
+- Per-stage Prometheus metrics: `gokit_fileopt_{calls_total, duration_seconds, ratio, bytes_before_total, bytes_after_total}` labeled by `stage` (gs/qpdf/oxipng/cwebp) and `result` (success/skipped/error).
+
+**System binary overrides:** `FILEOPT_GS_PATH`, `FILEOPT_QPDF_PATH`, `FILEOPT_OXIPNG_PATH`, `FILEOPT_CWEBP_PATH`. Missing binary → warn log + original bytes (never fails the caller).
 
 ## License
 
