@@ -21,6 +21,7 @@ go get github.com/anatolykoptev/go-kit
 | [`fileopt`](#fileopt) | Lossless PDF/PNG/WebP byte-level optimization via gs+qpdf/oxipng/cwebp subprocess wrappers, with per-stage Prometheus metrics | stdlib + prometheus/client_golang |
 | [`breaker`](doc/breaker.md) | 3-state circuit breaker with exponential cooldown, jitter, probe slots, `Execute[T]` generic wrapper, `HTTPDoer` preset, and per-key `Pool` | stdlib |
 | [`eventbus`](doc/eventbus.md) | In-process pub/sub with dot-separated topics and wildcard pattern matching (`*`, `**`); 64-slot buffered channels, drop-on-full semantics | stdlib |
+| [`rerank`](#rerank) | Cohere-compatible cross-encoder rerank HTTP client for embed-server / TEI / Cohere / Jina / Voyage / Mixedbread. Best-effort — any error returns input unchanged. | stdlib + prometheus/client_golang |
 
 All packages are independent — no internal cross-imports. Import only what you need.
 
@@ -559,6 +560,37 @@ mux.Handle("/metrics", fileopt.MetricsHandler())
 - Per-stage Prometheus metrics: `gokit_fileopt_{calls_total, duration_seconds, ratio, bytes_before_total, bytes_after_total}` labeled by `stage` (gs/qpdf/oxipng/cwebp) and `result` (success/skipped/error).
 
 **System binary overrides:** `FILEOPT_GS_PATH`, `FILEOPT_QPDF_PATH`, `FILEOPT_OXIPNG_PATH`, `FILEOPT_CWEBP_PATH`. Missing binary → warn log + original bytes (never fails the caller).
+
+## rerank
+
+Cohere-shape HTTP client for cross-encoder rerank endpoints. Compatible with `embed-server` self-hosted, HuggingFace TEI, and Cohere / Jina / Voyage / Mixedbread hosted providers.
+
+```go
+import "github.com/anatolykoptev/go-kit/rerank"
+
+c := rerank.New(rerank.Config{
+    URL:     "http://embed-server:8082",
+    Model:   "gte-multi-rerank",
+    Timeout: 4 * time.Second,
+    MaxDocs: 20,
+}, nil)
+
+scored := c.Rerank(ctx, query, []rerank.Doc{
+    {ID: "u1", Text: "..."},
+    {ID: "u2", Text: "..."},
+})
+// scored sorted by .Score desc; .OrigRank preserved; zero Score for docs the server didn't rank.
+```
+
+**Guarantees:**
+- Best-effort: any error (timeout, non-2xx, decode) returns input unchanged with `slog.Warn` and never propagates a `error` value — pipelines always move forward.
+- Zero-value `Config.URL` disables the client; `Rerank` returns input unchanged, `Available()` returns `false`.
+- Head/tail split by `MaxDocs`: docs beyond the cap are preserved in their original order after the reranked head.
+- `MaxCharsPerDoc` (rune-aware, UTF-8 safe) bounds per-doc text shipped to the server — protects against `O(seq²)` cross-encoder attention blowup on long inputs.
+
+**Prometheus:** `rerank_requests_total{model,status}` (counter), `rerank_duration_seconds{model}` (histogram, buckets 0.05..10s).
+
+**Auth:** `Config.APIKey` sets `Authorization: Bearer <key>` — required for Cohere/Jina/Voyage/Mixedbread hosted; leave empty for self-hosted embed-server / TEI.
 
 ## License
 
