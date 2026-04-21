@@ -230,3 +230,21 @@ func TestAvailable(t *testing.T) {
 		}
 	})
 }
+
+func TestMetrics_StatusLabelCoverage(t *testing.T) {
+	// Smoke-test: ensure both ok and error paths bump the counter without
+	// crashing. We don't assert count values (promauto uses global state
+	// and other tests may have incremented already).
+	srvOK := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cohereResponse{Results: []cohereResult{}})
+	})
+	cOK := New(Config{URL: srvOK.URL, Model: "t", Timeout: time.Second}, nil)
+	_ = cOK.Rerank(context.Background(), "q", []Doc{{ID: "a", Text: "x"}})
+
+	srvErr := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	cErr := New(Config{URL: srvErr.URL, Model: "t", Timeout: time.Second}, nil)
+	_ = cErr.Rerank(context.Background(), "q", []Doc{{ID: "a", Text: "x"}})
+}
