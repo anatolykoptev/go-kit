@@ -19,7 +19,7 @@ type Config struct {
 	URL            string        // base URL, e.g. "http://embed-server:8082"
 	Model          string        // model name in request body
 	APIKey         string        // optional Bearer token (Cohere hosted providers)
-	Timeout        time.Duration // per-request HTTP timeout
+	Timeout        time.Duration // per-request HTTP timeout (applied via context.WithTimeout, NOT http.Client.Timeout)
 	MaxDocs        int           // cap on docs sent (0 → defaultMaxDocs)
 	MaxCharsPerDoc int           // rune-aware truncation (0 disables)
 }
@@ -42,7 +42,7 @@ type Scored struct {
 type Client struct {
 	cfg    Config
 	logger *slog.Logger
-	http   *http.Client
+	hc     *http.Client
 }
 
 // New returns a configured client. logger=nil uses slog.Default().
@@ -53,7 +53,7 @@ func New(cfg Config, logger *slog.Logger) *Client {
 	return &Client{
 		cfg:    cfg,
 		logger: logger,
-		http:   &http.Client{},
+		hc:     &http.Client{},
 	}
 }
 
