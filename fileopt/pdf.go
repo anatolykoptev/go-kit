@@ -17,7 +17,7 @@ const pdfOptimizeTimeout = 60 * time.Second
 //  1. ghostscript with the selected level (skipped when the PDF appears to
 //     contain no raster images — measured waste on text-only PDFs was ~125ms
 //     for 0.14% reduction)
-//  2. qpdf structural recompression (lossless, independent of content)
+//  2. qpdf recompression + linearization for Fast Web View (lossless)
 //
 // Missing binaries are non-fatal: returns original bytes + warn log. The
 // final output is guaranteed to be <= input (bail-out guard).
@@ -99,9 +99,9 @@ func gsStage(runCtx context.Context, data []byte, in, out string, level Level) (
 	return optimized, nil
 }
 
-// qpdfStage runs qpdf structural recompression on `gsOutPath` (which holds
-// either gs output or the original bytes when gs was skipped). Guarantees
-// the final bytes are <= the gs-stage bytes (bail-out guard).
+// qpdfStage runs qpdf with --linearize (Fast Web View) + structural
+// recompression on `gsOutPath` (either gs output or original when gs was
+// skipped). Guarantees the final bytes are <= the gs-stage bytes (bail-out guard).
 func qpdfStage(runCtx context.Context, optimized []byte, gsOutPath, dir string) ([]byte, error) {
 	qpdfBin := resolveBinary("FILEOPT_QPDF_PATH", "qpdf")
 	if qpdfBin == "" || !binaryExists(qpdfBin) {
@@ -112,6 +112,7 @@ func qpdfStage(runCtx context.Context, optimized []byte, gsOutPath, dir string) 
 	qpdfStart := time.Now()
 	//nolint:gosec // qpdfBin resolved via PATH; paths are our temp files
 	qpdfCmd := exec.CommandContext(runCtx, qpdfBin,
+		"--linearize",
 		"--recompress-flate",
 		"--object-streams=generate",
 		gsOutPath,
@@ -129,9 +130,6 @@ func qpdfStage(runCtx context.Context, optimized []byte, gsOutPath, dir string) 
 		return optimized, nil
 	}
 	RecordSuccess(StageQPDF, len(optimized), len(final), time.Since(qpdfStart))
-	if len(final) >= len(optimized) {
-		return optimized, nil
-	}
 	return final, nil
 }
 
