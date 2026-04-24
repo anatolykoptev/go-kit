@@ -110,9 +110,44 @@ func TestOptimizePDF_SkipsGsForTextOnly(t *testing.T) {
 	if !bytes.HasPrefix(optimized, []byte("%PDF-")) {
 		t.Fatalf("optimized output is not a valid PDF: %q", optimized[:min(16, len(optimized))])
 	}
-	// qpdf should still do useful work — expect at least 1 byte of reduction
-	// (structural recompression almost always shrinks a gs-generated PDF).
-	if len(optimized) >= len(orig) {
-		t.Fatalf("qpdf stage did not reduce text-only PDF: %d >= %d", len(optimized), len(orig))
+	// With linearization, qpdf may add a few bytes of header overhead on tiny
+	// text-only PDFs — that is acceptable. Verify output is a valid PDF.
+	if len(optimized) == 0 {
+		t.Fatalf("optimized output is empty")
+	}
+}
+
+func TestOptimizePDF_IsLinearized(t *testing.T) {
+	if _, err := exec.LookPath("gs"); err != nil {
+		t.Skip("gs required to generate fixture PDF")
+	}
+	if _, err := exec.LookPath("qpdf"); err != nil {
+		t.Skip("qpdf required for linearization check")
+	}
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "in.pdf")
+	writeCmd := exec.Command("gs",
+		"-sDEVICE=pdfwrite", "-dNOPAUSE", "-dBATCH", "-dQUIET",
+		"-sOutputFile="+src, "-c",
+		"/Helvetica findfont 12 scalefont setfont 72 720 moveto (linearize test) show showpage",
+	)
+	if out, err := writeCmd.CombinedOutput(); err != nil {
+		t.Fatalf("gs fixture gen failed: %v\n%s", err, out)
+	}
+	orig, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	optimized, err := OptimizePDF(context.Background(), orig, LevelEbook)
+	if err != nil {
+		t.Fatalf("OptimizePDF: %v", err)
+	}
+	// A linearized PDF must contain the /Linearized marker in the first 1KB.
+	header := optimized
+	if len(header) > 1024 {
+		header = header[:1024]
+	}
+	if !bytes.Contains(header, []byte("/Linearized")) {
+		t.Fatalf("expected /Linearized marker in first 1KB of output; got: %q", header)
 	}
 }
