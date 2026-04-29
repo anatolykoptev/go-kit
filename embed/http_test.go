@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 )
 
 func testLogger() *slog.Logger {
@@ -120,5 +121,77 @@ func TestHTTPEmbedder_TrailingSlash(t *testing.T) {
 	e := NewHTTPEmbedder("http://embed:8080/", "m", 1024, testLogger())
 	if e.baseURL != "http://embed:8080" {
 		t.Errorf("trailing slash not stripped: %q", e.baseURL)
+	}
+}
+
+// TestHTTPEmbedder_DefaultTimeout verifies the constructor applies the
+// 30s default when no WithHTTPTimeout option is passed. Guards against
+// regressions if the default constant is renamed or removed.
+func TestHTTPEmbedder_DefaultTimeout(t *testing.T) {
+	e := NewHTTPEmbedder("http://embed:8080", "m", 1024, testLogger())
+	if e.client.Timeout != httpEmbedDefaultTimeout {
+		t.Errorf("default timeout: want %v, got %v", httpEmbedDefaultTimeout, e.client.Timeout)
+	}
+}
+
+// TestHTTPEmbedder_WithHTTPTimeout verifies WithHTTPTimeout overrides the default.
+func TestHTTPEmbedder_WithHTTPTimeout(t *testing.T) {
+	cases := []struct {
+		name string
+		opt  time.Duration
+		want time.Duration
+	}{
+		{"override_120s", 120 * time.Second, 120 * time.Second},
+		{"override_5s", 5 * time.Second, 5 * time.Second},
+		{"zero_keeps_default", 0, httpEmbedDefaultTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := NewHTTPEmbedder("http://embed:8080", "m", 1024, testLogger(), WithHTTPTimeout(tc.opt))
+			if e.client.Timeout != tc.want {
+				t.Errorf("timeout: want %v, got %v", tc.want, e.client.Timeout)
+			}
+		})
+	}
+}
+
+// TestNewClient_WithTimeout_HTTPBackend verifies that WithTimeout passed to
+// the v2 NewClient factory is honoured by the underlying HTTPEmbedder.
+// Regression guard for G6: previously WithTimeout was silently dropped on
+// the HTTP path (only Ollama consulted cfg.timeout).
+func TestNewClient_WithTimeout_HTTPBackend(t *testing.T) {
+	cl, err := NewClient("http://embed:8082",
+		WithModel("test-model"),
+		WithDim(1024),
+		WithTimeout(120*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	h, ok := cl.inner.(*HTTPEmbedder)
+	if !ok {
+		t.Fatalf("expected *HTTPEmbedder inner, got %T", cl.inner)
+	}
+	if h.client.Timeout != 120*time.Second {
+		t.Errorf("HTTP backend timeout: want 120s, got %v", h.client.Timeout)
+	}
+}
+
+// TestNewClient_WithoutTimeout_HTTPBackend verifies that omitting WithTimeout
+// preserves the 30s default on the HTTP path.
+func TestNewClient_WithoutTimeout_HTTPBackend(t *testing.T) {
+	cl, err := NewClient("http://embed:8082",
+		WithModel("test-model"),
+		WithDim(1024),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	h, ok := cl.inner.(*HTTPEmbedder)
+	if !ok {
+		t.Fatalf("expected *HTTPEmbedder inner, got %T", cl.inner)
+	}
+	if h.client.Timeout != httpEmbedDefaultTimeout {
+		t.Errorf("default HTTP timeout: want %v, got %v", httpEmbedDefaultTimeout, h.client.Timeout)
 	}
 }
