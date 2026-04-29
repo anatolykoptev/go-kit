@@ -77,6 +77,14 @@ func TestCacheKey_DifferentDocPrefix_DifferentKey(t *testing.T) {
 	}
 }
 
+func TestCacheKey_DifferentQueryPrefix_DifferentKey(t *testing.T) {
+	k1 := cacheKey("model", 1024, "", "query: ", "text")
+	k2 := cacheKey("model", 1024, "", "search: ", "text")
+	if k1 == k2 {
+		t.Error("different queryPrefix must produce different cache keys")
+	}
+}
+
 func TestCacheKey_DifferentText_DifferentKey(t *testing.T) {
 	k1 := cacheKey("model", 1024, "", "", "text A")
 	k2 := cacheKey("model", 1024, "", "", "text B")

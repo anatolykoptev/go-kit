@@ -11,8 +11,23 @@ import (
 // Implementations MUST be safe for concurrent reads and writes.
 //
 // TTL semantics, eviction policy, and persistence are caller concerns.
-// Cache key invalidation on model / dim / docPrefix / queryPrefix change is
-// automatic: the key includes all parameters that affect the output vector.
+// Cache key invalidation on model/dim/prefix change is automatic
+// (key includes all parameters that affect output vector).
+//
+// Trade-offs:
+//   - On partial-miss, ALL N vectors are re-Set after the backend call (not
+//     only the missing ones). For Redis-backed caches with non-trivial Set
+//     cost, implementations may dedupe internally. In-process LRU/sync.Map
+//     caches: noop (Set is O(1) and idempotent).
+//
+// Future-proofing — these vector-affecting fields are NOT YET in cacheKey
+// because they are static or single-valued today; once they become per-call
+// settable, cacheKey will be extended:
+//   - Voyage input_type ("document" vs "query") — hardcoded "query" today
+//   - Ollama normalize_l2 toggle — applied unconditionally today
+//
+// Callers persisting a cache across Client lifecycles SHOULD include their own
+// config-hash prefix on keys to avoid cross-config pollution.
 type Cache interface {
 	// Get returns the cached embedding for the given key. ok=false if not cached.
 	// Implementations must NOT panic on ctx cancellation; return ok=false instead.
@@ -71,6 +86,9 @@ func cacheKey(model string, dim int, docPrefix, queryPrefix, text string) string
 func tryCacheFullBatchGet(ctx context.Context, cache Cache, model string, dim int, docPrefix, queryPrefix string, texts []string) [][]float32 {
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
+		if ctx.Err() != nil {
+			return nil // ctx cancelled — abort cache lookup
+		}
 		vec, ok := cache.Get(ctx, cacheKey(model, dim, docPrefix, queryPrefix, t))
 		if !ok {
 			return nil // partial miss — fall through to backend
