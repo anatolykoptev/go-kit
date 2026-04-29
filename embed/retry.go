@@ -107,8 +107,9 @@ func do[T any](ctx context.Context, p RetryPolicy, model string, obs Observer, f
 		// Determine if we should retry.
 		var statusCode int
 		var isHTTPErr bool
-		if e, ok := err.(errHTTPStatus); ok { //nolint:errorlint
-			statusCode = e.Code
+		var httpStatusErr *errHTTPStatus
+		if errors.As(err, &httpStatusErr) {
+			statusCode = httpStatusErr.Code
 			isHTTPErr = true
 		}
 
@@ -132,12 +133,18 @@ func do[T any](ctx context.Context, p RetryPolicy, model string, obs Observer, f
 		safeCall(func() { obs.OnRetry(ctx, nextAttempt, err) })
 
 		// Backoff sleep with ctx cancellation support.
+		// time.NewTimer + Stop() drain avoids the timer leak that time.After
+		// causes when ctx fires before the sleep expires.
 		sleep := p.computeBackoff(attempt)
 		if sleep > 0 {
+			timer := time.NewTimer(sleep)
 			select {
 			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
 				return result, ctx.Err()
-			case <-time.After(sleep):
+			case <-timer.C:
 			}
 		}
 	}

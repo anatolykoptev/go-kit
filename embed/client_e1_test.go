@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -26,7 +29,7 @@ func TestClient_RetryOn5xx(t *testing.T) {
 	c := newClientWithStub("m", p, func(_ context.Context, texts []string) ([][]float32, error) {
 		attempts++
 		if attempts < 2 {
-			return nil, errHTTPStatus{Code: 503}
+			return nil, &errHTTPStatus{Code: 503}
 		}
 		return okVecs(len(texts)), nil
 	})
@@ -50,7 +53,7 @@ func TestClient_NoRetryOn4xx(t *testing.T) {
 
 	c := newClientWithStub("m", p, func(_ context.Context, _ []string) ([][]float32, error) {
 		attempts++
-		return nil, errHTTPStatus{Code: 400}
+		return nil, &errHTTPStatus{Code: 400}
 	})
 
 	res, err := c.EmbedWithResult(context.Background(), []string{"hello"})
@@ -152,7 +155,7 @@ func TestClient_RetryEmitsObserverHook(t *testing.T) {
 			embedFn: func(_ context.Context, texts []string) ([][]float32, error) {
 				attempts++
 				if attempts < 3 {
-					return nil, errHTTPStatus{Code: 503}
+					return nil, &errHTTPStatus{Code: 503}
 				}
 				return okVecs(len(texts)), nil
 			},
@@ -221,5 +224,86 @@ type circuitCapturingObserver struct {
 func (o *circuitCapturingObserver) OnCircuitTransition(_ context.Context, from, to CircuitState) {
 	if o.onTransition != nil {
 		o.onTransition(from, to)
+	}
+}
+
+// TestClient_NoRetryOn4xx_TypedError verifies the 4xx-no-retry guard works
+// END-TO-END through the real HTTPEmbedder backend (not via direct errHTTPStatus
+// injection).
+//
+// Pre-fix this test would have FAILED: backends returned string-formatted errors,
+// retry.do() type-assert missed, every 4xx caused 3 retry attempts instead of 1.
+func TestClient_NoRetryOn4xx_TypedError(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest) // 400
+		w.Write([]byte(`{"error":"bad request"}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(srv.URL,
+		WithBackend("http"),
+		WithModel("test"),
+		WithDim(8),
+		WithRetry(RetryPolicy{
+			MaxAttempts:     3,
+			BaseBackoff:     1 * time.Millisecond,
+			RetryableStatus: []int{500, 502, 503, 504},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, _ := c.EmbedWithResult(context.Background(), []string{"hello"})
+	if res.Status != StatusDegraded {
+		t.Errorf("status: got %v, want StatusDegraded", res.Status)
+	}
+	// CRITICAL: 4xx must trigger ONE attempt only — no retries.
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("attempts: got %d, want 1 (4xx must not retry)", got)
+	}
+}
+
+// TestClient_NoFallbackOn4xx_TypedError verifies that a 400 from the primary
+// backend does NOT trigger the fallback — secondary must not be called.
+//
+// Pre-fix: isClientError() used a naked type-assert on the unboxed error value,
+// which never matched strings returned by backends — every 4xx triggered fallback.
+func TestClient_NoFallbackOn4xx_TypedError(t *testing.T) {
+	var secondaryCalls atomic.Int32
+
+	// Primary returns 400 via httptest server (real HTTPEmbedder path).
+	primarySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"bad request"}`)) //nolint:errcheck
+	}))
+	defer primarySrv.Close()
+
+	primary, err := NewClient(primarySrv.URL,
+		WithBackend("http"),
+		WithModel("primary"),
+		WithDim(8),
+		WithRetry(NoRetry),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondary := newClientWithStub("secondary", NoRetry, func(_ context.Context, texts []string) ([][]float32, error) {
+		secondaryCalls.Add(1)
+		return okVecs(len(texts)), nil
+	})
+	primary.fallback = secondary
+
+	res, _ := primary.EmbedWithResult(context.Background(), []string{"hello"})
+
+	if res.Status != StatusDegraded {
+		t.Errorf("status: got %v, want StatusDegraded", res.Status)
+	}
+	// Secondary MUST NOT be called when primary returns 4xx.
+	if got := secondaryCalls.Load(); got != 0 {
+		t.Errorf("secondary calls: got %d, want 0 (4xx must not trigger fallback)", got)
 	}
 }

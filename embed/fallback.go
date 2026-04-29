@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -51,25 +52,25 @@ func isClientError(err error) bool {
 	if err == nil {
 		return false
 	}
-	e, ok := err.(errHTTPStatus) //nolint:errorlint
-	if !ok {
-		return false
+	var statusErr *errHTTPStatus
+	if errors.As(err, &statusErr) {
+		return statusErr.Code >= 400 && statusErr.Code < 500
 	}
-	return e.Code >= 400 && e.Code < 500
+	return false
 }
 
-// errHTTPStatus is a typed error carrying the HTTP status code from a non-2xx
-// response. Using a typed error (rather than a plain fmt.Errorf string) allows
-// do() to type-assert the code for RetryableStatus filtering without parsing
-// the error string.
+// errHTTPStatus is a typed error carrying the HTTP status code and response body
+// from a non-2xx response. Using a typed error (rather than a plain fmt.Errorf
+// string) allows do() and isClientError() to inspect the status code via
+// errors.As — works correctly through fmt.Errorf("%w", ...) wrapping chains.
 //
-// The Error() string is "http status <code>" — identical to the rerank package's
-// errHTTPStatus format, preserving backward compatibility for any caller that
-// does strings.Contains(err.Error(), "http status").
+// The Error() string is "status <code>: <body>" — callers that do
+// strings.Contains(err.Error(), "status NNN") continue to work.
 type errHTTPStatus struct {
 	Code int
+	Body string
 }
 
-func (e errHTTPStatus) Error() string {
-	return fmt.Sprintf("http status %d", e.Code)
+func (e *errHTTPStatus) Error() string {
+	return fmt.Sprintf("status %d: %s", e.Code, e.Body)
 }

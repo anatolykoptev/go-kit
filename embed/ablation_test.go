@@ -20,7 +20,7 @@ func TestAblation_503WithRetryAndFallback(t *testing.T) {
 	primaryFn := func(_ context.Context, texts []string) ([][]float32, error) {
 		primaryCalls.Add(1)
 		if rand.Float64() < failRate { //nolint:gosec
-			return nil, errHTTPStatus{Code: 503}
+			return nil, &errHTTPStatus{Code: 503}
 		}
 		return okVecs(len(texts)), nil
 	}

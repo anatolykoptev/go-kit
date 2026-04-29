@@ -48,7 +48,7 @@ func TestRetryPolicy_MaxAttempts(t *testing.T) {
 	attempts := 0
 	_, err := do(context.Background(), p, "model", noopObserver{}, func() (int, error) {
 		attempts++
-		return 0, errHTTPStatus{Code: 503}
+		return 0, &errHTTPStatus{Code: 503}
 	})
 	if err == nil {
 		t.Fatal("expected error after all attempts")
@@ -69,7 +69,7 @@ func TestRetryPolicy_SucceedsOnSecondAttempt(t *testing.T) {
 	result, err := do(context.Background(), p, "model", noopObserver{}, func() (string, error) {
 		attempts++
 		if attempts < 2 {
-			return "", errHTTPStatus{Code: 503}
+			return "", &errHTTPStatus{Code: 503}
 		}
 		return "ok", nil
 	})
@@ -94,7 +94,7 @@ func TestRetryPolicy_4xxNoRetry(t *testing.T) {
 	attempts := 0
 	_, err := do(context.Background(), p, "model", noopObserver{}, func() (int, error) {
 		attempts++
-		return 0, errHTTPStatus{Code: 400}
+		return 0, &errHTTPStatus{Code: 400}
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -118,7 +118,7 @@ func TestRetryPolicy_OnRetryHookFires(t *testing.T) {
 	attempts := 0
 	do(context.Background(), p, "model", obs, func() (int, error) { //nolint:errcheck
 		attempts++
-		return 0, errHTTPStatus{Code: 503}
+		return 0, &errHTTPStatus{Code: 503}
 	})
 	// Expect 2 OnRetry calls (retries 1 and 2; initial attempt not a retry).
 	if len(hookAttempts) != 2 {
@@ -146,7 +146,7 @@ func TestRetryPolicy_ContextCancel(t *testing.T) {
 
 	start := time.Now()
 	_, err := do(ctx, p, "model", noopObserver{}, func() (int, error) {
-		return 0, errHTTPStatus{Code: 503}
+		return 0, &errHTTPStatus{Code: 503}
 	})
 	elapsed := time.Since(start)
 

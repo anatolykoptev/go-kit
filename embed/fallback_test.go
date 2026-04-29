@@ -90,7 +90,7 @@ func TestFallback_PrimaryDegradedSecondaryCalled(t *testing.T) {
 func TestFallback_PrimaryClientErrorNoSecondary(t *testing.T) {
 	// 4xx error — should not try secondary.
 	secondaryCalled := false
-	clientErr := errHTTPStatus{Code: 400}
+	clientErr := &errHTTPStatus{Code: 400}
 
 	primary := makeStubClient("primary", func(_ context.Context, _ []string) ([][]float32, error) {
 		return nil, clientErr
@@ -148,11 +148,11 @@ func TestIsClientError(t *testing.T) {
 		want bool
 	}{
 		{nil, false},
-		{errHTTPStatus{Code: 400}, true},
-		{errHTTPStatus{Code: 422}, true},
-		{errHTTPStatus{Code: 499}, true},
-		{errHTTPStatus{Code: 500}, false},
-		{errHTTPStatus{Code: 200}, false},
+		{&errHTTPStatus{Code: 400}, true},
+		{&errHTTPStatus{Code: 422}, true},
+		{&errHTTPStatus{Code: 499}, true},
+		{&errHTTPStatus{Code: 500}, false},
+		{&errHTTPStatus{Code: 200}, false},
 		{errors.New("some other error"), false},
 	}
 	for _, tc := range cases {
