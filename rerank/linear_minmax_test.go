@@ -60,7 +60,7 @@ func TestLinearMinMax_WeightZeroSkips(t *testing.T) {
 
 	got := LinearMinMax([]float64{1.0, 0.0}, listA, listB)
 
-	// listA: span=0 → winner gets 0.5 * w=1.0 = 0.5.
+	// listA: span=0 → winner gets 0 * w=1.0 = 0 (max==min returns 0).
 	// listB: w=0 → not processed at all → "irrelevant" never enters output.
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1 (weight=0 must skip its list entirely): %+v", len(got), got)
@@ -73,42 +73,27 @@ func TestLinearMinMax_WeightZeroSkips(t *testing.T) {
 	}
 }
 
-// TestLinearMinMax_NegativeWeight asserts negative weights act as a penalty
-// (push items down) without corrupting other contributions.
-func TestLinearMinMax_NegativeWeight(t *testing.T) {
-	listA := ScoredIDList{
-		{ID: "good", Score: 10},
-		{ID: "bad", Score: 0},
-	}
-	listB := ScoredIDList{
-		{ID: "good", Score: 0},  // good penalized by listB
-		{ID: "bad", Score: 10},
-	}
-	// Per-list MinMax: span=10 in both.
-	//   listA normalized: good=1.0, bad=0.0
-	//   listB normalized: good=0.0, bad=1.0
-	// Weights = [+1, -1]:
-	//   good = +1*1.0 + (-1)*0.0 = +1.0
-	//   bad  = +1*0.0 + (-1)*1.0 = -1.0
-	got := LinearMinMax([]float64{1.0, -1.0}, listA, listB)
-	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2", len(got))
-	}
-	if got[0].ID != "good" || got[1].ID != "bad" {
-		t.Errorf("order: got %+v, want [good, bad]", got)
-	}
-	if math.Abs(got[0].Score-1.0) > 1e-12 {
-		t.Errorf("score(good) = %v, want 1.0", got[0].Score)
-	}
-	if math.Abs(got[1].Score-(-1.0)) > 1e-12 {
-		t.Errorf("score(bad) = %v, want -1.0", got[1].Score)
-	}
+// TestLinearMinMax_NegativeWeightPanics asserts that negative weights are
+// rejected as a programmer error. Matches WeightedRRF policy: if a retriever
+// is anti-correlated with relevance, remove it from the pipeline.
+func TestLinearMinMax_NegativeWeightPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on negative weight, got none")
+		}
+	}()
+	LinearMinMax(
+		[]float64{1.0, -1.0},
+		ScoredIDList{{ID: "a", Score: 1}},
+		ScoredIDList{{ID: "b", Score: 1}},
+	)
 }
 
-// TestLinearMinMax_MaxEqMinFlat covers the degenerate per-list path: all
-// identical scores or a single item. Each ID gets the flat 0.5 contribution
-// (weighted).
-func TestLinearMinMax_MaxEqMinFlat(t *testing.T) {
+// TestLinearMinMax_MaxEqMinReturnsZero covers the degenerate per-list path:
+// all identical scores or a single item. Each ID gets a 0 contribution from
+// that list (no usable ranking signal). Matches Elasticsearch's
+// linear_retriever precedent.
+func TestLinearMinMax_MaxEqMinReturnsZero(t *testing.T) {
 	tests := []struct {
 		name string
 		list ScoredIDList
@@ -126,7 +111,7 @@ func TestLinearMinMax_MaxEqMinFlat(t *testing.T) {
 			if len(got) != len(tt.list) {
 				t.Fatalf("len = %d, want %d", len(got), len(tt.list))
 			}
-			want := 2.0 * linearMinMaxFlatScore
+			want := 2.0 * linearMinMaxFlatScore // = 0
 			for _, f := range got {
 				if math.Abs(f.Score-want) > 1e-12 {
 					t.Errorf("score(%q) = %v, want %v", f.ID, f.Score, want)

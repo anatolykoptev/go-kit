@@ -1,6 +1,9 @@
 package rerank
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // WeightedRRF fuses N ranked lists using Reciprocal Rank Fusion with per-list
 // weights:
@@ -18,20 +21,26 @@ import "sort"
 // k <= 0 falls back to DefaultRRFK.
 //
 // Weights must have the same length as lists. weight=0 makes a list contribute
-// nothing (effectively skipped). Negative weights are allowed and act as a
-// penalty (the list pushes its members toward the bottom).
+// nothing (effectively skipped). Weights must be ≥ 0; to suppress a retriever,
+// omit it instead of using a negative weight.
 //
 // All weights == 1.0 is mathematically equivalent to plain RRF(k, lists...);
 // callers can use that property to migrate gradually.
 //
 // Tie-breaking: same as RRF (stable, first-seen order across lists).
 //
-// Panics if len(weights) != len(lists). This is a programmer error, not a
-// runtime error: weights and lists are nearly always specified together at
-// config-parse time, and silent length-mismatch fallback would mask bugs.
+// Panics if len(weights) != len(lists), or if any weight is negative. These
+// are programmer errors, not runtime errors: weights and lists are nearly
+// always specified together at config-parse time, and silent fallback would
+// mask bugs.
 func WeightedRRF(k int, weights []float64, lists ...[]string) []Fused {
+	for i, w := range weights {
+		if w < 0 {
+			panic(fmt.Sprintf("rerank.WeightedRRF: weights[%d]=%g, weights must be ≥ 0; remove the retriever rather than negating it", i, w))
+		}
+	}
 	if len(weights) != len(lists) {
-		panic("rerank.WeightedRRF: len(weights) != len(lists)")
+		panic(fmt.Sprintf("rerank.WeightedRRF: len(weights)=%d != len(lists)=%d", len(weights), len(lists)))
 	}
 	if k <= 0 {
 		k = DefaultRRFK

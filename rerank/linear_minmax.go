@@ -1,11 +1,15 @@
 package rerank
 
+import "fmt"
+
 // linearMinMaxFlatScore is the per-list contribution applied when a list has
-// max == min (all identical scores, or a single item). 0.5 is chosen over 0
-// because the list DID retrieve the doc — treating it as "midpoint relevant"
-// is closer to operator intent than "irrelevant", and consistent with how
-// Elasticsearch's Linear Retriever documents the degenerate case.
-const linearMinMaxFlatScore = 0.5
+// max == min (all identical scores, or a single item). When max==min in a
+// list (all scores equal), the normalized contribution from that list is 0.
+// This matches Elasticsearch's linear_retriever precedent. Returning 0.5 was
+// incorrect — it injects a synthetic mid-range score that competes with real
+// signals from other lists. Returning 0 means "this list contains no usable
+// ranking signal for these docs".
+const linearMinMaxFlatScore = 0.0
 
 // LinearMinMax fuses N score-bearing lists by MinMax-normalizing each list's
 // scores into [0, 1] and summing per ID with caller-supplied weights:
@@ -17,25 +21,31 @@ const linearMinMaxFlatScore = 0.5
 // transparent, easily-debugged fused scores in the [0, Σw] range.
 //
 // Edge cases:
-//   - max == min in a list → all entries normalize to linearMinMaxFlatScore
-//     (= 0.5). The list cannot rank its own results, so it contributes a
-//     uniform "list saw this doc" signal. Weight still applies.
+//   - max == min in a list → all entries normalize to 0 (no usable ranking
+//     signal from that list for these docs). Matches Elasticsearch's
+//     linear_retriever precedent.
 //   - Empty list → contributes nothing.
-//   - Single-item list → falls into the max==min branch above (still gets
-//     the flat 0.5 weighted contribution).
+//   - Single-item list → falls into the max==min branch above (contributes 0).
 //   - weight=0 → list skipped entirely (no normalization performed; saves work).
-//   - Negative weight → allowed as a penalty term, identical handling to
-//     WeightedRRF.
 //   - Duplicate IDs inside one list: only the FIRST occurrence in that list
 //     contributes (mirrors RRF/DBSF "best first" rule).
 //
 // Tie-breaking: stable, first-seen order across lists.
 //
-// Panics if len(weights) != len(lists). This is a programmer error: weights
-// and lists are nearly always specified together at config-parse time.
+// Weights must be ≥ 0; to suppress a retriever, omit it instead of using a
+// negative weight.
+//
+// Panics if len(weights) != len(lists), or if any weight is negative. These
+// are programmer errors: weights and lists are nearly always specified
+// together at config-parse time.
 func LinearMinMax(weights []float64, lists ...ScoredIDList) []Fused {
+	for i, w := range weights {
+		if w < 0 {
+			panic(fmt.Sprintf("rerank.LinearMinMax: weights[%d]=%g, weights must be ≥ 0; remove the retriever rather than negating it", i, w))
+		}
+	}
 	if len(weights) != len(lists) {
-		panic("rerank.LinearMinMax: len(weights) != len(lists)")
+		panic(fmt.Sprintf("rerank.LinearMinMax: len(weights)=%d != len(lists)=%d", len(weights), len(lists)))
 	}
 
 	scores := make(map[string]float64)

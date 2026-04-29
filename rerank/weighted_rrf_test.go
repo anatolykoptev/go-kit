@@ -83,19 +83,6 @@ func TestWeightedRRF_TableDriven(t *testing.T) {
 			wantOrder: []string{"b", "a"},
 		},
 		{
-			name:    "negative weight pushes id down",
-			k:       k,
-			weights: []float64{1.0, -1.0},
-			lists: [][]string{
-				{"a", "b"},
-				{"a", "b"}, // identical list with negative weight cancels
-			},
-			// score(a) = 1/61 - 1/61 = 0
-			// score(b) = 1/62 - 1/62 = 0
-			// Tied at 0 → stable first-seen: a, b.
-			wantOrder: []string{"a", "b"},
-		},
-		{
 			name:    "k=0 falls back to default",
 			k:       0,
 			weights: []float64{1.0, 1.0},
@@ -148,6 +135,19 @@ func TestWeightedRRF_LengthMismatchPanics(t *testing.T) {
 		}
 	}()
 	WeightedRRF(DefaultRRFK, []float64{1.0}, []string{"a"}, []string{"b"})
+}
+
+// TestWeightedRRF_NegativeWeightPanics asserts that negative weights are
+// rejected as a programmer error. Negative weights are a footgun without a
+// real use case — if a retriever is anti-correlated with relevance, remove it
+// from the pipeline instead of subtracting its rankings.
+func TestWeightedRRF_NegativeWeightPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on negative weight, got none")
+		}
+	}()
+	WeightedRRF(DefaultRRFK, []float64{1.0, -0.5}, []string{"a"}, []string{"b"})
 }
 
 // TestWeightedRRF_LengthMismatchPanics_ZeroLists covers the other direction:
