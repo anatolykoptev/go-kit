@@ -3,10 +3,12 @@ module github.com/anatolykoptev/go-kit
 go 1.26
 
 require (
+	github.com/daulet/tokenizers v1.25.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/sony/gobreaker v1.0.0
+	github.com/yalue/onnxruntime_go v1.25.0
 )
 
 require (
