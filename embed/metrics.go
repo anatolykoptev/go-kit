@@ -18,6 +18,12 @@
 //   - embed_circuit_transition_total{backend, from, to} — counter
 //   - embed_giveup_total{backend, reason}          — counter
 //   - embed_fallback_used_total{primary, secondary} — counter
+//
+// E3 series:
+//
+//   - embed_cache_hit_total{model}      — counter (full-batch hit events, NOT per-text)
+//   - embed_cache_miss_total{model}     — counter (fall-through-to-backend events)
+//   - embed_cache_set_docs_total{model} — counter (texts written to cache, per-text)
 
 package embed
 
@@ -111,6 +117,39 @@ var (
 		},
 		[]string{"primary", "secondary"},
 	)
+
+	// ── E3 metrics ──────────────────────────────────────────────────────────────
+
+	// embedCacheHitTotal counts full-batch cache hit EVENTS (one per request
+	// where all texts were served from cache). NOT per-text: a 10-text request
+	// that fully hits is +1, not +10.
+	embedCacheHitTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_cache_hit_total",
+			Help: "Total full-batch cache hit events (one per request, not per text).",
+		},
+		[]string{"model"},
+	)
+
+	// embedCacheMissTotal counts cache miss EVENTS (one per request that fell
+	// through to the backend due to any partial or full cache miss).
+	embedCacheMissTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_cache_miss_total",
+			Help: "Total cache miss events (one per request that fell through to backend).",
+		},
+		[]string{"model"},
+	)
+
+	// embedCacheSetDocsTotal counts individual text embeddings written to cache
+	// after a successful backend call (doc-level granularity: +N for N texts).
+	embedCacheSetDocsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_cache_set_docs_total",
+			Help: "Total text embeddings written to cache after backend call (per-text).",
+		},
+		[]string{"model"},
+	)
 )
 
 // init pre-registers retry-reason labels at zero so all four series are
@@ -176,6 +215,23 @@ func recordGiveup(backend, reason string) {
 // recordFallbackUsed increments the fallback counter.
 func recordFallbackUsed(primary, secondary string) {
 	embedFallbackUsedTotal.WithLabelValues(primary, secondary).Inc()
+}
+
+// ── E3 helpers ───────────────────────────────────────────────────────────────
+
+// recordCacheHit increments the cache-hit EVENT counter by 1 (one per request).
+func recordCacheHit(model string) {
+	embedCacheHitTotal.WithLabelValues(model).Inc()
+}
+
+// recordCacheMiss increments the cache-miss EVENT counter by 1 (one per request).
+func recordCacheMiss(model string) {
+	embedCacheMissTotal.WithLabelValues(model).Inc()
+}
+
+// recordCacheSet adds n to the cache-set-docs counter (per-text granularity).
+func recordCacheSet(model string, n int) {
+	embedCacheSetDocsTotal.WithLabelValues(model).Add(float64(n))
 }
 
 // itoa converts a non-negative integer to its decimal string representation.

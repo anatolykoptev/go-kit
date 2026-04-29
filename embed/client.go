@@ -21,6 +21,13 @@ type Client struct {
 	retry    RetryPolicy
 	circuit  *CircuitBreaker
 	fallback *Client
+
+	// E3: pluggable cache; nil = disabled.
+	// docPrefix / queryPrefix feed the cache key (E4 will unify across all backends;
+	// for now populated from Ollama-specific opts).
+	cache       Cache
+	docPrefix   string
+	queryPrefix string
 }
 
 // Embed satisfies the Embedder interface. Delegates to inner (via callBackendResilient
