@@ -25,15 +25,36 @@ func NewClient(url string, opts ...Opt) (*Client, error) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	return newClientFromInternal(cfg)
+}
+
+// newClientFromInternal builds a *Client from an already-resolved cfgInternal.
+// Used by both NewClient (v2) and the v1 New() wrapper after option translation.
+// E1: finalises the CircuitBreaker wiring (model + observer hook) now that all
+// options have been applied.
+func newClientFromInternal(cfg *cfgInternal) (*Client, error) {
 	inner, err := newFromInternal(cfg)
 	if err != nil {
 		return nil, err
 	}
+	model := modelFromEmbedder(inner)
+
+	// E1: wire circuit breaker. If WithCircuit set a sentinel CB, rebuild it
+	// with the final model name and observer so the transition hook works.
+	var cb *CircuitBreaker
+	if cfg.circuit != nil {
+		cbCfg := cfg.circuit.cfg
+		cb = NewCircuitBreaker(cbCfg, model, makeCircuitHook(model, cfg.observer))
+	}
+
 	return &Client{
 		inner:    inner,
 		observer: cfg.observer,
 		logger:   cfg.logger,
-		model:    modelFromEmbedder(inner),
+		model:    model,
+		retry:    cfg.retry,
+		circuit:  cb,
+		fallback: cfg.fallback,
 	}, nil
 }
 
@@ -55,47 +76,67 @@ func WithDryRun() EmbedOpt {
 //
 // Lifecycle:
 //
-//	OnBeforeEmbed → backend.Embed → OnAfterEmbed (with status + duration)
+//	OnBeforeEmbed → (fallback check) → callBackendResilient → OnAfterEmbed
 //
 // Status semantics:
 //   - StatusOk       — request succeeded, vectors are valid
 //   - StatusDegraded — request failed, Err is set
+//   - StatusFallback — primary degraded, secondary succeeded (E1)
 //   - StatusSkipped  — nil inner, empty texts, or DryRun enabled
 //
 // E1 wires retry/circuit/fallback on top of this call.
 // E2 wires auto-batching, E3 wires cache, E4 wires per-text Status reasoning.
 func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...EmbedOpt) (*Result, error) {
+	// E1: if fallback is configured, route through embedWithFallback.
+	if c != nil && c.fallback != nil {
+		callCfg := embedCallCfg{}
+		for _, o := range opts {
+			o(&callCfg)
+		}
+		// DryRun shortcut still fires before fallback routing.
+		if callCfg.DryRun {
+			return dryRunResult(c, len(texts)), nil
+		}
+		res := embedWithFallback(ctx, c, c.fallback, texts, opts...)
+		if res.Status == StatusDegraded {
+			return res, res.Err
+		}
+		return res, nil
+	}
+	res := c.embedWithResultUnchained(ctx, texts, opts...)
+	if res.Status == StatusDegraded {
+		return res, res.Err
+	}
+	return res, nil
+}
+
+// embedWithResultUnchained executes the embed call for this client WITHOUT
+// consulting the fallback chain. Used internally by embedWithFallback to avoid
+// recursion. External callers always go through EmbedWithResult.
+func (c *Client) embedWithResultUnchained(ctx context.Context, texts []string, opts ...EmbedOpt) *Result {
 	callCfg := embedCallCfg{}
 	for _, o := range opts {
 		o(&callCfg)
 	}
 
 	if c == nil || c.inner == nil {
-		return &Result{Status: StatusSkipped, Model: ""}, nil
+		return &Result{Status: StatusSkipped, Model: ""}
 	}
 	if len(texts) == 0 {
 		return &Result{
 			Status: StatusSkipped,
 			Model:  c.model,
-		}, nil
+		}
 	}
 	if callCfg.DryRun {
-		zeros := make([]*Vector, len(texts))
-		for i := range zeros {
-			zeros[i] = &Vector{Status: StatusSkipped}
-		}
-		return &Result{
-			Vectors: zeros,
-			Status:  StatusSkipped,
-			Model:   c.model,
-		}, nil
+		return dryRunResult(c, len(texts))
 	}
 
 	// Fire OnBeforeEmbed hook (panic-safe).
 	safeCall(func() { c.observer.OnBeforeEmbed(ctx, c.model, len(texts)) })
 
 	start := time.Now()
-	raw, err := c.inner.Embed(ctx, texts)
+	raw, err := c.callBackendResilient(ctx, texts)
 	dur := time.Since(start)
 
 	if err != nil {
@@ -105,7 +146,7 @@ func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...Em
 			Status:  StatusDegraded,
 			Model:   c.model,
 			Err:     err,
-		}, err
+		}
 	}
 
 	if len(raw) != len(texts) {
@@ -116,7 +157,7 @@ func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...Em
 			Status:  StatusDegraded,
 			Model:   c.model,
 			Err:     partialErr,
-		}, partialErr
+		}
 	}
 
 	out := make([]*Vector, len(raw))
@@ -132,7 +173,24 @@ func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...Em
 		Vectors: out,
 		Status:  StatusOk,
 		Model:   c.model,
-	}, nil
+	}
+}
+
+// dryRunResult returns a StatusSkipped Result with zero-value Vector entries.
+func dryRunResult(c *Client, n int) *Result {
+	zeros := make([]*Vector, n)
+	for i := range zeros {
+		zeros[i] = &Vector{Status: StatusSkipped}
+	}
+	model := ""
+	if c != nil {
+		model = c.model
+	}
+	return &Result{
+		Vectors: zeros,
+		Status:  StatusSkipped,
+		Model:   model,
+	}
 }
 
 // EmbedWithResult is the package-level v2 API shim — kept for backward
@@ -149,7 +207,12 @@ func EmbedWithResult(ctx context.Context, e Embedder, texts []string, opts ...Em
 		return c.EmbedWithResult(ctx, texts, opts...)
 	}
 	// Fallback: wrap in a temporary Client (no observer).
-	tmp := &Client{inner: e, observer: noopObserver{}, model: modelFromEmbedder(e)}
+	tmp := &Client{
+		inner:    e,
+		observer: noopObserver{},
+		model:    modelFromEmbedder(e),
+		retry:    defaultRetryPolicy(),
+	}
 	return tmp.EmbedWithResult(ctx, texts, opts...)
 }
 
