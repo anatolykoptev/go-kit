@@ -404,6 +404,11 @@ func recordMathEmptyVector(n int) {
 
 // ── RRF helpers ───────────────────────────────────────────────────────────────
 
+// rrfListsBucketCutoff is the upper edge of distinct RRF list-count buckets
+// (1..rrfListsBucketCutoff-1 emit verbatim; cutoff and above collapse to one
+// label). Keeps Prometheus cardinality bounded.
+const rrfListsBucketCutoff = 5
+
 // recordRRFListsFused increments the standalone-RRF call counter by 1.
 // n is the number of input lists fused; bucketed to keep label cardinality low.
 func recordRRFListsFused(n int) {
@@ -411,7 +416,7 @@ func recordRRFListsFused(n int) {
 	switch {
 	case n <= 0:
 		bucket = "0"
-	case n >= 5:
+	case n >= rrfListsBucketCutoff:
 		bucket = ">=5"
 	default:
 		bucket = itoa(n)
