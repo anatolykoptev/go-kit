@@ -66,6 +66,9 @@ type cfgInternal struct {
 	retry    RetryPolicy
 	circuit  *CircuitBreaker
 	fallback *Client
+
+	// E3: pluggable cache interface, opt-in via WithCache. nil = disabled.
+	cache Cache
 }
 
 // Opt is a functional option for NewClient.
