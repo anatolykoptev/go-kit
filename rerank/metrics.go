@@ -108,6 +108,56 @@ var (
 		},
 		[]string{"model", "reason"},
 	)
+
+	// G3 cascade metrics.
+
+	// rerankCascadeStageInDocs records the input doc count per stage invocation.
+	rerankCascadeStageInDocs = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rerank_cascade_stage_in_docs",
+			Help:    "Input document count per cascade stage invocation, by label.",
+			Buckets: []float64{1, 5, 10, 20, 50, 100, 200, 500, 1000},
+		},
+		[]string{"label"},
+	)
+
+	// rerankCascadeStageOutDocs records the output doc count after KeepTopN cut.
+	rerankCascadeStageOutDocs = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rerank_cascade_stage_out_docs",
+			Help:    "Output document count after KeepTopN cut per cascade stage, by label.",
+			Buckets: []float64{1, 5, 10, 20, 50, 100, 200, 500, 1000},
+		},
+		[]string{"label"},
+	)
+
+	// rerankCascadeStageOutcomeTotal counts stage completions by outcome.
+	// outcome: "ok" | "degraded" | "early_exit"
+	rerankCascadeStageOutcomeTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_cascade_stage_outcome_total",
+			Help: "Total cascade stage completions by label, stage_idx, and outcome (ok|degraded|early_exit).",
+		},
+		[]string{"label", "stage_idx", "outcome"},
+	)
+
+	// rerankCascadeEarlyExitTotal counts cascade early exits by reason.
+	rerankCascadeEarlyExitTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_cascade_early_exit_total",
+			Help: "Total cascade early exits by label and reason (below_threshold).",
+		},
+		[]string{"label", "reason"},
+	)
+
+	// rerankCascadeTotalDurationSeconds records the total wall time across all cascade stages.
+	rerankCascadeTotalDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "rerank_cascade_total_duration_seconds",
+			Help:    "Total wall time across all cascade stages (seconds).",
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0},
+		},
+	)
 )
 
 // ── G0 helpers ───────────────────────────────────────────────────────────────
@@ -176,6 +226,36 @@ func recordBelowThreshold(model string, n int) {
 // reason is "tokens" or "chars".
 func recordTruncate(model, reason string) {
 	rerankTruncateTotal.WithLabelValues(model, reason).Inc()
+}
+
+// ── G3 cascade helpers ────────────────────────────────────────────────────────
+
+// recordCascadeStageIn records the number of docs entering a cascade stage.
+func recordCascadeStageIn(label string, n int) {
+	rerankCascadeStageInDocs.WithLabelValues(label).Observe(float64(n))
+}
+
+// recordCascadeStageOut records the number of docs leaving a cascade stage
+// after the KeepTopN cut has been applied.
+func recordCascadeStageOut(label string, n int) {
+	rerankCascadeStageOutDocs.WithLabelValues(label).Observe(float64(n))
+}
+
+// recordCascadeStageOutcome increments the stage outcome counter.
+// outcome is "ok", "degraded", or "early_exit".
+func recordCascadeStageOutcome(label string, stageIdx int, outcome string) {
+	rerankCascadeStageOutcomeTotal.WithLabelValues(label, itoa(stageIdx), outcome).Inc()
+}
+
+// recordCascadeEarlyExit increments the early-exit counter.
+// reason is "below_threshold".
+func recordCascadeEarlyExit(label, reason string) {
+	rerankCascadeEarlyExitTotal.WithLabelValues(label, reason).Inc()
+}
+
+// recordCascadeTotalDuration records the total wall time for a full cascade run.
+func recordCascadeTotalDuration(d time.Duration) {
+	rerankCascadeTotalDurationSeconds.Observe(d.Seconds())
 }
 
 // itoa converts a non-negative integer to its decimal string representation.
