@@ -18,6 +18,21 @@ const (
 	CircuitHalfOpen
 )
 
+// String returns the human-readable label for the circuit state.
+// Used as Prometheus label value.
+func (s CircuitState) String() string {
+	switch s {
+	case CircuitClosed:
+		return "closed"
+	case CircuitOpen:
+		return "open"
+	case CircuitHalfOpen:
+		return "half-open"
+	default:
+		return "unknown"
+	}
+}
+
 // Observer receives lifecycle callbacks from the rerank client.
 // All methods must be non-blocking. Panics are recovered by safeCall.
 // Implement only the callbacks you care about; embed noopObserver for the rest.
