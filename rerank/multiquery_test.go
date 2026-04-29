@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // ── stub Reranker ─────────────────────────────────────────────────────────────
@@ -368,3 +369,86 @@ func TestMultiQuery_DefaultRRFK_Applied(t *testing.T) {
 		t.Errorf("top: got %q want d0", res.Scored[0].ID)
 	}
 }
+
+// slowReranker sleeps for the given duration before returning a passthrough result.
+type slowReranker struct {
+	delay time.Duration
+	calls atomic.Int64
+}
+
+func (s *slowReranker) Rerank(ctx context.Context, query string, docs []Doc) []Scored {
+	res, _ := s.RerankWithResult(ctx, query, docs)
+	if res == nil {
+		return multiPassthrough(docs)
+	}
+	return res.Scored
+}
+
+func (s *slowReranker) RerankWithResult(ctx context.Context, _ string, docs []Doc, _ ...RerankOpt) (*Result, error) {
+	s.calls.Add(1)
+	select {
+	case <-time.After(s.delay):
+		return &Result{Scored: multiPassthrough(docs), Status: StatusOk}, nil
+	case <-ctx.Done():
+		return &Result{Scored: multiPassthrough(docs), Status: StatusDegraded, Err: ctx.Err()}, ctx.Err()
+	}
+}
+
+func (s *slowReranker) Available() bool { return true }
+
+func TestMultiQuery_CtxCancel_AbortsRemaining(t *testing.T) {
+	// Wire a slow inner (100ms per call), cancel ctx after 50ms.
+	// With Concurrency=1 and 5 queries, at most 1-2 goroutines should fire
+	// before cancel propagates; the remaining queries must be marked cancelled.
+	docs := makeTestDocs(2)
+	slow := &slowReranker{delay: 100 * time.Millisecond}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	mq := MultiQuery{Inner: slow, Combine: CombineMax, Concurrency: 1}
+	queries := []string{"q0", "q1", "q2", "q3", "q4"}
+
+	res, err := mq.RerankMulti(ctx, queries, docs)
+
+	// Some queries should have been cancelled.
+	if err == nil {
+		t.Error("expected an error due to context cancellation, got nil")
+	}
+	// Result must still be non-nil (degraded passthrough).
+	if res == nil {
+		t.Fatal("result must not be nil even on cancellation")
+	}
+	// Verify not all 5 goroutines ran to completion.
+	if slow.calls.Load() >= int64(len(queries)) {
+		t.Errorf("expected fewer than %d inner calls, got %d — ctx cancel not aborting dispatch", len(queries), slow.calls.Load())
+	}
+}
+
+func TestMultiQuery_AllDegradedNoErr_ReturnsSentinel(t *testing.T) {
+	// Stub returns (StatusDegraded, nil) for all queries — simulates a fallback
+	// chain that swallows the error. All-fail path should return ErrAllQueriesFailed.
+	docs := makeTestDocs(2)
+
+	// degradedNilErrReranker always returns StatusDegraded with nil err (no explicit error).
+	noErrInner := &degradedNilErrReranker{docs: docs}
+	mq := MultiQuery{Inner: noErrInner, Combine: CombineMax}
+
+	_, err := mq.RerankMulti(context.Background(), []string{"q0", "q1"}, docs)
+	if !errors.Is(err, ErrAllQueriesFailed) {
+		t.Errorf("expected ErrAllQueriesFailed, got: %v", err)
+	}
+}
+
+// degradedNilErrReranker always returns StatusDegraded with nil error.
+type degradedNilErrReranker struct{ docs []Doc }
+
+func (d *degradedNilErrReranker) Rerank(ctx context.Context, query string, docs []Doc) []Scored {
+	return multiPassthrough(docs)
+}
+
+func (d *degradedNilErrReranker) RerankWithResult(_ context.Context, _ string, docs []Doc, _ ...RerankOpt) (*Result, error) {
+	return &Result{Scored: multiPassthrough(docs), Status: StatusDegraded, Err: nil}, nil
+}
+
+func (d *degradedNilErrReranker) Available() bool { return true }

@@ -41,16 +41,22 @@ func WithCache(c Cache) Opt {
 	}
 }
 
-// cacheKey computes a deterministic key for a (model, query, doc.Text) triple.
-// Format: lowercase hex SHA-256 of (model + NUL + query + NUL + docText).
-// NUL separators prevent cross-field collisions on inputs that contain spaces
-// or special characters.
+// cacheKey computes the deterministic key for a (model, query, doc.Text) triple.
+// Format: sha256(model + NUL + serverNormalize + NUL + queryInstr + NUL + docInstr + NUL + query + NUL + docText).
+// All inputs that change the upstream rerank response MUST be in the key —
+// otherwise a cached score from one config gets returned under another, silently.
 //
 // Why SHA-256: FIPS-compatible, collision-resistant for arbitrarily long inputs,
 // produces a fixed 64-char hex string that fits any key-value store.
-func cacheKey(model, query, docText string) string {
+func cacheKey(model, serverNormalize, queryInstr, docInstr, query, docText string) string {
 	h := sha256.New()
 	h.Write([]byte(model))
+	h.Write([]byte{0})
+	h.Write([]byte(serverNormalize))
+	h.Write([]byte{0})
+	h.Write([]byte(queryInstr))
+	h.Write([]byte{0})
+	h.Write([]byte(docInstr))
 	h.Write([]byte{0})
 	h.Write([]byte(query))
 	h.Write([]byte{0})

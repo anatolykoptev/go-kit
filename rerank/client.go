@@ -175,15 +175,15 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 
 	// G4: full-batch cache lookup. Hit = all N head docs present in cache;
 	// miss (even 1 absent) = fall through to HTTP for the full batch.
-	// Cache key uses original query and doc.Text (pre-instruction) so the key
-	// is stable across instruction config changes.
+	// Cache key includes serverNormalize and instruction prefixes so that
+	// Clients with different configs sharing a Cache cannot cross-contaminate.
 	if c.cfg.cache != nil {
-		if cachedScores := tryCacheFullBatchGet(ctx, c.cfg.cache, c.cfg.model, query, head); cachedScores != nil {
+		if cachedScores := tryCacheFullBatchGet(ctx, c.cfg.cache, c.cfg.model, c.cfg.serverNormalize, c.cfg.queryInstruction, c.cfg.docInstruction, query, head); cachedScores != nil {
 			safeCall(func() { c.cfg.observer.OnCacheHit(ctx, len(head)) })
-			recordCacheHit(c.cfg.model, len(head))
+			recordCacheHit(c.cfg.model)
 			return c.finalizeScoredFromCache(ctx, cachedScores, head, tail, maxDocs, callCfg)
 		}
-		recordCacheMiss(c.cfg.model, len(head))
+		recordCacheMiss(c.cfg.model)
 	}
 
 	// Fire OnBeforeCall hook.
@@ -230,12 +230,14 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 
 	// G4: cache populate after successful HTTP (raw server scores, pre-pipeline).
 	if c.cfg.cache != nil {
+		var setCount int
 		for i, d := range head {
 			if seen[i] {
-				c.cfg.cache.Set(ctx, cacheKey(c.cfg.model, query, d.Text), scores[i])
+				c.cfg.cache.Set(ctx, cacheKey(c.cfg.model, c.cfg.serverNormalize, c.cfg.queryInstruction, c.cfg.docInstruction, query, d.Text), scores[i])
+				setCount++
 			}
 		}
-		recordCacheSet(c.cfg.model, len(head))
+		recordCacheSet(c.cfg.model, setCount)
 	}
 
 	// G2-client pipeline stages: Normalize → SourceWeights → score histogram.
@@ -418,11 +420,11 @@ func (c *Client) finalizeScoredFromCache(ctx context.Context, cachedScores []flo
 
 // tryCacheFullBatchGet returns cached scores for all docs in head, or nil if
 // any doc is missing from the cache (partial miss → fall through to HTTP).
-// Cache key: cacheKey(model, query, doc.Text) per plan spec.
-func tryCacheFullBatchGet(ctx context.Context, cache Cache, model, query string, head []Doc) []float32 {
+// All inputs that affect the upstream server response are included in the key.
+func tryCacheFullBatchGet(ctx context.Context, cache Cache, model, serverNormalize, queryInstr, docInstr, query string, head []Doc) []float32 {
 	scores := make([]float32, len(head))
 	for i, d := range head {
-		s, ok := cache.Get(ctx, cacheKey(model, query, d.Text))
+		s, ok := cache.Get(ctx, cacheKey(model, serverNormalize, queryInstr, docInstr, query, d.Text))
 		if !ok {
 			return nil // partial miss — abort, fall through to HTTP
 		}

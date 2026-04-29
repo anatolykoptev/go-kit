@@ -179,29 +179,34 @@ var (
 		[]string{"reason"},
 	)
 
-	// rerankCacheHitTotal counts full-batch cache hits (HTTP call skipped) by model.
+	// rerankCacheHitTotal counts full-batch cache hit EVENTS (one per request where
+	// HTTP was skipped entirely) by model. Use rate(rerank_cache_hit_total[5m]) for
+	// requests/sec; NOT doc/sec.
 	rerankCacheHitTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rerank_cache_hit_total",
-			Help: "Total full-batch cache hits (HTTP call skipped) by model.",
+			Help: "Total full-batch cache hit events (one per request, HTTP call skipped) by model.",
 		},
 		[]string{"model"},
 	)
 
-	// rerankCacheMissTotal counts cache misses (fall-through to HTTP) by model.
+	// rerankCacheMissTotal counts cache miss EVENTS (one per request that fell
+	// through to HTTP) by model. Use rate(rerank_cache_miss_total[5m]) for requests/sec.
 	rerankCacheMissTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rerank_cache_miss_total",
-			Help: "Total cache misses (partial or total; fall-through to HTTP) by model.",
+			Help: "Total cache miss events (one per request falling through to HTTP) by model.",
 		},
 		[]string{"model"},
 	)
 
-	// rerankCacheSetTotal counts cache population events (scores written after HTTP) by model.
-	rerankCacheSetTotal = promauto.NewCounterVec(
+	// rerankCacheSetDocsTotal counts individual doc scores written to cache after
+	// a successful HTTP call, by model. Named *_docs_total to signal doc-level
+	// granularity — distinct from the request-level hit/miss counters above.
+	rerankCacheSetDocsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "rerank_cache_set_total",
-			Help: "Total cache population events (scores written after HTTP success) by model.",
+			Name: "rerank_cache_set_docs_total",
+			Help: "Total doc scores written to cache after HTTP success, by model.",
 		},
 		[]string{"model"},
 	)
@@ -319,20 +324,22 @@ func recordMultiQueryPartial(reason string) {
 	rerankMultiqueryPartialTotal.WithLabelValues(reason).Inc()
 }
 
-// recordCacheHit increments the cache-hit counter and adds n to it.
-// n is the number of docs whose scores were served from cache.
-func recordCacheHit(model string, n int) {
-	rerankCacheHitTotal.WithLabelValues(model).Add(float64(n))
+// recordCacheHit increments the cache-hit EVENT counter by 1.
+// Called once per request that fully hits the cache (HTTP call skipped).
+func recordCacheHit(model string) {
+	rerankCacheHitTotal.WithLabelValues(model).Inc()
 }
 
-// recordCacheMiss increments the cache-miss counter.
-func recordCacheMiss(model string, n int) {
-	rerankCacheMissTotal.WithLabelValues(model).Add(float64(n))
+// recordCacheMiss increments the cache-miss EVENT counter by 1.
+// Called once per request that falls through to HTTP (partial or total miss).
+func recordCacheMiss(model string) {
+	rerankCacheMissTotal.WithLabelValues(model).Inc()
 }
 
-// recordCacheSet increments the cache-set counter by n (docs written to cache).
+// recordCacheSet adds n to the cache-set-docs counter (doc-level granularity).
+// n is the count of doc scores actually written (seen[i]==true entries only).
 func recordCacheSet(model string, n int) {
-	rerankCacheSetTotal.WithLabelValues(model).Add(float64(n))
+	rerankCacheSetDocsTotal.WithLabelValues(model).Add(float64(n))
 }
 
 // itoa converts a non-negative integer to its decimal string representation.

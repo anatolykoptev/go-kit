@@ -13,6 +13,11 @@ var _ Reranker = MultiQuery{}
 // ErrEmptyQueries is returned by RerankMulti when queries is empty.
 var ErrEmptyQueries = errors.New("rerank: MultiQuery requires at least one query")
 
+// ErrAllQueriesFailed is returned when every query fails without surfacing an
+// explicit error (e.g. a fallback chain that returns StatusDegraded + nil err).
+// Allows callers to use errors.Is(err, ErrAllQueriesFailed) for reliable detection.
+var ErrAllQueriesFailed = errors.New("rerank: all queries failed without explicit error")
+
 // CombineMode determines how scores from N query results are fused.
 type CombineMode uint8
 
@@ -101,7 +106,16 @@ func (m MultiQuery) RerankMulti(ctx context.Context, queries []string, docs []Do
 
 	for i, q := range queries {
 		wg.Add(1)
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Done() // we already called wg.Add(1)
+			// Mark remaining queries as cancelled so callers see ctx.Err().
+			for j := i; j < len(queries); j++ {
+				errs[j] = ctx.Err()
+			}
+			goto wait
+		}
 		go func(idx int, query string) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -110,6 +124,7 @@ func (m MultiQuery) RerankMulti(ctx context.Context, queries []string, docs []Do
 			errs[idx] = err
 		}(i, q)
 	}
+wait:
 	wg.Wait()
 
 	// Count successes and collect the first error.
@@ -118,12 +133,21 @@ func (m MultiQuery) RerankMulti(ctx context.Context, queries []string, docs []Do
 	for i, err := range errs {
 		if err == nil && results[i] != nil && results[i].Status != StatusDegraded {
 			successCount++
-		} else if firstErr == nil {
-			firstErr = err
+		} else {
+			if firstErr == nil {
+				if err != nil {
+					firstErr = err
+				} else if results[i] != nil && results[i].Err != nil {
+					firstErr = results[i].Err
+				}
+			}
 		}
 	}
 
 	if successCount == 0 {
+		if firstErr == nil {
+			firstErr = ErrAllQueriesFailed
+		}
 		recordMultiQueryPartial("all_failed")
 		return &Result{Scored: multiPassthrough(docs), Status: StatusDegraded, Err: firstErr}, firstErr
 	}

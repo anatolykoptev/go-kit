@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // ── mapCache stub ─────────────────────────────────────────────────────────────
@@ -39,8 +42,8 @@ func (c *mapCache) Set(_ context.Context, k string, s float32) {
 // ── cacheKey tests ────────────────────────────────────────────────────────────
 
 func TestCache_KeyDeterministic(t *testing.T) {
-	k1 := cacheKey("model-a", "what is Go?", "Go is a language")
-	k2 := cacheKey("model-a", "what is Go?", "Go is a language")
+	k1 := cacheKey("model-a", "", "", "", "what is Go?", "Go is a language")
+	k2 := cacheKey("model-a", "", "", "", "what is Go?", "Go is a language")
 	if k1 != k2 {
 		t.Errorf("cacheKey not deterministic: %q != %q", k1, k2)
 	}
@@ -50,8 +53,8 @@ func TestCache_KeyDeterministic(t *testing.T) {
 }
 
 func TestCache_KeyDifferent_PerModel(t *testing.T) {
-	k1 := cacheKey("model-a", "query", "doc text")
-	k2 := cacheKey("model-b", "query", "doc text")
+	k1 := cacheKey("model-a", "", "", "", "query", "doc text")
+	k2 := cacheKey("model-b", "", "", "", "query", "doc text")
 	if k1 == k2 {
 		t.Error("different models must produce different cache keys")
 	}
@@ -59,26 +62,58 @@ func TestCache_KeyDifferent_PerModel(t *testing.T) {
 
 func TestCache_KeyIncludesModel_ChangesKeyOnModelSwitch(t *testing.T) {
 	// Switching model should invalidate cache by producing a different key.
-	k1 := cacheKey("bge-base", "test query", "test document")
-	k2 := cacheKey("bge-large", "test query", "test document")
+	k1 := cacheKey("bge-base", "", "", "", "test query", "test document")
+	k2 := cacheKey("bge-large", "", "", "", "test query", "test document")
 	if k1 == k2 {
 		t.Error("model change must produce different cache key")
 	}
 }
 
 func TestCache_KeyDifferent_Query(t *testing.T) {
-	k1 := cacheKey("m", "query1", "doc")
-	k2 := cacheKey("m", "query2", "doc")
+	k1 := cacheKey("m", "", "", "", "query1", "doc")
+	k2 := cacheKey("m", "", "", "", "query2", "doc")
 	if k1 == k2 {
 		t.Error("different queries must produce different keys")
 	}
 }
 
 func TestCache_KeyDifferent_Doc(t *testing.T) {
-	k1 := cacheKey("m", "q", "doc1")
-	k2 := cacheKey("m", "q", "doc2")
+	k1 := cacheKey("m", "", "", "", "q", "doc1")
+	k2 := cacheKey("m", "", "", "", "q", "doc2")
 	if k1 == k2 {
 		t.Error("different docs must produce different keys")
+	}
+}
+
+func TestCache_KeyChangesWithServerNormalize(t *testing.T) {
+	// Same model/query/doc but different serverNormalize must yield different keys.
+	k1 := cacheKey("m", "", "", "", "q", "doc")
+	k2 := cacheKey("m", "sigmoid", "", "", "q", "doc")
+	if k1 == k2 {
+		t.Error("different serverNormalize must produce different cache keys")
+	}
+}
+
+func TestCache_KeyChangesWithInstruction(t *testing.T) {
+	// Different queryInstr → different key.
+	k1 := cacheKey("m", "", "Represent this query:", "", "q", "doc")
+	k2 := cacheKey("m", "", "Represent this sentence:", "", "q", "doc")
+	if k1 == k2 {
+		t.Error("different queryInstr must produce different cache keys")
+	}
+
+	// Different docInstr → different key.
+	k3 := cacheKey("m", "", "", "Passage:", "q", "doc")
+	k4 := cacheKey("m", "", "", "Document:", "q", "doc")
+	if k3 == k4 {
+		t.Error("different docInstr must produce different cache keys")
+	}
+
+	// Same queryInstr and docInstr → same key.
+	k5 := cacheKey("m", "", "q-instr", "d-instr", "q", "doc")
+	k6 := cacheKey("m", "", "q-instr", "d-instr", "q", "doc")
+	if k5 != k6 {
+		t.Error("identical args must produce the same cache key")
 	}
 }
 
@@ -122,11 +157,11 @@ func TestCache_FullBatchHit_SkipsHTTP(t *testing.T) {
 	model := "test-model"
 	query := "test query"
 
-	// Pre-populate cache for all 3 docs.
+	// Pre-populate cache for all 3 docs (no serverNormalize or instructions).
 	ctx := context.Background()
-	cache.Set(ctx, cacheKey(model, query, "alpha"), 0.9)
-	cache.Set(ctx, cacheKey(model, query, "beta"), 0.8)
-	cache.Set(ctx, cacheKey(model, query, "gamma"), 0.7)
+	cache.Set(ctx, cacheKey(model, "", "", "", query, "alpha"), 0.9)
+	cache.Set(ctx, cacheKey(model, "", "", "", query, "beta"), 0.8)
+	cache.Set(ctx, cacheKey(model, "", "", "", query, "gamma"), 0.7)
 
 	c := NewClient(srv.URL,
 		WithModel(model),
@@ -169,8 +204,8 @@ func TestCache_PartialMiss_HitsHTTP(t *testing.T) {
 
 	// Only populate 2 of 3 docs — should trigger HTTP for full batch.
 	ctx := context.Background()
-	cache.Set(ctx, cacheKey(model, query, "alpha"), 0.9)
-	cache.Set(ctx, cacheKey(model, query, "beta"), 0.8)
+	cache.Set(ctx, cacheKey(model, "", "", "", query, "alpha"), 0.9)
+	cache.Set(ctx, cacheKey(model, "", "", "", query, "beta"), 0.8)
 	// "gamma" is absent.
 
 	c := NewClient(srv.URL,
@@ -257,4 +292,60 @@ func TestCache_NilCache_NoOp(t *testing.T) {
 	if callCount.Load() != 1 {
 		t.Errorf("HTTP count %d want 1 (nil cache is no-op)", callCount.Load())
 	}
+}
+
+func TestMetrics_CacheHitMissAreEvents(t *testing.T) {
+	// Verify that hit_total and miss_total count REQUEST events (not docs).
+	// 1 hit request and 1 miss request → hit_total += 1, miss_total += 1 (not += N*docs).
+	var callCount atomic.Int32
+	srv := cacheTestServer(t, &callCount)
+
+	model := "metrics-event-model"
+	query := "event query"
+	docs := []Doc{
+		{ID: "x", Text: "xtext"},
+		{ID: "y", Text: "ytext"},
+	}
+
+	cache := newMapCache()
+	ctx := context.Background()
+
+	c := NewClient(srv.URL,
+		WithModel(model),
+		WithTimeout(time.Second),
+		WithCache(cache),
+	)
+
+	// Snapshot counters before the test.
+	hitBefore := counterValue(rerankCacheHitTotal.WithLabelValues(model))
+	missBefore := counterValue(rerankCacheMissTotal.WithLabelValues(model))
+
+	// Miss request: cache empty → HTTP (miss event).
+	_, err := c.RerankWithResult(ctx, query, docs)
+	if err != nil {
+		t.Fatalf("miss request error: %v", err)
+	}
+
+	// Hit request: cache now populated → no HTTP (hit event).
+	_, err = c.RerankWithResult(ctx, query, docs)
+	if err != nil {
+		t.Fatalf("hit request error: %v", err)
+	}
+
+	hitAfter := counterValue(rerankCacheHitTotal.WithLabelValues(model))
+	missAfter := counterValue(rerankCacheMissTotal.WithLabelValues(model))
+
+	if got := hitAfter - hitBefore; got != 1 {
+		t.Errorf("cache_hit_total: got delta %.0f want 1 (one event per request, not per doc)", got)
+	}
+	if got := missAfter - missBefore; got != 1 {
+		t.Errorf("cache_miss_total: got delta %.0f want 1 (one event per request, not per doc)", got)
+	}
+}
+
+// counterValue reads the current value of a prometheus.Counter via its Write method.
+func counterValue(c prometheus.Counter) float64 {
+	var m dto.Metric
+	_ = c.Write(&m)
+	return m.GetCounter().GetValue()
 }
