@@ -43,6 +43,35 @@ func makeDocs(n int) []Doc {
 	return docs
 }
 
+// TestCascade_NilResultFromInnerReranker_NoPanic verifies Cascade defensively
+// guards against custom Reranker impls that violate the non-nil-Result contract.
+func TestCascade_NilResultFromInnerReranker_NoPanic(t *testing.T) {
+	badStage := &mockReranker{
+		name:      "bad",
+		available: true,
+		response:  nil, // BAD: contract says non-nil
+		err:       errors.New("bad reranker returned nil"),
+	}
+	c := Cascade{Stages: []StageConfig{
+		{Reranker: badStage, KeepTopN: 0, Label: "bad-stage"},
+	}}
+	docs := []Doc{{ID: "a", Text: "x"}}
+
+	// Must not panic.
+	res, err := c.RerankWithResult(context.Background(), "q", docs)
+
+	// Should return a degraded Result with the error attached.
+	if res == nil {
+		t.Fatal("Cascade returned nil Result; must reconstruct passthrough")
+	}
+	if res.Status != StatusDegraded {
+		t.Errorf("expected StatusDegraded on nil-res from inner, got %v", res.Status)
+	}
+	if err == nil {
+		t.Error("expected err propagated from inner")
+	}
+}
+
 // TestCascade_SatisfiesRerankerInterface is a compile-time assertion.
 func TestCascade_SatisfiesRerankerInterface(t *testing.T) {
 	var _ Reranker = Cascade{}

@@ -5,7 +5,12 @@ import (
 	"time"
 )
 
-// Reranker abstracts pointwise rerank implementations. Implemented by:
+// Reranker abstracts pointwise rerank implementations. Implementations MUST
+// return a non-nil *Result, even on error — callers index Result.Status without
+// nil-checking. Cascade defensively guards against nil for safety, but the
+// contract is non-nil.
+//
+// Implemented by:
 //   - *Client (HTTP cross-encoder)
 //   - Cascade (multi-stage chain)
 //   - Future: MultiQuery (G4), listwise impls (M13+)
@@ -98,7 +103,7 @@ func (c Cascade) RerankWithResult(ctx context.Context, query string, docs []Doc,
 		recordCascadeStageIn(stage.Label, len(cur))
 
 		res, err := stage.Reranker.RerankWithResult(ctx, query, cur, opts...)
-		if err != nil || res.Status == StatusDegraded {
+		if err != nil || res == nil || res.Status == StatusDegraded {
 			recordCascadeStageOutcome(stage.Label, i, "degraded")
 			// Propagate the degraded result/error; earlier stages' work is lost.
 			if res == nil {
@@ -112,6 +117,7 @@ func (c Cascade) RerankWithResult(ctx context.Context, query string, docs []Doc,
 				}
 			}
 			res.Status = StatusDegraded
+			recordCascadeTotalDuration(time.Since(start))
 			return res, err
 		}
 
@@ -152,6 +158,7 @@ func (c Cascade) RerankWithResult(ctx context.Context, query string, docs []Doc,
 	}
 
 	// Unreachable (loop returns on last stage), but keeps the compiler happy.
+	recordCascadeTotalDuration(time.Since(start))
 	return &Result{Status: StatusOk, Model: lastModel}, nil
 }
 
