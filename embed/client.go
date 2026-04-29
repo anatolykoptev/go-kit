@@ -5,8 +5,8 @@ import (
 	"log/slog"
 )
 
-// Client wraps an Embedder backend with v2 features (Observer hooks, future
-// retry/circuit/cache from E1+ streams). Built via NewClient(url, opts...).
+// Client wraps an Embedder backend with v2 features: Observer hooks, retry,
+// circuit breaker, and multi-model fallback (E1). Built via NewClient(url, opts...).
 //
 // Client itself implements Embedder, so it is drop-in replaceable for v1
 // backends. v1 callers that hold the result as Embedder continue to work
@@ -17,20 +17,19 @@ type Client struct {
 	logger   *slog.Logger // optional, defaults to slog.Default()
 	model    string       // resolved model name (for Result.Model)
 
-	// Reserved for E1+ streams:
-	// retry RetryPolicy
-	// circuit *CircuitBreaker
-	// fallback *Client
-	// cache Cache
+	// E1: resiliency
+	retry    RetryPolicy
+	circuit  *CircuitBreaker
+	fallback *Client
 }
 
-// Embed satisfies the Embedder interface — delegates to the inner backend.
-// E1+ wires retry/circuit/fallback/cache around this call.
+// Embed satisfies the Embedder interface. Delegates to inner (via callBackendResilient
+// if circuit is wired). For the full Result API with observer hooks, use EmbedWithResult.
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if c == nil || c.inner == nil {
 		return nil, nil
 	}
-	return c.inner.Embed(ctx, texts)
+	return c.callBackendResilient(ctx, texts)
 }
 
 // EmbedQuery satisfies Embedder; delegates to inner.
@@ -64,6 +63,38 @@ func (c *Client) Model() string {
 		return ""
 	}
 	return c.model
+}
+
+// callBackendResilient wraps c.inner.Embed with:
+//  1. Circuit breaker check (if configured) — returns ErrCircuitOpen immediately if open.
+//  2. Retry loop via do() (default: 3 attempts on 5xx, exp backoff + jitter).
+//  3. Circuit breaker feedback (MarkSuccess/MarkFailure if configured).
+//
+// This is the single wrap point per E1 spec.
+func (c *Client) callBackendResilient(ctx context.Context, texts []string) ([][]float32, error) {
+	cb := c.circuit
+
+	// 1. Circuit breaker guard.
+	if cb != nil && !cb.Allow() {
+		recordGiveup(c.model, "circuit_open")
+		return nil, ErrCircuitOpen
+	}
+
+	// 2. Retry loop.
+	raw, err := do(ctx, c.retry, c.model, c.observer, func() ([][]float32, error) {
+		return c.inner.Embed(ctx, texts)
+	})
+
+	// 3. Circuit breaker feedback.
+	if cb != nil {
+		if err != nil {
+			cb.MarkFailure()
+		} else {
+			cb.MarkSuccess()
+		}
+	}
+
+	return raw, err
 }
 
 // Compile-time interface satisfaction.
