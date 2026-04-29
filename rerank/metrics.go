@@ -158,6 +158,53 @@ var (
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0},
 		},
 	)
+
+	// G4 metrics.
+
+	// rerankMultiqueryCombineTotal counts RerankMulti combine operations by mode.
+	rerankMultiqueryCombineTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_multiquery_combine_total",
+			Help: "Total RerankMulti combine operations by mode (max|avg|rrf).",
+		},
+		[]string{"mode"},
+	)
+
+	// rerankMultiqueryPartialTotal counts RerankMulti calls with partial or total failure.
+	rerankMultiqueryPartialTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_multiquery_partial_total",
+			Help: "Total RerankMulti calls where some queries failed: reason=partial|all_failed.",
+		},
+		[]string{"reason"},
+	)
+
+	// rerankCacheHitTotal counts full-batch cache hits (HTTP call skipped) by model.
+	rerankCacheHitTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_cache_hit_total",
+			Help: "Total full-batch cache hits (HTTP call skipped) by model.",
+		},
+		[]string{"model"},
+	)
+
+	// rerankCacheMissTotal counts cache misses (fall-through to HTTP) by model.
+	rerankCacheMissTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_cache_miss_total",
+			Help: "Total cache misses (partial or total; fall-through to HTTP) by model.",
+		},
+		[]string{"model"},
+	)
+
+	// rerankCacheSetTotal counts cache population events (scores written after HTTP) by model.
+	rerankCacheSetTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_cache_set_total",
+			Help: "Total cache population events (scores written after HTTP success) by model.",
+		},
+		[]string{"model"},
+	)
 )
 
 // ── G0 helpers ───────────────────────────────────────────────────────────────
@@ -256,6 +303,36 @@ func recordCascadeEarlyExit(label, reason string) {
 // recordCascadeTotalDuration records the total wall time for a full cascade run.
 func recordCascadeTotalDuration(d time.Duration) {
 	rerankCascadeTotalDurationSeconds.Observe(d.Seconds())
+}
+
+// ── G4 helpers ────────────────────────────────────────────────────────────────
+
+// recordMultiQueryCombine increments the combine-mode counter for RerankMulti.
+// mode is "max", "avg", or "rrf".
+func recordMultiQueryCombine(mode string) {
+	rerankMultiqueryCombineTotal.WithLabelValues(mode).Inc()
+}
+
+// recordMultiQueryPartial increments the partial-failure counter for RerankMulti.
+// reason is "partial" (some queries failed) or "all_failed" (every query failed).
+func recordMultiQueryPartial(reason string) {
+	rerankMultiqueryPartialTotal.WithLabelValues(reason).Inc()
+}
+
+// recordCacheHit increments the cache-hit counter and adds n to it.
+// n is the number of docs whose scores were served from cache.
+func recordCacheHit(model string, n int) {
+	rerankCacheHitTotal.WithLabelValues(model).Add(float64(n))
+}
+
+// recordCacheMiss increments the cache-miss counter.
+func recordCacheMiss(model string, n int) {
+	rerankCacheMissTotal.WithLabelValues(model).Add(float64(n))
+}
+
+// recordCacheSet increments the cache-set counter by n (docs written to cache).
+func recordCacheSet(model string, n int) {
+	rerankCacheSetTotal.WithLabelValues(model).Add(float64(n))
 }
 
 // itoa converts a non-negative integer to its decimal string representation.

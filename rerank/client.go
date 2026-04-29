@@ -173,6 +173,19 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 	// Apply instruction prefixes (bge-v1.5 / E5 style).
 	modQuery, modTexts := applyInstructions(query, texts, c.cfg.queryInstruction, c.cfg.docInstruction)
 
+	// G4: full-batch cache lookup. Hit = all N head docs present in cache;
+	// miss (even 1 absent) = fall through to HTTP for the full batch.
+	// Cache key uses original query and doc.Text (pre-instruction) so the key
+	// is stable across instruction config changes.
+	if c.cfg.cache != nil {
+		if cachedScores := tryCacheFullBatchGet(ctx, c.cfg.cache, c.cfg.model, query, head); cachedScores != nil {
+			safeCall(func() { c.cfg.observer.OnCacheHit(ctx, len(head)) })
+			recordCacheHit(c.cfg.model, len(head))
+			return c.finalizeScoredFromCache(ctx, cachedScores, head, tail, maxDocs, callCfg)
+		}
+		recordCacheMiss(c.cfg.model, len(head))
+	}
+
 	// Fire OnBeforeCall hook.
 	safeCall(func() { c.cfg.observer.OnBeforeCall(ctx, modQuery, len(modTexts)) })
 
@@ -213,6 +226,16 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 		}
 		scores[r.Index] = float32(r.RelevanceScore)
 		seen[r.Index] = true
+	}
+
+	// G4: cache populate after successful HTTP (raw server scores, pre-pipeline).
+	if c.cfg.cache != nil {
+		for i, d := range head {
+			if seen[i] {
+				c.cfg.cache.Set(ctx, cacheKey(c.cfg.model, query, d.Text), scores[i])
+			}
+		}
+		recordCacheSet(c.cfg.model, len(head))
 	}
 
 	// G2-client pipeline stages: Normalize → SourceWeights → score histogram.
@@ -302,6 +325,110 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 		Status: StatusOk,
 		Model:  model,
 	}
+}
+
+// finalizeScoredFromCache runs the post-HTTP pipeline (normalize → weight →
+// score histogram → sort → threshold → TopN → tail preserve) on cached raw
+// scores. All cached docs are treated as "seen" since cache only stores scores
+// from successful HTTP calls.
+//
+// Called on a full-batch cache hit to honor the current cfg and per-call opts.
+func (c *Client) finalizeScoredFromCache(ctx context.Context, cachedScores []float32, head, tail []Doc, maxDocs int, callCfg rerankCallCfg) *Result {
+	scores := make([]float32, len(head))
+	copy(scores, cachedScores)
+
+	// All cached docs are seen (cache only stores confirmed server scores).
+	seen := make([]bool, len(head))
+	for i := range seen {
+		seen[i] = true
+	}
+
+	// Run the same G2-client pipeline: Normalize → SourceWeights → histogram.
+	if c.cfg.normalizeMode != NormalizeNone {
+		seenIdx := make([]int, 0, len(scores))
+		seenVals := make([]float32, 0, len(scores))
+		for i, s := range scores {
+			if seen[i] {
+				seenIdx = append(seenIdx, i)
+				seenVals = append(seenVals, s)
+			}
+		}
+		seenVals = Normalize(seenVals, c.cfg.normalizeMode)
+		for k, i := range seenIdx {
+			scores[i] = seenVals[k]
+		}
+	} else {
+		scores = Normalize(scores, c.cfg.normalizeMode)
+	}
+	scores = applySourceWeights(scores, head, c.cfg.sourceWeights)
+	emitScoreDistribution(c.cfg.model, scores)
+
+	order := make([]int, len(head))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return scores[order[i]] > scores[order[j]]
+	})
+
+	if callCfg.Threshold > 0 {
+		filtered := order[:0]
+		var dropped int
+		for _, idx := range order {
+			if scores[idx] >= callCfg.Threshold {
+				filtered = append(filtered, idx)
+			} else {
+				dropped++
+			}
+		}
+		order = filtered
+		if dropped > 0 {
+			recordBelowThreshold(c.cfg.model, dropped)
+		}
+	}
+
+	if callCfg.TopN > 0 && callCfg.TopN < len(order) {
+		order = order[:callCfg.TopN]
+	}
+
+	totalDocs := len(order) + len(tail)
+	out := make([]Scored, 0, totalDocs)
+	for _, origIdx := range order {
+		out = append(out, Scored{
+			Doc:      head[origIdx],
+			Score:    scores[origIdx],
+			OrigRank: origIdx,
+		})
+	}
+	for i, d := range tail {
+		out = append(out, Scored{
+			Doc:      d,
+			Score:    0,
+			OrigRank: maxDocs + i,
+		})
+	}
+
+	safeCall(func() { c.cfg.observer.OnAfterCall(ctx, StatusOk, 0, len(out)) })
+	return &Result{
+		Scored: out,
+		Status: StatusOk,
+		Model:  c.cfg.model,
+	}
+}
+
+// tryCacheFullBatchGet returns cached scores for all docs in head, or nil if
+// any doc is missing from the cache (partial miss → fall through to HTTP).
+// Cache key: cacheKey(model, query, doc.Text) per plan spec.
+func tryCacheFullBatchGet(ctx context.Context, cache Cache, model, query string, head []Doc) []float32 {
+	scores := make([]float32, len(head))
+	for i, d := range head {
+		s, ok := cache.Get(ctx, cacheKey(model, query, d.Text))
+		if !ok {
+			return nil // partial miss — abort, fall through to HTTP
+		}
+		scores[i] = s
+	}
+	return scores
 }
 
 // callCohereResilient wraps callCohere with:
