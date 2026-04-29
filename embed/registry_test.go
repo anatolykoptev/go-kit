@@ -7,10 +7,10 @@ import (
 
 // fakeEmbedder is a minimal Embedder used by registry tests.
 type fakeEmbedder struct {
-	name      string
-	dim       int
-	closed    bool
-	embedFn   func(context.Context, []string) ([][]float32, error)
+	name    string
+	dim     int
+	closed  bool
+	embedFn func(context.Context, []string) ([][]float32, error)
 }
 
 func (f *fakeEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
