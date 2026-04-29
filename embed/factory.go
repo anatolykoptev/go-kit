@@ -53,6 +53,71 @@ func New(cfg Config, logger *slog.Logger) (Embedder, error) {
 	}
 }
 
+// newFromInternal builds an Embedder from an already-resolved cfgInternal.
+// Used by NewClient (v2). v1 New(cfg, logger) continues to call the private
+// per-backend helpers directly for full backward compatibility.
+//
+// If cfg.customEmbedder is set (via WithEmbedder), it is returned immediately
+// without backend factory dispatch. This is the ONNX path: caller imports
+// embed/onnx, builds *onnx.Embedder, and passes it via WithEmbedder.
+func newFromInternal(cfg *cfgInternal) (Embedder, error) {
+	if cfg.logger == nil {
+		cfg.logger = slog.Default()
+	}
+	if cfg.customEmbedder != nil {
+		return cfg.customEmbedder, nil
+	}
+	switch cfg.backend {
+	case "ollama":
+		var opts []OllamaOption
+		if cfg.ollamaDim > 0 {
+			opts = append(opts, WithOllamaDimension(cfg.ollamaDim))
+		}
+		if cfg.ollamaDocPrefix != "" {
+			opts = append(opts, WithTextPrefix(cfg.ollamaDocPrefix))
+		}
+		if cfg.ollamaQueryPrefix != "" {
+			opts = append(opts, WithQueryPrefix(cfg.ollamaQueryPrefix))
+		}
+		if cfg.timeout > 0 {
+			opts = append(opts, WithOllamaTimeout(cfg.timeout))
+		}
+		url := cfg.url
+		if url == "" {
+			url = ollamaDefaultURL
+		}
+		model := cfg.model
+		if model == "" {
+			model = ollamaDefaultModel
+		}
+		return NewOllamaClient(url, model, cfg.logger, opts...), nil
+	case "voyage":
+		if cfg.voyageAPIKey == "" {
+			return nil, errors.New("embed: voyage requires voyageAPIKey (use WithVoyageAPIKey)")
+		}
+		model := cfg.model
+		if model == "" {
+			model = voyageDefaultModel
+		}
+		return NewVoyageClient(cfg.voyageAPIKey, model, cfg.logger), nil
+	case "http", "":
+		if cfg.url == "" {
+			return nil, errors.New("embed: http backend requires url (pass to NewClient)")
+		}
+		model := cfg.model
+		if model == "" {
+			model = defaultHTTPModel
+		}
+		dim := cfg.dim
+		if dim == 0 {
+			dim = defaultHTTPDim
+		}
+		return NewHTTPEmbedder(cfg.url, model, dim, cfg.logger), nil
+	default:
+		return nil, fmt.Errorf("embed: unknown backend %q (valid: http, ollama, voyage)", cfg.backend)
+	}
+}
+
 // newOllamaFromConfig wires an OllamaClient from Config and logs the choice.
 func newOllamaFromConfig(cfg Config, logger *slog.Logger) Embedder {
 	model := cfg.Model
