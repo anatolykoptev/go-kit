@@ -48,13 +48,16 @@ func newClientFromInternal(cfg *cfgInternal) (*Client, error) {
 	}
 
 	return &Client{
-		inner:    inner,
-		observer: cfg.observer,
-		logger:   cfg.logger,
-		model:    model,
-		retry:    cfg.retry,
-		circuit:  cb,
-		fallback: cfg.fallback,
+		inner:       inner,
+		observer:    cfg.observer,
+		logger:      cfg.logger,
+		model:       model,
+		retry:       cfg.retry,
+		circuit:     cb,
+		fallback:    cfg.fallback,
+		cache:       cfg.cache,
+		docPrefix:   cfg.ollamaDocPrefix,
+		queryPrefix: cfg.ollamaQueryPrefix,
 	}, nil
 }
 
@@ -132,6 +135,32 @@ func (c *Client) embedWithResultUnchained(ctx context.Context, texts []string, o
 		return dryRunResult(c, len(texts))
 	}
 
+	// E3: full-batch cache lookup BEFORE backend call.
+	// Full hit → skip callBackendResilient entirely (no retry, no circuit, no backend).
+	// Partial miss (any single text absent) → fall through to backend for the full batch.
+	if c.cache != nil {
+		dim := c.inner.Dimension()
+		cached := tryCacheFullBatchGet(ctx, c.cache, c.model, dim, c.docPrefix, c.queryPrefix, texts)
+		if cached != nil {
+			safeCall(func() { c.observer.OnCacheHit(ctx, len(texts)) })
+			recordCacheHit(c.model)
+			out := make([]*Vector, len(cached))
+			for i, v := range cached {
+				out[i] = &Vector{
+					Embedding: v,
+					Dim:       len(v),
+					Status:    StatusOk,
+				}
+			}
+			return &Result{
+				Vectors: out,
+				Status:  StatusOk,
+				Model:   c.model,
+			}
+		}
+		recordCacheMiss(c.model)
+	}
+
 	// Fire OnBeforeEmbed hook (panic-safe).
 	safeCall(func() { c.observer.OnBeforeEmbed(ctx, c.model, len(texts)) })
 
@@ -158,6 +187,15 @@ func (c *Client) embedWithResultUnchained(ctx context.Context, texts []string, o
 			Model:   c.model,
 			Err:     partialErr,
 		}
+	}
+
+	// E3: populate cache after successful backend call (raw vectors, pre-pipeline).
+	if c.cache != nil {
+		dim := c.inner.Dimension()
+		for i, vec := range raw {
+			c.cache.Set(ctx, cacheKey(c.model, dim, c.docPrefix, c.queryPrefix, texts[i]), vec)
+		}
+		recordCacheSet(c.model, len(raw))
 	}
 
 	out := make([]*Vector, len(raw))
