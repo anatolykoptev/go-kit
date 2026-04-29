@@ -210,6 +210,32 @@ var (
 		},
 		[]string{"model"},
 	)
+
+	// G5 metrics.
+
+	// rerankMathScoreDistribution records the distribution of cosine similarity
+	// scores computed by MathReranker before MMR or sort. Observed once per doc.
+	rerankMathScoreDistribution = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "rerank_math_score_distribution",
+			Help:    "Distribution of MathReranker cosine scores.",
+			Buckets: []float64{-1, -0.5, 0, 0.25, 0.5, 0.75, 1.0},
+		},
+	)
+
+	// rerankMathMMRAppliedTotal counts total MathReranker calls where MMR was
+	// applied (Lambda > 0).
+	rerankMathMMRAppliedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "rerank_math_mmr_applied_total",
+		Help: "Total times MMR was applied (Lambda > 0).",
+	})
+
+	// rerankMathEmptyVectorTotal counts docs passed to MathReranker that had an
+	// empty EmbedVector (debug aid; these receive score 0).
+	rerankMathEmptyVectorTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "rerank_math_empty_vector_total",
+		Help: "Total docs passed to MathReranker with empty EmbedVector (debug aid).",
+	})
 )
 
 // ── G0 helpers ───────────────────────────────────────────────────────────────
@@ -340,6 +366,28 @@ func recordCacheMiss(model string) {
 // n is the count of doc scores actually written (seen[i]==true entries only).
 func recordCacheSet(model string, n int) {
 	rerankCacheSetDocsTotal.WithLabelValues(model).Add(float64(n))
+}
+
+// ── G5 helpers ────────────────────────────────────────────────────────────────
+
+// emitMathScoreDistribution records each cosine score in the MathReranker
+// score distribution histogram. Called before MMR or sort.
+func emitMathScoreDistribution(scores []float32) {
+	for _, s := range scores {
+		rerankMathScoreDistribution.Observe(float64(s))
+	}
+}
+
+// recordMathMMRApplied increments the MMR-applied counter by 1.
+// Called once per RerankWithResult call where Lambda > 0.
+func recordMathMMRApplied() { rerankMathMMRAppliedTotal.Inc() }
+
+// recordMathEmptyVector adds n to the empty-vector doc counter.
+// Called when one or more docs had an empty EmbedVector.
+func recordMathEmptyVector(n int) {
+	if n > 0 {
+		rerankMathEmptyVectorTotal.Add(float64(n))
+	}
 }
 
 // itoa converts a non-negative integer to its decimal string representation.

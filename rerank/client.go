@@ -30,9 +30,10 @@ type Config struct {
 // Doc is a query-document pair. ID is opaque, returned unchanged in Scored.
 // Source is an optional label (e.g. "web", "wiki") used by WithSourceWeights.
 type Doc struct {
-	ID     string
-	Text   string
-	Source string // G2-client: optional; used by WithSourceWeights. Zero value treated as unweighted.
+	ID          string
+	Text        string
+	Source      string    // G2-client: optional; used by WithSourceWeights. Zero value treated as unweighted.
+	EmbedVector []float32 // G5: optional; used by MathReranker for cosine similarity scoring.
 }
 
 // Scored pairs an input Doc with its relevance score from the reranker.
