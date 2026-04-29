@@ -2,7 +2,6 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "release-type": "go",
   "bump-minor-pre-major": true,
-  "bump-patch-for-minor-pre-major": true,
   "draft": false,
   "prerelease": false,
   "include-component-in-tag": false,
@@ -23,7 +22,6 @@
       "package-name": "go-kit",
       "release-type": "go",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
       "extra-files": []
     }
   }
