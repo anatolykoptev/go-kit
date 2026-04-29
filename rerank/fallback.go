@@ -12,14 +12,16 @@ import (
 //   - secondary also fails
 //
 // Fallback is capped at depth 1: primary → secondary. No further chaining.
+// opts are forwarded to both primary and secondary calls (G1 deviation closed).
 func rerankWithFallback(
 	ctx context.Context,
 	primary *Client,
 	secondary *Client,
 	query string,
 	docs []Doc,
+	opts ...RerankOpt,
 ) *Result {
-	res := primary.rerankInternal(ctx, query, docs)
+	res := primary.rerankInternal(ctx, query, docs, opts...)
 	if res.Status != StatusDegraded {
 		return res
 	}
@@ -33,7 +35,7 @@ func rerankWithFallback(
 	}
 
 	// Attempt secondary.
-	fallRes := secondary.rerankInternal(ctx, query, docs)
+	fallRes := secondary.rerankInternal(ctx, query, docs, opts...)
 	if fallRes.Status == StatusOk {
 		fallRes.Status = StatusFallback
 		recordFallbackUsed(primary.cfg.model, secondary.cfg.model)

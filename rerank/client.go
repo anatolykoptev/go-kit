@@ -27,9 +27,11 @@ type Config struct {
 }
 
 // Doc is a query-document pair. ID is opaque, returned unchanged in Scored.
+// Source is an optional label (e.g. "web", "wiki") used by WithSourceWeights.
 type Doc struct {
-	ID   string
-	Text string
+	ID     string
+	Text   string
+	Source string // G2-client: optional; used by WithSourceWeights. Zero value treated as unweighted.
 }
 
 // Scored pairs an input Doc with its relevance score from the reranker.
@@ -94,13 +96,34 @@ func (c *Client) Rerank(ctx context.Context, query string, docs []Doc) []Scored 
 
 // rerankInternal executes the full rerank pipeline and returns a Result.
 // Shared by RerankWithResult (and transitively the v1 Rerank shim).
-func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *Result {
+//
+// Pipeline order (G2-client):
+//
+//	truncate(tokens) → truncate(chars) → instruction prefix → POST →
+//	Normalize(local) → SourceWeights → score histogram →
+//	sort → Threshold → TopN → tail preserve
+func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, opts ...RerankOpt) *Result {
+	// Resolve per-call options.
+	callCfg := rerankCallCfg{}
+	for _, o := range opts {
+		o(&callCfg)
+	}
+
 	pass := func() []Scored {
 		out := make([]Scored, len(docs))
 		for i, d := range docs {
 			out[i] = Scored{Doc: d, OrigRank: i}
 		}
 		return out
+	}
+
+	// DryRun: skip HTTP entirely.
+	if callCfg.DryRun {
+		return &Result{
+			Scored: pass(),
+			Status: StatusSkipped,
+			Model:  c.cfgModel(),
+		}
 	}
 
 	if len(docs) == 0 || c == nil || c.cfg == nil || c.cfg.url == "" {
@@ -123,22 +146,34 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 		tail = docs[maxDocs:]
 	}
 
-	// Extract texts (with optional rune-aware truncation).
+	// Extract texts with optional token-aware then char truncation.
 	texts := make([]string, len(head))
 	for i, d := range head {
 		t := d.Text
+		if c.cfg.maxTokensPerDoc > 0 {
+			truncated, before, after := truncateToTokens(t, c.cfg.maxTokensPerDoc)
+			t = truncated
+			if before != after {
+				docID := d.ID
+				safeCall(func() { c.cfg.observer.OnTruncate(ctx, docID, before, after) })
+				recordTruncate(c.cfg.model, "tokens")
+			}
+		}
 		if c.cfg.maxCharsPerDoc > 0 {
 			t = truncateRunes(t, c.cfg.maxCharsPerDoc)
 		}
 		texts[i] = t
 	}
 
+	// Apply instruction prefixes (bge-v1.5 / E5 style).
+	modQuery, modTexts := applyInstructions(query, texts, c.cfg.queryInstruction, c.cfg.docInstruction)
+
 	// Fire OnBeforeCall hook.
-	safeCall(func() { c.cfg.observer.OnBeforeCall(ctx, query, len(texts)) })
+	safeCall(func() { c.cfg.observer.OnBeforeCall(ctx, modQuery, len(modTexts)) })
 
 	start := time.Now()
 	// G1: callCohereResilient wraps callCohere with retry + circuit breaker.
-	resp, err := c.callCohereResilient(ctx, query, texts)
+	resp, err := c.callCohereResilient(ctx, modQuery, modTexts)
 	dur := time.Since(start)
 	recordDuration(c.cfg.model, dur)
 
@@ -147,7 +182,7 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 			c.logger.Warn("rerank failed",
 				slog.String("url", c.cfg.url),
 				slog.String("model", c.cfg.model),
-				slog.Int("docs", len(texts)),
+				slog.Int("docs", len(modTexts)),
 				slog.Any("err", err),
 			)
 		}
@@ -175,6 +210,12 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 		seen[r.Index] = true
 	}
 
+	// G2-client pipeline stages: Normalize → SourceWeights → score histogram.
+	// Applied on the raw scores array (indexed by original doc position in head).
+	scores = Normalize(scores, c.cfg.normalizeMode)
+	scores = applySourceWeights(scores, head, c.cfg.sourceWeights)
+	emitScoreDistribution(c.cfg.model, scores)
+
 	// Sort indices by score desc (stable). Sort through a permutation so the
 	// comparator reads from a stable scores array — NOT from shuffled items.
 	order := make([]int, len(head))
@@ -188,6 +229,28 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 		}
 		return scores[order[i]] > scores[order[j]]
 	})
+
+	// G2-client: Threshold filter (applied post-sort on post-normalize+weight scores).
+	if callCfg.Threshold > 0 {
+		filtered := order[:0]
+		var dropped int
+		for _, idx := range order {
+			if scores[idx] >= callCfg.Threshold {
+				filtered = append(filtered, idx)
+			} else {
+				dropped++
+			}
+		}
+		order = filtered
+		if dropped > 0 {
+			recordBelowThreshold(c.cfg.model, dropped)
+		}
+	}
+
+	// G2-client: TopN cap (applied after Threshold).
+	if callCfg.TopN > 0 && callCfg.TopN < len(order) {
+		order = order[:callCfg.TopN]
+	}
 
 	out := make([]Scored, 0, len(docs))
 	for _, origIdx := range order {

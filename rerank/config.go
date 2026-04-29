@@ -20,6 +20,13 @@ type cfgInternal struct {
 	retry    RetryPolicy
 	circuit  *CircuitBreaker
 	fallback *Client
+	// G2-client fields
+	normalizeMode    NormalizeMode      // local client-side normalize (MinMax/ZScore); default None
+	serverNormalize  string             // "" | "sigmoid" — sent in cohereRequest.Normalize
+	queryInstruction string             // prefix prepended to query before POST
+	docInstruction   string             // prefix prepended to each document before POST
+	maxTokensPerDoc  int                // 0 = disabled; token-aware truncation (applied before chars)
+	sourceWeights    map[string]float32 // per-source score multiplier; nil = disabled
 }
 
 // Opt is a functional option for NewClient.
@@ -117,3 +124,17 @@ func WithCircuit(cfg CircuitConfig) Opt {
 func WithFallback(secondary *Client) Opt {
 	return func(c *cfgInternal) { c.fallback = secondary }
 }
+
+// ── G2-client options ─────────────────────────────────────────────────────────
+
+// WithNormalize sets the client-side score normalization mode applied after
+// server scoring and before SourceWeights. Default NormalizeNone (identity).
+// See NormalizeMode for available modes. Sigmoid is intentionally absent —
+// use WithServerNormalize(ServerNormalizeSigmoid) for sigmoid.
+func WithNormalize(mode NormalizeMode) Opt {
+	return func(c *cfgInternal) { c.normalizeMode = mode }
+}
+
+// WithInstruction, WithMaxTokensPerDoc, WithSourceWeights, and
+// WithServerNormalize are declared in their respective files:
+// instruction.go, tokens.go, source_weights.go, server_normalize.go.

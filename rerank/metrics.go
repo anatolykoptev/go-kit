@@ -76,6 +76,38 @@ var (
 		},
 		[]string{"primary", "secondary"},
 	)
+
+	// G2-client metrics.
+
+	// rerankScoreDistribution records the distribution of post-pipeline scores.
+	// Observed once per doc per call, after Normalize + SourceWeights, before sort.
+	rerankScoreDistribution = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rerank_score_distribution",
+			Help:    "Distribution of post-pipeline rerank scores by model.",
+			Buckets: []float64{-1, -0.5, 0, 0.25, 0.5, 0.75, 1.0, 2.0},
+		},
+		[]string{"model"},
+	)
+
+	// rerankBelowThresholdTotal counts docs dropped by the Threshold filter.
+	rerankBelowThresholdTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_below_threshold_total",
+			Help: "Total docs dropped by per-call Threshold filter, by model.",
+		},
+		[]string{"model"},
+	)
+
+	// rerankTruncateTotal counts truncation events by model and reason.
+	// reason: "tokens" (WithMaxTokensPerDoc) | "chars" (WithMaxCharsPerDoc).
+	rerankTruncateTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rerank_truncate_total",
+			Help: "Total document truncation events by model and reason (tokens|chars).",
+		},
+		[]string{"model", "reason"},
+	)
 )
 
 // ── G0 helpers ───────────────────────────────────────────────────────────────
@@ -122,6 +154,28 @@ func recordGiveup(model, reason string) {
 // recordFallbackUsed increments the fallback counter.
 func recordFallbackUsed(primary, secondary string) {
 	rerankFallbackUsedTotal.WithLabelValues(primary, secondary).Inc()
+}
+
+// ── G2-client helpers ─────────────────────────────────────────────────────────
+
+// emitScoreDistribution records each score in the post-pipeline distribution
+// histogram. Called after Normalize + SourceWeights, before sort.
+func emitScoreDistribution(model string, scores []float32) {
+	h := rerankScoreDistribution.WithLabelValues(model)
+	for _, s := range scores {
+		h.Observe(float64(s))
+	}
+}
+
+// recordBelowThreshold increments the threshold-filter counter by n dropped docs.
+func recordBelowThreshold(model string, n int) {
+	rerankBelowThresholdTotal.WithLabelValues(model).Add(float64(n))
+}
+
+// recordTruncate increments the truncation event counter.
+// reason is "tokens" or "chars".
+func recordTruncate(model, reason string) {
+	rerankTruncateTotal.WithLabelValues(model, reason).Inc()
 }
 
 // itoa converts a non-negative integer to its decimal string representation.

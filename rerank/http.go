@@ -16,6 +16,7 @@ type cohereRequest struct {
 	Query     string   `json:"query"`
 	Documents []string `json:"documents"`
 	TopN      *int     `json:"top_n,omitempty"`
+	Normalize string   `json:"normalize,omitempty"` // G2-client: server-side normalize mode; "" omitted (Cohere compat)
 }
 
 // cohereResult is a single scored doc in the rerank response.
@@ -53,6 +54,7 @@ func (c *Client) callCohere(ctx context.Context, query string, docs []string) (*
 		Model:     c.cfg.model,
 		Query:     query,
 		Documents: docs,
+		Normalize: c.cfg.serverNormalize, // "" → omitempty → field absent (Cohere compat)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
