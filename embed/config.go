@@ -120,18 +120,21 @@ func WithBackend(name string) Opt {
 }
 
 // WithEmbedder accepts a pre-built Embedder (e.g. *onnx.Embedder from the
-// embed/onnx subpackage, or any custom implementation). NewClient skips
-// backend factory dispatch and returns this Embedder as-is.
+// embed/onnx subpackage, or a custom impl). NewClient skips backend factory
+// dispatch and wires this Embedder as the inner backend of the returned *Client.
+// Required for ONNX usage via NewClient (avoids forcing cgo on pure-HTTP callers).
 //
 // ONNX usage:
 //
 //	import "github.com/anatolykoptev/go-kit/embed/onnx"
 //
 //	onnxEmb, _ := onnx.New(onnx.Config{...}, logger)
-//	e, _ := embed.NewClient("", embed.WithEmbedder(onnxEmb))
+//	c, _ := embed.NewClient("", embed.WithEmbedder(onnxEmb))
 //
-// This avoids linking libonnxruntime/libtokenizers into callers that only
-// need HTTP/Ollama/Voyage. nil is ignored (backend dispatch proceeds).
+// Note: when WithEmbedder is set, WithBackend is silently ignored. To make the
+// override explicit, set only one of the two.
+//
+// nil is ignored (backend dispatch proceeds normally).
 func WithEmbedder(e Embedder) Opt {
 	return func(c *cfgInternal) {
 		if e != nil {

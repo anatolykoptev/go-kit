@@ -15,25 +15,28 @@ import (
 // TestNewClient_HTTPBackend verifies that NewClient with no explicit backend
 // builds an HTTPEmbedder when a URL is provided.
 func TestNewClient_HTTPBackend(t *testing.T) {
-	e, err := NewClient("http://embed:8082",
+	c, err := NewClient("http://embed:8082",
 		WithModel("multilingual-e5-large"),
 		WithDim(1024),
 	)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, ok := e.(*HTTPEmbedder); !ok {
-		t.Errorf("expected *HTTPEmbedder, got %T", e)
+	// NewClient now returns *Client; inner holds the concrete backend.
+	if _, ok := c.inner.(*HTTPEmbedder); !ok {
+		t.Errorf("expected *HTTPEmbedder inner, got %T", c.inner)
 	}
-	if e.Dimension() != 1024 {
-		t.Errorf("dim: want 1024, got %d", e.Dimension())
+	// *Client satisfies Embedder — compile-time check via embedded var in client.go.
+	var _ Embedder = c
+	if c.Dimension() != 1024 {
+		t.Errorf("dim: want 1024, got %d", c.Dimension())
 	}
 }
 
 // TestNewClient_OllamaBackend verifies that NewClient with WithBackend("ollama")
 // builds an OllamaClient with prefix opts applied.
 func TestNewClient_OllamaBackend(t *testing.T) {
-	e, err := NewClient("http://ollama:11434",
+	cl, err := NewClient("http://ollama:11434",
 		WithBackend("ollama"),
 		WithModel("nomic-embed-text"),
 		WithOllamaDocPrefix("passage: "),
@@ -43,9 +46,9 @@ func TestNewClient_OllamaBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	c, ok := e.(*OllamaClient)
+	c, ok := cl.inner.(*OllamaClient)
 	if !ok {
-		t.Fatalf("expected *OllamaClient, got %T", e)
+		t.Fatalf("expected *OllamaClient inner, got %T", cl.inner)
 	}
 	if c.textPrefix != "passage: " {
 		t.Errorf("textPrefix: want %q, got %q", "passage: ", c.textPrefix)
@@ -71,7 +74,7 @@ func TestNewClient_VoyageBackend_RequiresAPIKey(t *testing.T) {
 // TestNewClient_VoyageBackend_WithAPIKey verifies that a valid API key builds
 // a VoyageClient successfully.
 func TestNewClient_VoyageBackend_WithAPIKey(t *testing.T) {
-	e, err := NewClient("",
+	cl, err := NewClient("",
 		WithBackend("voyage"),
 		WithModel("voyage-4-lite"),
 		WithVoyageAPIKey("sk-test"),
@@ -79,8 +82,8 @@ func TestNewClient_VoyageBackend_WithAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, ok := e.(*VoyageClient); !ok {
-		t.Errorf("expected *VoyageClient, got %T", e)
+	if _, ok := cl.inner.(*VoyageClient); !ok {
+		t.Errorf("expected *VoyageClient inner, got %T", cl.inner)
 	}
 }
 
@@ -102,14 +105,14 @@ func TestNewClient_UnknownBackend(t *testing.T) {
 
 // TestNewClient_WithTimeout verifies WithTimeout applies to Ollama client.
 func TestNewClient_WithTimeout(t *testing.T) {
-	e, err := NewClient("http://ollama:11434",
+	cl, err := NewClient("http://ollama:11434",
 		WithBackend("ollama"),
 		WithTimeout(5*time.Second),
 	)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	c := e.(*OllamaClient)
+	c := cl.inner.(*OllamaClient)
 	if c.httpClient.Timeout != 5*time.Second {
 		t.Errorf("timeout: want 5s, got %v", c.httpClient.Timeout)
 	}
@@ -484,18 +487,22 @@ func (s *namedStubEmbedder) Close() error   { return nil }
 func (s *namedStubEmbedder) Model() string  { return s.modelName }
 
 // TestNewClient_CustomEmbedder verifies that WithEmbedder bypasses backend
-// factory dispatch entirely and returns the caller-supplied Embedder as-is.
+// factory dispatch and wires the caller-supplied Embedder as the inner backend.
 func TestNewClient_CustomEmbedder(t *testing.T) {
 	stub := &namedStubEmbedder{modelName: "custom-model"}
-	e, err := NewClient("http://ignored-url",
+	cl, err := NewClient("http://ignored-url",
 		WithBackend("http"), // should be ignored when WithEmbedder is set
 		WithEmbedder(stub),
 	)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if e != stub {
-		t.Errorf("expected caller-supplied stub, got %T", e)
+	// NewClient always returns *Client; stub is wired as the inner backend.
+	if cl.inner != stub {
+		t.Errorf("expected caller-supplied stub as inner, got %T", cl.inner)
+	}
+	if cl.model != "custom-model" {
+		t.Errorf("model: want %q, got %q", "custom-model", cl.model)
 	}
 }
 
@@ -504,19 +511,20 @@ func TestNewClient_CustomEmbedder(t *testing.T) {
 // and passes it via WithEmbedder. URL and backend are ignored.
 func TestNewClient_OnnxLikeViaCustom(t *testing.T) {
 	onnxLike := &namedStubEmbedder{modelName: "multilingual-e5-large"}
+	obs := &countingObserver{}
 
-	e, err := NewClient("", // ONNX has no HTTP URL
+	cl, err := NewClient("", // ONNX has no HTTP URL
 		WithEmbedder(onnxLike),
-		WithObserver(&countingObserver{}), // observer is applied to cfg but not wired in E0
+		WithObserver(obs), // observer is wired into *Client — fires on EmbedWithResult
 	)
 	if err != nil {
 		t.Fatalf("NewClient with ONNX-like: %v", err)
 	}
-	if e != onnxLike {
-		t.Errorf("expected onnxLike stub, got %T", e)
+	if cl.inner != onnxLike {
+		t.Errorf("expected onnxLike stub as inner, got %T", cl.inner)
 	}
-	// Verify it works end-to-end: EmbedWithResult should succeed.
-	res, err := EmbedWithResult(context.Background(), e, []string{"test"})
+	// Verify end-to-end: EmbedWithResult via *Client fires observer hooks.
+	res, err := cl.EmbedWithResult(context.Background(), []string{"test"})
 	if err != nil {
 		t.Fatalf("EmbedWithResult: %v", err)
 	}
@@ -526,20 +534,23 @@ func TestNewClient_OnnxLikeViaCustom(t *testing.T) {
 	if res.Model != "multilingual-e5-large" {
 		t.Errorf("Model: want %q, got %q", "multilingual-e5-large", res.Model)
 	}
+	if obs.beforeEmbed != 1 || obs.afterEmbed != 1 {
+		t.Errorf("observer: want before=1 after=1, got before=%d after=%d", obs.beforeEmbed, obs.afterEmbed)
+	}
 }
 
 // TestNewClient_WithEmbedder_NilIgnored verifies that WithEmbedder(nil) is
 // a no-op — backend dispatch proceeds normally.
 func TestNewClient_WithEmbedder_NilIgnored(t *testing.T) {
-	e, err := NewClient("http://embed:8082",
+	cl, err := NewClient("http://embed:8082",
 		WithEmbedder(nil), // must be ignored
 		WithModel("multilingual-e5-large"),
 	)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, ok := e.(*HTTPEmbedder); !ok {
-		t.Errorf("expected *HTTPEmbedder after nil WithEmbedder, got %T", e)
+	if _, ok := cl.inner.(*HTTPEmbedder); !ok {
+		t.Errorf("expected *HTTPEmbedder inner after nil WithEmbedder, got %T", cl.inner)
 	}
 }
 
@@ -561,5 +572,104 @@ func TestModelFromEmbedder_FakeEmbedder(t *testing.T) {
 	got := modelFromEmbedder(stub)
 	if got != "" {
 		t.Errorf("modelFromEmbedder for opaque type: want empty, got %q", got)
+	}
+}
+
+// --- *Client method tests (observer wiring, Fix 1) ---
+
+// TestClient_EmbedWithResult_FiresObserverHooks verifies that OnBeforeEmbed and
+// OnAfterEmbed are called exactly once on a successful embed via *Client.
+func TestClient_EmbedWithResult_FiresObserverHooks(t *testing.T) {
+	want := [][]float32{{0.1, 0.2, 0.3}}
+	srv := mockHTTPServer(t, want, http.StatusOK)
+	defer srv.Close()
+
+	obs := &countingObserver{}
+	cl, err := NewClient(srv.URL,
+		WithModel("test-model"),
+		WithDim(3),
+		WithObserver(obs),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	res, err := cl.EmbedWithResult(context.Background(), []string{"hello"})
+	if err != nil {
+		t.Fatalf("EmbedWithResult: %v", err)
+	}
+	if res.Status != StatusOk {
+		t.Errorf("Status: want StatusOk, got %s", res.Status)
+	}
+	if obs.beforeEmbed != 1 {
+		t.Errorf("OnBeforeEmbed: want 1, got %d", obs.beforeEmbed)
+	}
+	if obs.afterEmbed != 1 {
+		t.Errorf("OnAfterEmbed: want 1, got %d", obs.afterEmbed)
+	}
+}
+
+// TestClient_EmbedWithResult_FiresOnAfterEmbedOnError verifies that OnAfterEmbed
+// fires with StatusDegraded when the backend returns an HTTP error.
+func TestClient_EmbedWithResult_FiresOnAfterEmbedOnError(t *testing.T) {
+	srv := mockHTTPServer(t, nil, http.StatusInternalServerError)
+	defer srv.Close()
+
+	obs := &countingObserver{}
+	cl, err := NewClient(srv.URL,
+		WithModel("test-model"),
+		WithDim(1024),
+		WithObserver(obs),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	res, err := cl.EmbedWithResult(context.Background(), []string{"test"})
+	if err == nil {
+		t.Fatal("expected error for 500 status")
+	}
+	if res.Status != StatusDegraded {
+		t.Errorf("Status: want StatusDegraded, got %s", res.Status)
+	}
+	if obs.beforeEmbed != 1 {
+		t.Errorf("OnBeforeEmbed: want 1, got %d", obs.beforeEmbed)
+	}
+	if obs.afterEmbed != 1 {
+		t.Errorf("OnAfterEmbed: want 1, got %d", obs.afterEmbed)
+	}
+}
+
+// TestEmbedWithResult_PartialResponseSameErr verifies that on a length-mismatch
+// response, Result.Err and the function return error are the same instance so
+// errors.Is chaining works correctly (Fix 3).
+func TestEmbedWithResult_PartialResponseSameErr(t *testing.T) {
+	// errEmbedder already defined elsewhere; use namedStubEmbedder with a custom
+	// embedFn that returns a length-mismatched slice.
+	mismatchStub := &namedStubEmbedder{
+		modelName: "mismatch-model",
+		embedFn: func(_ context.Context, texts []string) ([][]float32, error) {
+			// Return one fewer vector than requested.
+			if len(texts) > 0 {
+				return [][]float32{{0.1, 0.2}}, nil // always 1, regardless of len(texts)
+			}
+			return nil, nil
+		},
+	}
+
+	cl := &Client{inner: mismatchStub, observer: noopObserver{}, model: "mismatch-model"}
+	res, returnedErr := cl.EmbedWithResult(context.Background(), []string{"a", "b"})
+	if returnedErr == nil {
+		t.Fatal("expected error for partial response")
+	}
+	if res.Err == nil {
+		t.Fatal("expected Result.Err to be set for partial response")
+	}
+	// Both must reference the exact same error instance.
+	if res.Err != returnedErr {
+		t.Errorf("Result.Err and returned error must be the same instance for errors.Is to work; got different pointers")
+	}
+	if res.Status != StatusDegraded {
+		t.Errorf("Status: want StatusDegraded, got %s", res.Status)
 	}
 }
