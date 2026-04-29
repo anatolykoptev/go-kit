@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sort"
 	"time"
+	"unicode/utf8"
 )
 
 // defaultMaxDocs caps docs shipped to the server when MaxDocs is 0.
@@ -160,7 +161,11 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 			}
 		}
 		if c.cfg.maxCharsPerDoc > 0 {
+			beforeChars := utf8.RuneCountInString(t)
 			t = truncateRunes(t, c.cfg.maxCharsPerDoc)
+			if utf8.RuneCountInString(t) < beforeChars {
+				recordTruncate(c.cfg.model, "chars")
+			}
 		}
 		texts[i] = t
 	}
@@ -212,7 +217,25 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc, o
 
 	// G2-client pipeline stages: Normalize → SourceWeights → score histogram.
 	// Applied on the raw scores array (indexed by original doc position in head).
-	scores = Normalize(scores, c.cfg.normalizeMode)
+	//
+	// G2-client fix: normalize ONLY over seen scores so an unseen 0 doesn't
+	// poison the distribution (matters for MinMax/ZScore; identity for None).
+	if c.cfg.normalizeMode != NormalizeNone {
+		seenIdx := make([]int, 0, len(scores))
+		seenVals := make([]float32, 0, len(scores))
+		for i, s := range scores {
+			if seen[i] {
+				seenIdx = append(seenIdx, i)
+				seenVals = append(seenVals, s)
+			}
+		}
+		seenVals = Normalize(seenVals, c.cfg.normalizeMode)
+		for k, i := range seenIdx {
+			scores[i] = seenVals[k]
+		}
+	} else {
+		scores = Normalize(scores, c.cfg.normalizeMode) // identity, keeps current behavior
+	}
 	scores = applySourceWeights(scores, head, c.cfg.sourceWeights)
 	emitScoreDistribution(c.cfg.model, scores)
 

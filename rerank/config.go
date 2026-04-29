@@ -73,7 +73,8 @@ func WithMaxDocs(n int) Opt {
 }
 
 // WithMaxCharsPerDoc enables rune-aware truncation of each document text.
-// 0 disables truncation. Kept for v1 compatibility; G2 will add WithMaxTokensPerDoc.
+// 0 disables truncation. Prefer WithMaxTokensPerDoc for models with explicit
+// token budgets; WithMaxCharsPerDoc is kept for v1 compatibility.
 func WithMaxCharsPerDoc(n int) Opt {
 	return func(c *cfgInternal) { c.maxCharsPerDoc = n }
 }
