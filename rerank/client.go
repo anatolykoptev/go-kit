@@ -50,6 +50,9 @@ type Client struct {
 // New returns a configured client using the v1 Config struct.
 // logger=nil uses slog.Default().
 // Deprecated: use NewClient(url, opts...) for new code.
+//
+// G1 note: the default retry policy (retry-on-5xx, 3 attempts) is now active
+// for v1 callers. Opt out via NewClient(url, WithRetry(rerank.NoRetry)).
 func New(cfg Config, logger *slog.Logger) *Client {
 	if logger == nil {
 		logger = slog.Default()
@@ -134,7 +137,8 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 	safeCall(func() { c.cfg.observer.OnBeforeCall(ctx, query, len(texts)) })
 
 	start := time.Now()
-	resp, err := c.callCohere(ctx, query, texts)
+	// G1: callCohereResilient wraps callCohere with retry + circuit breaker.
+	resp, err := c.callCohereResilient(ctx, query, texts)
 	dur := time.Since(start)
 	recordDuration(c.cfg.model, dur)
 
@@ -212,6 +216,38 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 		Status: StatusOk,
 		Model:  model,
 	}
+}
+
+// callCohereResilient wraps callCohere with:
+//  1. Circuit breaker check (if configured) — returns ErrCircuitOpen immediately if open.
+//  2. Retry loop via retry.do (default: 3 attempts on 5xx, exp backoff).
+//  3. Circuit breaker feedback (MarkSuccess/MarkFailure if configured).
+//
+// This is the single wrap point per G1 spec.
+func (c *Client) callCohereResilient(ctx context.Context, query string, texts []string) (*cohereResponse, error) {
+	cb := c.cfg.circuit
+
+	// 1. Circuit breaker guard.
+	if cb != nil && !cb.Allow() {
+		recordGiveup(c.cfg.model, "circuit_open")
+		return nil, ErrCircuitOpen
+	}
+
+	// 2. Retry loop.
+	resp, err := do(ctx, c.cfg.retry, c.cfg.model, c.cfg.observer, func() (*cohereResponse, error) {
+		return c.callCohere(ctx, query, texts)
+	})
+
+	// 3. Circuit breaker feedback.
+	if cb != nil {
+		if err != nil {
+			cb.MarkFailure()
+		} else {
+			cb.MarkSuccess()
+		}
+	}
+
+	return resp, err
 }
 
 // cfgModel returns model name safely (nil-safe helper for Result.Model).

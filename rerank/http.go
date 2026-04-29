@@ -30,6 +30,22 @@ type cohereResponse struct {
 	Results []cohereResult `json:"results"`
 }
 
+// errHTTPStatus is a typed error carrying the HTTP status code from a non-2xx
+// response. Using a typed error (rather than a plain fmt.Errorf string) allows
+// retry.do to type-assert the code for RetryableStatus filtering without
+// parsing the error string.
+//
+// The Error() string is "http status <code>" — identical to the previous
+// fmt.Errorf("http status %d", ...) format, preserving backward compatibility
+// for any caller that does strings.Contains(err.Error(), "http status").
+type errHTTPStatus struct {
+	Code int
+}
+
+func (e errHTTPStatus) Error() string {
+	return fmt.Sprintf("http status %d", e.Code)
+}
+
 // callCohere POSTs the rerank request and returns the parsed response.
 // The caller's ctx plus c.cfg.timeout bounds the HTTP call.
 func (c *Client) callCohere(ctx context.Context, query string, docs []string) (*cohereResponse, error) {
@@ -66,7 +82,7 @@ func (c *Client) callCohere(ctx context.Context, query string, docs []string) (*
 
 	if resp.StatusCode/100 != 2 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, respBodyLimit))
-		return nil, fmt.Errorf("http status %d", resp.StatusCode)
+		return nil, errHTTPStatus{Code: resp.StatusCode}
 	}
 
 	rb, err := io.ReadAll(io.LimitReader(resp.Body, respBodyLimit))

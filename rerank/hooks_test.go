@@ -26,7 +26,7 @@ func (o *countingObserver) OnAfterCall(_ context.Context, s Status, _ time.Durat
 	o.afterCall++
 	o.lastStatus = s
 }
-func (o *countingObserver) OnRetry(_ context.Context, _ int, _ error)               { o.retry++ }
+func (o *countingObserver) OnRetry(_ context.Context, _ int, _ error) { o.retry++ }
 func (o *countingObserver) OnCircuitTransition(_ context.Context, _, _ CircuitState) {
 	o.circuitTransition++
 }
@@ -162,7 +162,7 @@ func (panicObserver) OnBeforeCall(_ context.Context, _ string, _ int) { panic("b
 func (panicObserver) OnAfterCall(_ context.Context, _ Status, _ time.Duration, _ int) {
 	panic("after")
 }
-func (panicObserver) OnRetry(_ context.Context, _ int, _ error)               { panic("retry") }
+func (panicObserver) OnRetry(_ context.Context, _ int, _ error) { panic("retry") }
 func (panicObserver) OnCircuitTransition(_ context.Context, _, _ CircuitState) {
 	panic("circuit")
 }

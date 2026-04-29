@@ -16,17 +16,26 @@ type cfgInternal struct {
 	maxCharsPerDoc int
 	observer       Observer
 	hc             *http.Client
+	// G1 fields
+	retry    RetryPolicy
+	circuit  *CircuitBreaker
+	fallback *Client
 }
 
 // Opt is a functional option for NewClient.
 type Opt func(*cfgInternal)
 
 // defaultCfg returns a cfgInternal with sensible defaults.
+// G1: retry-on-5xx is ACTIVE by default (defaultRetryPolicy). v1 callers using
+// New(cfg, logger) inherit this; opt out via WithRetry(rerank.NoRetry).
 func defaultCfg() *cfgInternal {
 	return &cfgInternal{
 		maxDocs:  defaultMaxDocs,
 		observer: noopObserver{},
 		hc:       &http.Client{},
+		retry:    defaultRetryPolicy(),
+		circuit:  nil, // off by default; opt-in via WithCircuit
+		fallback: nil, // off by default; opt-in via WithFallback
 	}
 }
 
@@ -80,4 +89,31 @@ func WithHTTPClient(hc *http.Client) Opt {
 			c.hc = hc
 		}
 	}
+}
+
+// WithRetry configures the retry policy for transient errors (5xx HTTP status).
+// The default policy retries 3 times with exponential backoff.
+// Opt-out: WithRetry(rerank.NoRetry).
+func WithRetry(p RetryPolicy) Opt {
+	return func(c *cfgInternal) { c.retry = p }
+}
+
+// WithCircuit enables the circuit breaker with the given configuration.
+// By default the circuit breaker is OFF (nil). Wiring the observer for
+// OnCircuitTransition callbacks is done automatically from the client's observer.
+func WithCircuit(cfg CircuitConfig) Opt {
+	return func(c *cfgInternal) {
+		// The transition hook needs to know the model and observer, but those
+		// may not be set yet (options apply in order). The circuit is created
+		// lazily in newFromInternal after all options are applied; here we store
+		// a sentinel CircuitBreaker with the config so newFromInternal can wire it.
+		c.circuit = &CircuitBreaker{cfg: cfg}
+	}
+}
+
+// WithFallback configures a secondary Client to try if the primary fails with
+// a non-4xx error. StatusFallback is returned on secondary success.
+// A nil secondary is a no-op.
+func WithFallback(secondary *Client) Opt {
+	return func(c *cfgInternal) { c.fallback = secondary }
 }
