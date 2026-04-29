@@ -4,16 +4,20 @@
 // (pure prometheus client_golang) when the package moved out of memdb-go.
 // This matches the rerank_* convention in github.com/anatolykoptev/go-kit/rerank.
 //
-// Series:
+// E0 series:
 //
 //   - embed_requests_total{backend, outcome}   — counter
 //   - embed_duration_seconds{backend}          — histogram
 //   - embed_batch_size{backend}                — histogram
-//   - embed_retry_total{reason}                — counter
+//   - embed_retry_total{reason}                — counter (v1 internal retry)
 //
-// All four "reason" labels (transient, http_429, http_5xx, context) are
-// pre-registered at zero so dashboards see the full series set from
-// container start.
+// E1 series:
+//
+//   - embed_retry_attempt_total{backend, attempt} — counter
+//   - embed_circuit_state{backend, state}          — gauge (0=closed,1=open,2=half-open)
+//   - embed_circuit_transition_total{backend, from, to} — counter
+//   - embed_giveup_total{backend, reason}          — counter
+//   - embed_fallback_used_total{primary, secondary} — counter
 
 package embed
 
@@ -25,6 +29,8 @@ import (
 )
 
 var (
+	// ── E0 metrics ──────────────────────────────────────────────────────────────
+
 	embedRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "embed_requests_total",
@@ -51,9 +57,59 @@ var (
 	embedRetryTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "embed_retry_total",
-			Help: "Embed retry attempts by reason (transient|http_429|http_5xx|context).",
+			Help: "Embed retry attempts by reason (transient|http_429|http_5xx|context). v1 internal retry only.",
 		},
 		[]string{"reason"},
+	)
+
+	// ── E1 metrics ──────────────────────────────────────────────────────────────
+
+	// embedRetryAttemptTotal counts each retry attempt (not the initial attempt).
+	// Labels: backend, attempt (string "1", "2", ...).
+	embedRetryAttemptTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_retry_attempt_total",
+			Help: "Total retry attempts after the initial attempt, by backend and attempt number.",
+		},
+		[]string{"backend", "attempt"},
+	)
+
+	// embedCircuitStateGauge is a gauge tracking the current circuit breaker state
+	// (0=closed, 1=open, 2=half-open) per backend. Updated on each state change.
+	embedCircuitStateGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "embed_circuit_state",
+			Help: "Current circuit breaker state: 0=closed, 1=open, 2=half-open.",
+		},
+		[]string{"backend", "state"},
+	)
+
+	// embedCircuitTransitionTotal counts circuit breaker state transitions.
+	embedCircuitTransitionTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_circuit_transition_total",
+			Help: "Total circuit breaker state transitions by backend, from and to state.",
+		},
+		[]string{"backend", "from", "to"},
+	)
+
+	// embedGiveupTotal counts requests that gave up without a successful response.
+	// reason: exhausted (retries exhausted), circuit_open, 4xx (non-retryable).
+	embedGiveupTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_giveup_total",
+			Help: "Total requests that gave up on retry: reason=exhausted|circuit_open|4xx.",
+		},
+		[]string{"backend", "reason"},
+	)
+
+	// embedFallbackUsedTotal counts successful fallback invocations.
+	embedFallbackUsedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "embed_fallback_used_total",
+			Help: "Total successful fallback invocations from primary to secondary backend.",
+		},
+		[]string{"primary", "secondary"},
 	)
 )
 
@@ -72,6 +128,8 @@ const (
 	outcomeError   = "error"
 )
 
+// ── E0 helpers ───────────────────────────────────────────────────────────────
+
 // recordRequest records a single embed call's duration, batch size, and outcome.
 func recordRequest(backend, outcome string, batchSize int, d time.Duration) {
 	embedRequestsTotal.WithLabelValues(backend, outcome).Inc()
@@ -79,7 +137,59 @@ func recordRequest(backend, outcome string, batchSize int, d time.Duration) {
 	embedBatchSize.WithLabelValues(backend).Observe(float64(batchSize))
 }
 
-// recordRetryReason bumps the retry counter for the classified reason.
+// recordRetryReason bumps the v1-internal retry counter for the classified reason.
 func recordRetryReason(reason string) {
 	embedRetryTotal.WithLabelValues(reason).Inc()
+}
+
+// ── E1 helpers ───────────────────────────────────────────────────────────────
+
+// recordRetryAttempt increments the retry counter for the given backend and
+// attempt number (1-indexed: 1 = first retry after initial failure).
+func recordRetryAttempt(backend string, attempt int) {
+	embedRetryAttemptTotal.WithLabelValues(backend, itoa(attempt)).Inc()
+}
+
+// recordCircuitState updates the circuit state gauge for the given backend.
+// Only the active state label is set to 1; the others are set to 0.
+func recordCircuitState(backend string, state CircuitState) {
+	states := []CircuitState{CircuitClosed, CircuitOpen, CircuitHalfOpen}
+	for _, s := range states {
+		v := 0.0
+		if s == state {
+			v = 1.0
+		}
+		embedCircuitStateGauge.WithLabelValues(backend, s.String()).Set(v)
+	}
+}
+
+// recordCircuitTransition increments the transition counter.
+func recordCircuitTransition(backend string, from, to CircuitState) {
+	embedCircuitTransitionTotal.WithLabelValues(backend, from.String(), to.String()).Inc()
+}
+
+// recordGiveup increments the giveup counter for the given reason.
+func recordGiveup(backend, reason string) {
+	embedGiveupTotal.WithLabelValues(backend, reason).Inc()
+}
+
+// recordFallbackUsed increments the fallback counter.
+func recordFallbackUsed(primary, secondary string) {
+	embedFallbackUsedTotal.WithLabelValues(primary, secondary).Inc()
+}
+
+// itoa converts a non-negative integer to its decimal string representation.
+// Avoids importing strconv into this file.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	buf := [20]byte{}
+	pos := len(buf)
+	for n > 0 {
+		pos--
+		buf[pos] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[pos:])
 }

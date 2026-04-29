@@ -199,7 +199,7 @@ func (c *OllamaClient) embedRaw(ctx context.Context, input []string) ([][]float3
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, resp.StatusCode, fmt.Errorf("ollama: status %d: %s", resp.StatusCode, string(respBody))
+			return nil, resp.StatusCode, fmt.Errorf("ollama embedder: %w", &errHTTPStatus{Code: resp.StatusCode, Body: string(respBody)})
 		}
 
 		var ollamaResp ollamaEmbedResponse

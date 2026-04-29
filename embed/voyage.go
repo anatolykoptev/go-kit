@@ -120,7 +120,7 @@ func (v *VoyageClient) doRequest(ctx context.Context, bodyBytes []byte, texts []
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, fmt.Errorf("voyage: status %d: %s", resp.StatusCode, string(respBody))
+		return nil, resp.StatusCode, fmt.Errorf("voyage embedder: %w", &errHTTPStatus{Code: resp.StatusCode, Body: string(respBody)})
 	}
 
 	var voyResp voyageResponse

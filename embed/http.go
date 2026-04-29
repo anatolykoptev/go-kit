@@ -98,7 +98,7 @@ func (h *HTTPEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, 
 			return nil, resp.StatusCode, fmt.Errorf("http embedder: read response: %w", readErr)
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, resp.StatusCode, fmt.Errorf("http embedder: status %d: %s", resp.StatusCode, string(rb))
+			return nil, resp.StatusCode, fmt.Errorf("http embedder: %w", &errHTTPStatus{Code: resp.StatusCode, Body: string(rb)})
 		}
 		return rb, resp.StatusCode, nil
 	})

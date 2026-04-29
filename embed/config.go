@@ -62,17 +62,24 @@ type cfgInternal struct {
 	observer Observer
 	logger   *slog.Logger
 
-	// Reserved for E1+ streams (placeholders, not wired in E0).
+	// E1: resiliency
+	retry    RetryPolicy
+	circuit  *CircuitBreaker
+	fallback *Client
 }
 
 // Opt is a functional option for NewClient.
 type Opt func(*cfgInternal)
 
 // defaultCfg returns a cfgInternal with sensible defaults.
+// E1: retry policy is ON by default (defaultRetryPolicy). circuit and fallback are OFF.
 func defaultCfg() *cfgInternal {
 	return &cfgInternal{
 		observer: noopObserver{},
 		timeout:  30 * time.Second,
+		retry:    defaultRetryPolicy(),
+		circuit:  nil,
+		fallback: nil,
 	}
 }
 
@@ -164,4 +171,32 @@ func WithOllamaQueryPrefix(prefix string) Opt {
 // WithOllamaDim sets the Ollama-side dimension override.
 func WithOllamaDim(dim int) Opt {
 	return func(c *cfgInternal) { c.ollamaDim = dim }
+}
+
+// --- E1: Resiliency options ---
+
+// WithRetry configures the retry policy for transient errors (5xx HTTP status).
+// Pass embed.NoRetry to disable retries entirely.
+// Default: defaultRetryPolicy() (3 attempts, exp backoff 200ms→5s, jitter 10%).
+func WithRetry(p RetryPolicy) Opt {
+	return func(c *cfgInternal) { c.retry = p }
+}
+
+// WithCircuit enables the circuit breaker with the given configuration.
+// By default the circuit breaker is OFF (nil). Wiring the observer for
+// OnCircuitTransition happens in newClientFromInternal after all opts are applied.
+// A sentinel *CircuitBreaker is stored here; the final one (with model+obs hook)
+// is built in newClientFromInternal.
+func WithCircuit(cfg CircuitConfig) Opt {
+	return func(c *cfgInternal) {
+		// Store a placeholder with the cfg. The final CB (with model + observer
+		// wired) is built in newClientFromInternal once all opts have been applied.
+		c.circuit = &CircuitBreaker{cfg: cfg}
+	}
+}
+
+// WithFallback sets a secondary *Client to try when the primary returns
+// StatusDegraded with a non-4xx error. Fallback depth is capped at 1.
+func WithFallback(secondary *Client) Opt {
+	return func(c *cfgInternal) { c.fallback = secondary }
 }
