@@ -34,7 +34,7 @@ func TestAblation_Synthetic503(t *testing.T) {
 		t.Helper()
 		callCount := &atomic.Int64{}
 		rng := rand.New(rand.NewPCG(42, 137)) //nolint:gosec
-		var mu sync.Mutex                      // guards rng (captured by closure below)
+		var mu sync.Mutex                     // guards rng (captured by closure below)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			callCount.Add(1)
 			mu.Lock()

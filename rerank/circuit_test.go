@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func newTestCircuit(threshold int, openDur time.Duration) *CircuitBreaker {
@@ -72,10 +74,10 @@ func TestCircuit_HalfOpenAfterDuration(t *testing.T) {
 // TestCircuit_HalfOpenSuccessClosesCircuit verifies HalfOpen→Closed on MarkSuccess.
 func TestCircuit_HalfOpenSuccessClosesCircuit(t *testing.T) {
 	cb := newTestCircuit(1, 20*time.Millisecond)
-	cb.MarkFailure()                   // → Open
-	time.Sleep(30 * time.Millisecond)  // wait for OpenDuration
-	cb.Allow()                         // transitions to HalfOpen
-	cb.MarkSuccess()                   // → Closed
+	cb.MarkFailure()                  // → Open
+	time.Sleep(30 * time.Millisecond) // wait for OpenDuration
+	cb.Allow()                        // transitions to HalfOpen
+	cb.MarkSuccess()                  // → Closed
 	if cb.State() != CircuitClosed {
 		t.Errorf("after success in HalfOpen: got %v want CircuitClosed", cb.State())
 	}
@@ -201,5 +203,47 @@ func TestCircuitState_String(t *testing.T) {
 		if got := tc.state.String(); got != tc.want {
 			t.Errorf("%v.String(): got %q want %q", tc.state, got, tc.want)
 		}
+	}
+}
+
+// TestCircuit_GaugeUpdatesOnOpenToHalfOpen verifies that the circuit state gauge
+// is updated when Allow() drives the implicit Open→HalfOpen transition.
+// Before this fix, recordCircuitState was only called from MarkSuccess/MarkFailure,
+// so the gauge stayed at state="open" even after the breaker moved to HalfOpen.
+func TestCircuit_GaugeUpdatesOnOpenToHalfOpen(t *testing.T) {
+	const model = "gauge-test-model"
+	cb := NewCircuitBreaker(CircuitConfig{
+		FailThreshold:  1,
+		OpenDuration:   20 * time.Millisecond,
+		HalfOpenProbes: 1,
+	}, nil)
+	cb.model = model
+
+	cb.MarkFailure() // Closed → Open; gauge should reflect "open"=1
+
+	openGauge := testutil.ToFloat64(rerankCircuitStateGauge.WithLabelValues(model, "open"))
+	if openGauge != 1 {
+		t.Errorf("after MarkFailure: state=open gauge = %.0f, want 1", openGauge)
+	}
+
+	time.Sleep(30 * time.Millisecond) // wait past OpenDuration
+
+	// Allow() triggers the implicit Open→HalfOpen transition.
+	allowed := cb.Allow()
+	if !allowed {
+		t.Fatal("Allow() should return true after OpenDuration elapsed")
+	}
+	if cb.State() != CircuitHalfOpen {
+		t.Fatalf("state after Allow(): got %v want CircuitHalfOpen", cb.State())
+	}
+
+	// Gauge must now reflect half-open=1, open=0.
+	halfOpenGauge := testutil.ToFloat64(rerankCircuitStateGauge.WithLabelValues(model, "half-open"))
+	if halfOpenGauge != 1 {
+		t.Errorf("after Allow() transition: state=half-open gauge = %.0f, want 1", halfOpenGauge)
+	}
+	openGauge = testutil.ToFloat64(rerankCircuitStateGauge.WithLabelValues(model, "open"))
+	if openGauge != 0 {
+		t.Errorf("after Allow() transition: state=open gauge = %.0f, want 0", openGauge)
 	}
 }

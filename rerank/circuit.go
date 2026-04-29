@@ -135,9 +135,7 @@ func (cb *CircuitBreaker) MarkSuccess() {
 	case CircuitClosed:
 		cb.consecFails = 0
 	}
-	state := cb.state
 	cb.mu.Unlock()
-	recordCircuitState(cb.model, state)
 }
 
 // MarkFailure notifies the breaker that the call failed.
@@ -159,9 +157,7 @@ func (cb *CircuitBreaker) MarkFailure() {
 		atomic.StoreInt32(&cb.halfOpenCnt, 0)
 		cb.doTransition(CircuitOpen)
 	}
-	state := cb.state
 	cb.mu.Unlock()
-	recordCircuitState(cb.model, state)
 }
 
 // State returns the current CircuitState. Safe for concurrent reads.
@@ -176,9 +172,13 @@ func (cb *CircuitBreaker) State() CircuitState {
 // while the lock is still held — callbacks must not call Allow/MarkSuccess/
 // MarkFailure (would deadlock). Use the circuitTransitionHook constructor to
 // build a metric-only callback that is safe to call under the lock.
+//
+// recordCircuitState is called here so that every state change — including the
+// implicit Open→HalfOpen transition inside Allow() — updates the gauge.
 func (cb *CircuitBreaker) doTransition(to CircuitState) {
 	from := cb.state
 	cb.state = to
+	recordCircuitState(cb.model, to)
 	if cb.onTransition != nil && from != to {
 		fn := cb.onTransition
 		f, t := from, to

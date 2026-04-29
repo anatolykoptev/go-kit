@@ -223,7 +223,7 @@ func (c *Client) rerankInternal(ctx context.Context, query string, docs []Doc) *
 //  2. Retry loop via retry.do (default: 3 attempts on 5xx, exp backoff).
 //  3. Circuit breaker feedback (MarkSuccess/MarkFailure if configured).
 //
-// This is the single wrap point at client.go L137 per G1 spec.
+// This is the single wrap point per G1 spec.
 func (c *Client) callCohereResilient(ctx context.Context, query string, texts []string) (*cohereResponse, error) {
 	cb := c.cfg.circuit
 

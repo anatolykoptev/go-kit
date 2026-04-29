@@ -57,12 +57,12 @@ type Observer interface {
 // noopObserver is the default Observer — all callbacks are no-ops.
 type noopObserver struct{}
 
-func (noopObserver) OnBeforeCall(_ context.Context, _ string, _ int)                    {}
-func (noopObserver) OnAfterCall(_ context.Context, _ Status, _ time.Duration, _ int)    {}
-func (noopObserver) OnRetry(_ context.Context, _ int, _ error)                          {}
-func (noopObserver) OnCircuitTransition(_ context.Context, _, _ CircuitState)           {}
-func (noopObserver) OnCacheHit(_ context.Context, _ int)                                {}
-func (noopObserver) OnTruncate(_ context.Context, _ string, _, _ int)                   {}
+func (noopObserver) OnBeforeCall(_ context.Context, _ string, _ int)                 {}
+func (noopObserver) OnAfterCall(_ context.Context, _ Status, _ time.Duration, _ int) {}
+func (noopObserver) OnRetry(_ context.Context, _ int, _ error)                       {}
+func (noopObserver) OnCircuitTransition(_ context.Context, _, _ CircuitState)        {}
+func (noopObserver) OnCacheHit(_ context.Context, _ int)                             {}
+func (noopObserver) OnTruncate(_ context.Context, _ string, _, _ int)                {}
 
 // safeCall invokes fn and recovers any panic it raises.
 // A panic in user observer code MUST NOT kill the rerank request.
@@ -70,25 +70,3 @@ func safeCall(fn func()) {
 	defer func() { _ = recover() }()
 	fn()
 }
-
-// slogObserver wraps a *slog.Logger to implement Observer, preserving the
-// v1 logging behavior when New(cfg, logger) is called.
-// Only OnBeforeCall and OnAfterCall produce log output (matching v1 Warn on error).
-// All other callbacks are no-ops — v1 never fired them.
-type slogObserver struct {
-	logger interface {
-		Warn(msg string, args ...any)
-	}
-}
-
-func (s slogObserver) OnBeforeCall(_ context.Context, _ string, _ int) {}
-func (s slogObserver) OnAfterCall(_ context.Context, status Status, _ time.Duration, _ int) {
-	// v1 logged on error inside Rerank body; the slogObserver delegates the
-	// actual log call back to the client's existing logger field so v1
-	// callers see identical log output. No action needed here — the client
-	// still calls c.logger.Warn directly for v1 compat (see client.go).
-}
-func (s slogObserver) OnRetry(_ context.Context, _ int, _ error)               {}
-func (s slogObserver) OnCircuitTransition(_ context.Context, _, _ CircuitState) {}
-func (s slogObserver) OnCacheHit(_ context.Context, _ int)                     {}
-func (s slogObserver) OnTruncate(_ context.Context, _ string, _, _ int)        {}
