@@ -237,7 +237,7 @@ func TestClient_NoRetryOn4xx_TypedError(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		attempts.Add(1)
-		w.WriteHeader(http.StatusBadRequest) // 400
+		w.WriteHeader(http.StatusBadRequest)       // 400
 		w.Write([]byte(`{"error":"bad request"}`)) //nolint:errcheck
 	}))
 	defer srv.Close()
