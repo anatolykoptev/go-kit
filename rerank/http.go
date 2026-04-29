@@ -31,10 +31,10 @@ type cohereResponse struct {
 }
 
 // callCohere POSTs the rerank request and returns the parsed response.
-// The caller's ctx plus c.cfg.Timeout bounds the HTTP call.
+// The caller's ctx plus c.cfg.timeout bounds the HTTP call.
 func (c *Client) callCohere(ctx context.Context, query string, docs []string) (*cohereResponse, error) {
 	body, err := json.Marshal(cohereRequest{
-		Model:     c.cfg.Model,
+		Model:     c.cfg.model,
 		Query:     query,
 		Documents: docs,
 	})
@@ -43,22 +43,22 @@ func (c *Client) callCohere(ctx context.Context, query string, docs []string) (*
 	}
 
 	callCtx := ctx
-	if c.cfg.Timeout > 0 {
+	if c.cfg.timeout > 0 {
 		var cancel context.CancelFunc
-		callCtx, cancel = context.WithTimeout(ctx, c.cfg.Timeout)
+		callCtx, cancel = context.WithTimeout(ctx, c.cfg.timeout)
 		defer cancel()
 	}
 
-	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, c.cfg.URL+"/v1/rerank", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, c.cfg.url+"/v1/rerank", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	if c.cfg.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.apiKey)
 	}
 
-	resp, err := c.hc.Do(req)
+	resp, err := c.cfg.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("do: %w", err)
 	}
