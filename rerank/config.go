@@ -27,6 +27,8 @@ type cfgInternal struct {
 	docInstruction   string             // prefix prepended to each document before POST
 	maxTokensPerDoc  int                // 0 = disabled; token-aware truncation (applied before chars)
 	sourceWeights    map[string]float32 // per-source score multiplier; nil = disabled
+	// G4 fields
+	cache Cache // nil = disabled; caller wires Redis/LRU/sync.Map per runtime
 }
 
 // Opt is a functional option for NewClient.
@@ -139,3 +141,7 @@ func WithNormalize(mode NormalizeMode) Opt {
 // WithInstruction, WithMaxTokensPerDoc, WithSourceWeights, and
 // WithServerNormalize are declared in their respective files:
 // instruction.go, tokens.go, source_weights.go, server_normalize.go.
+
+// ── G4 options ────────────────────────────────────────────────────────────────
+
+// WithCache is declared in cache.go.
