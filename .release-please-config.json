@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "go",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "draft": false,
+  "prerelease": false,
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "changelog-sections": [
+    {"type": "feat", "section": "Features"},
+    {"type": "fix", "section": "Bug Fixes"},
+    {"type": "perf", "section": "Performance"},
+    {"type": "refactor", "section": "Refactoring"},
+    {"type": "docs", "section": "Documentation"},
+    {"type": "test", "section": "Tests", "hidden": true},
+    {"type": "chore", "section": "Chores", "hidden": true},
+    {"type": "ci", "section": "CI", "hidden": true},
+    {"type": "build", "section": "Build", "hidden": true}
+  ],
+  "packages": {
+    ".": {
+      "package-name": "go-kit",
+      "release-type": "go",
+      "extra-files": []
+    }
+  }
+}
