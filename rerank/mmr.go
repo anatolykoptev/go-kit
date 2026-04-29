@@ -1,6 +1,9 @@
 package rerank
 
-import "context"
+import (
+	"context"
+	"math"
+)
 
 // applyMMR applies Maximal Marginal Relevance (MMR) to re-order docs for
 // relevance+diversity tradeoff.
@@ -56,7 +59,10 @@ func applyMMR(ctx context.Context, docs []Doc, relScores []float32, lambda float
 			}
 
 			// Compute max cosine similarity to already-selected docs.
-			var maxSim float32
+			// Initialize to -MaxFloat32 so that the first observed sim wins
+			// regardless of sign — handles antiparallel/orthogonal corpora where
+			// all cross-sims may be negative.
+			maxSim := float32(-math.MaxFloat32)
 			for _, s := range result {
 				sim := cosineSim(docs[i].EmbedVector, s.Doc.EmbedVector)
 				if sim > maxSim {

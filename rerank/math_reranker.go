@@ -25,7 +25,13 @@ var _ Reranker = MathReranker{}
 type MathReranker struct {
 	// QueryVector is the embedding of the query. Required — empty vector disables scoring.
 	QueryVector []float32
-	// Lambda controls relevance/diversity tradeoff in MMR. 0 = pure cosine sort.
+	// Lambda controls MMR relevance-vs-diversity tradeoff (standard
+	// Carbonell-Goldstein 1998 convention):
+	//   1.0 = pure relevance (MMR equivalent of pure cosine sort)
+	//   0.5 = balanced relevance/diversity (recommended default for diversity)
+	//   0.0 = pure diversity (skip MMR; pure cosine sort fast path)
+	//
+	// Default 0 → no MMR; relScores sorted desc. Set Lambda > 0 to engage MMR.
 	Lambda float32
 }
 

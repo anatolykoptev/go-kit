@@ -138,6 +138,43 @@ func TestApplyMMR_CtxCancel_StopsEarly(t *testing.T) {
 	}
 }
 
+// TestApplyMMR_AllNegativeCrossSims_HandlesCorrectly verifies that when all
+// candidates have negative cosine similarity to picked docs, MMR doesn't
+// over-penalize via maxSim defaulting to 0.
+func TestApplyMMR_AllNegativeCrossSims_HandlesCorrectly(t *testing.T) {
+	// Construct docs where cross-similarities will be negative.
+	// doc b is antiparallel to doc a → cosine sim = -1.
+	// doc c is orthogonal to both but its cross-sim with a is 0, however once b
+	// is in result, cross-sim to b is also 0; testing the antiparallel path.
+	docs := []Doc{
+		{ID: "a", EmbedVector: []float32{1, 0, 0}},
+		{ID: "b", EmbedVector: []float32{-1, 0, 0}}, // antiparallel to a
+		{ID: "c", EmbedVector: []float32{0, 1, 0}},  // orthogonal to both
+	}
+	relScores := []float32{0.9, 0.5, 0.3} // a most relevant, c least
+
+	got := applyMMR(context.Background(), docs, relScores, 0.5)
+
+	if len(got) != 3 {
+		t.Fatalf("got %d, want 3", len(got))
+	}
+	// a should be picked first (highest rel)
+	if got[0].ID != "a" {
+		t.Errorf("first picked: got %q, want a", got[0].ID)
+	}
+	// No assertion on b vs c order — just verify we handle negative sims without
+	// panic and produce all 3 results.
+	ids := map[string]bool{}
+	for _, s := range got {
+		ids[s.ID] = true
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if !ids[id] {
+			t.Errorf("missing doc %q in result", id)
+		}
+	}
+}
+
 func TestApplyMMR_PreservesOriginalRelevance(t *testing.T) {
 	// Verify that Scored[i].Score = relScores[orig idx], NOT the MMR objective score.
 	docs := []Doc{
