@@ -17,9 +17,16 @@ const dbsfClipSigma = 3.0
 //
 //	score(d) = Σ clip(±3, (raw_i(d) - μ_i) / σ_i)
 //
+// Implements Qdrant's DBSF, which is z-score with ±3σ clip; differs from
+// textbook unclipped z-score fusion (Bruch et al. 2023). The clip prevents
+// a single outlier in one list from dominating the fused score.
+//
 // Use when score magnitudes carry meaning (e.g. BM25 confidence, calibrated
-// cross-encoder logits) and you have ≥10 results per list for stable σ.
-// Smaller per-list samples are tolerated but produce noisier fusion.
+// cross-encoder logits).
+//
+// Recommendation: ≥10 items per list for stable σ. With 2 items, all
+// z-scores degrade to ±1 and DBSF becomes worse than RRF. Prefer RRF when
+// lists are short.
 //
 // Edge cases:
 //   - Empty list → contributes nothing.
@@ -113,6 +120,10 @@ func sortFused(scores map[string]float64, order []string) []Fused {
 // meanStd returns the arithmetic mean and population standard deviation of
 // the Scores in list. For len(list) < 2, sigma == 0 (caller treats as the
 // "cannot z-score" path).
+//
+// Population stddev (divide by N) is correct here — the per-query result
+// list IS the sample, not a draw from a population. Sample stddev (N-1) is
+// for inferential statistics about an unobserved population.
 func meanStd(list ScoredIDList) (mean, sigma float64) {
 	if len(list) == 0 {
 		return 0, 0
