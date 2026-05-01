@@ -90,8 +90,9 @@ Endpoint comes from one of (in order):
    still install so trace context flows through the process — matches the
    MemDB-go pattern of "skip the batcher when no collector is deployed")
 
-Format: `host:port`, `http://host:port`, or `https://host:port`. HTTP is
-treated as insecure, HTTPS as TLS.
+Format: full URL with scheme — `http://host:port` (insecure) or
+`https://host:port` (TLS). Matches the canonical OTel env-var spec.
+Bare `host:port` is **NOT** supported — pass the scheme.
 
 ## Sampling
 
