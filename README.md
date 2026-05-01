@@ -22,6 +22,7 @@ go get github.com/anatolykoptev/go-kit
 | [`breaker`](doc/breaker.md) | 3-state circuit breaker with exponential cooldown, jitter, probe slots, `Execute[T]` generic wrapper, `HTTPDoer` preset, and per-key `Pool` | stdlib |
 | [`eventbus`](doc/eventbus.md) | In-process pub/sub with dot-separated topics and wildcard pattern matching (`*`, `**`); 64-slot buffered channels, drop-on-full semantics | stdlib |
 | [`rerank`](#rerank) | Cohere-compatible cross-encoder rerank HTTP client for embed-server / TEI / Cohere / Jina / Voyage / Mixedbread. Best-effort — any error returns input unchanged. | stdlib + prometheus/client_golang |
+| [`sparse`](#sparse) | SPLADE-shape HTTP client for learned-sparse embeddings — middleware stack mirrors embed/rerank (cache, circuit, retry, hooks, fallback). Pairs with dense embed/ for hybrid retrieval. | stdlib + prometheus/client_golang |
 
 All packages are independent — no internal cross-imports. Import only what you need.
 
@@ -591,6 +592,40 @@ scored := c.Rerank(ctx, query, []rerank.Doc{
 **Prometheus:** `rerank_requests_total{model,status}` (counter), `rerank_duration_seconds{model}` (histogram, buckets 0.05..10s).
 
 **Auth:** `Config.APIKey` sets `Authorization: Bearer <key>` — required for Cohere/Jina/Voyage/Mixedbread hosted; leave empty for self-hosted embed-server / TEI.
+
+
+## sparse
+
+SPLADE-shape HTTP client for learned-sparse embedding endpoints. Mirrors the **embed/** and **rerank/** middleware stack (cache, circuit, retry, hooks, fallback). Designed for the self-hosted Rust **embed-server** sidecar serving SPLADE-v3-distilbert; compatible with any TEI-style `/embed_sparse` server returning the Qdrant-shape sparse-vector envelope.
+
+```go
+import "github.com/anatolykoptev/go-kit/sparse"
+
+c, _ := sparse.NewClient("http://embed-server:8082",
+    sparse.WithModel("splade-v3-distilbert"),
+    sparse.WithTimeout(30*time.Second),
+)
+defer c.Close()
+
+vecs, err := c.EmbedSparse(ctx, []string{"first text", "second text"})
+// each vec.Indices: BERT vocab token ids (uint32);
+// each vec.Values:  log(1+ReLU(logit)) weights, sorted by weight desc.
+```
+
+**Why sparse alongside dense embed/?** SPLADE is BM25 + neural term-expansion in one. Dense (e5, ada) wins on semantic paraphrase across languages; sparse wins on rare terms (names, IDs, brands, version numbers) and plugs into inverted indexes (pgvector `sparsevec`, Qdrant sparse, Lucene). Hybrid retrieval = dense + sparse + RRF beats either alone.
+
+**Server contract:** `POST /embed_sparse` — body `{"input":["..."],"model":"...","top_k":256,"min_weight":0.0}`, response `{"model":"...","data":[{"index":N,"indices":[...],"values":[...]}]}`. `top_k=0` (default) lets server pick its default. Empty input → `(nil, nil)`.
+
+**Resilience (mirrors embed/):**
+- Retry on transient failures (timeout, 429, 5xx) with exponential backoff + jitter; non-retriable on 4xx.
+- Optional Redis L2 cache (off by default — sparse traffic is dominated by indexing, where each text is seen once; opt in via `WithCache` for query-side hot paths).
+- Optional gobreaker circuit breaker (`WithCircuit`).
+- Optional primary→fallback chain (`WithFallback`).
+- Typed error `ErrModelNotConfigured` for the 400 path when the wrong model name is passed.
+
+**Prometheus:** `gokit_sparse_requests_total{outcome,backend}` counter, `gokit_sparse_request_duration_seconds{backend}` histogram, `gokit_sparse_batch_size{backend}` histogram, `gokit_sparse_terms_per_vector{backend}` histogram, `gokit_sparse_retry_attempt_total{backend,attempt}` counter, plus the standard `gokit_sparse_retry_total{backend,reason}`.
+
+**Env-driven construction (`sparse.New(...)`):** `SPARSE_BACKEND=http`, `SPARSE_HTTP_BASE_URL`, `SPARSE_MODEL` (default `splade-v3-distilbert`), `SPARSE_HTTP_TIMEOUT`, optional `SPARSE_TOP_K`, `SPARSE_MIN_WEIGHT`.
 
 ## License
 
