@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.31.0](https://github.com/anatolykoptev/go-kit/compare/v0.30.0...v0.31.0) (2026-05-01)
+## [0.37.0](https://github.com/anatolykoptev/go-kit/compare/v0.36.0...v0.37.0) (2026-05-01)
 
 
 ### Features
