@@ -27,7 +27,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -105,12 +104,15 @@ func Setup(ctx context.Context, serviceName string, opts ...Option) (ShutdownFun
 		return noopShutdown, nil
 	}
 
-	host, insecure := normaliseEndpoint(cfg.endpoint)
-	exporterOpts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(host)}
-	if insecure {
-		exporterOpts = append(exporterOpts, otlptracehttp.WithInsecure())
-	}
-	exporter, err := otlptracehttp.New(ctx, exporterOpts...)
+	// WithEndpointURL accepts the canonical OTel env-var format — full URL
+	// like "http://jaeger:4318" or "https://otel.example:4318". Scheme drives
+	// TLS automatically (http=insecure, https=TLS). The legacy
+	// WithEndpoint(host:port) takes bare host and double-prefixes if you
+	// pass it a URL — caused parse errors in the fleet (memdb-go logs:
+	// `traces export: parse "http://http://jaeger:4318/v1/traces"`).
+	exporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpointURL(cfg.endpoint),
+	)
 	if err != nil {
 		return noopShutdown, fmt.Errorf("create OTLP HTTP exporter: %w", err)
 	}
@@ -169,16 +171,3 @@ func RecordError(span trace.Span, err error) {
 }
 
 func noopShutdown(context.Context) error { return nil }
-
-// normaliseEndpoint accepts either bare "host:port" or scheme-prefixed URLs,
-// matching the loose conventions across vendors. Returns (host:port, insecure).
-func normaliseEndpoint(raw string) (hostPort string, insecure bool) {
-	switch {
-	case strings.HasPrefix(raw, "http://"):
-		return strings.TrimPrefix(raw, "http://"), true
-	case strings.HasPrefix(raw, "https://"):
-		return strings.TrimPrefix(raw, "https://"), false
-	default:
-		return raw, true
-	}
-}

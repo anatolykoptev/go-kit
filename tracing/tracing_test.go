@@ -73,21 +73,6 @@ func TestRecordError_SetsStatus(t *testing.T) {
 	RecordError(span, errors.New("boom")) // must not panic
 }
 
-func TestNormaliseEndpoint(t *testing.T) {
-	tests := []struct {
-		in       string
-		host     string
-		insecure bool
-	}{
-		{"tempo:4318", "tempo:4318", true},
-		{"http://tempo:4318", "tempo:4318", true},
-		{"https://tempo.example:4318", "tempo.example:4318", false},
-	}
-	for _, tt := range tests {
-		host, insecure := normaliseEndpoint(tt.in)
-		if host != tt.host || insecure != tt.insecure {
-			t.Errorf("normaliseEndpoint(%q) = (%q, %v), want (%q, %v)",
-				tt.in, host, insecure, tt.host, tt.insecure)
-		}
-	}
-}
+// Endpoint URL parsing is now delegated to otlptracehttp.WithEndpointURL.
+// We rely on the canonical OTel SDK behaviour (full URL with scheme) instead
+// of the legacy WithEndpoint(host:port) which couldn't tell scheme from path.
