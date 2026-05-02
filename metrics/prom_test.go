@@ -91,7 +91,7 @@ func TestIncr_LabeledCounter(t *testing.T) {
 	reg.Incr(Label("rpc", "method", "login"))
 	reg.Incr(Label("rpc", "method", "logout"))
 
-	vec, _ := reg.promBridge.counters.Load("rpc")
+	vec, _ := reg.promBridge.countersVec.Load("rpc")
 	cv := vec.(*prometheus.CounterVec)
 	if got := testutil.ToFloat64(cv.WithLabelValues("login")); got != 2 {
 		t.Fatalf("login = %v, want 2", got)
@@ -140,7 +140,7 @@ func TestGauge_Labeled(t *testing.T) {
 	reg.Gauge(Label("queue", "name", "a")).Set(5)
 	reg.Gauge(Label("queue", "name", "b")).Set(7)
 
-	v, _ := reg.promBridge.gauges.Load("queue")
+	v, _ := reg.promBridge.gaugesVec.Load("queue")
 	vec := v.(*prometheus.GaugeVec)
 	if got := testutil.ToFloat64(vec.WithLabelValues("a")); got != 5 {
 		t.Fatalf("a = %v", got)
@@ -159,7 +159,7 @@ func TestStartTimer_WritesHistogram(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	h2.Stop()
 
-	v, ok := reg.promBridge.histograms.Load("api_call_seconds")
+	v, ok := reg.promBridge.histogramsNoLabel.Load("api_call_seconds")
 	if !ok {
 		t.Fatal("histogram not registered")
 	}
