@@ -42,8 +42,8 @@ func (c *mapCache) Set(_ context.Context, k string, v []float32) {
 // ── cacheKey tests ────────────────────────────────────────────────────────────
 
 func TestCacheKey_Deterministic(t *testing.T) {
-	k1 := cacheKey("model-a", 1024, "passage: ", "query: ", "hello world")
-	k2 := cacheKey("model-a", 1024, "passage: ", "query: ", "hello world")
+	k1 := cacheKey("model-a", 1024, "passage: ", "query: ", "hello world", "")
+	k2 := cacheKey("model-a", 1024, "passage: ", "query: ", "hello world", "")
 	if k1 != k2 {
 		t.Errorf("cacheKey not deterministic: %q != %q", k1, k2)
 	}
@@ -53,8 +53,8 @@ func TestCacheKey_Deterministic(t *testing.T) {
 }
 
 func TestCacheKey_DifferentModel_DifferentKey(t *testing.T) {
-	k1 := cacheKey("model-a", 1024, "", "", "text")
-	k2 := cacheKey("model-b", 1024, "", "", "text")
+	k1 := cacheKey("model-a", 1024, "", "", "text", "")
+	k2 := cacheKey("model-b", 1024, "", "", "text", "")
 	if k1 == k2 {
 		t.Error("different models must produce different cache keys")
 	}
@@ -62,32 +62,32 @@ func TestCacheKey_DifferentModel_DifferentKey(t *testing.T) {
 
 func TestCacheKey_DifferentDim_DifferentKey(t *testing.T) {
 	// Matryoshka truncation (E4 prep): dim=512 vs dim=1024 must differ.
-	k1 := cacheKey("model", 512, "", "", "text")
-	k2 := cacheKey("model", 1024, "", "", "text")
+	k1 := cacheKey("model", 512, "", "", "text", "")
+	k2 := cacheKey("model", 1024, "", "", "text", "")
 	if k1 == k2 {
 		t.Error("different dim must produce different cache keys (Matryoshka E4 prep)")
 	}
 }
 
 func TestCacheKey_DifferentDocPrefix_DifferentKey(t *testing.T) {
-	k1 := cacheKey("model", 1024, "passage: ", "", "text")
-	k2 := cacheKey("model", 1024, "query: ", "", "text")
+	k1 := cacheKey("model", 1024, "passage: ", "", "text", "")
+	k2 := cacheKey("model", 1024, "query: ", "", "text", "")
 	if k1 == k2 {
 		t.Error("different docPrefix must produce different cache keys")
 	}
 }
 
 func TestCacheKey_DifferentQueryPrefix_DifferentKey(t *testing.T) {
-	k1 := cacheKey("model", 1024, "", "query: ", "text")
-	k2 := cacheKey("model", 1024, "", "search: ", "text")
+	k1 := cacheKey("model", 1024, "", "query: ", "text", "")
+	k2 := cacheKey("model", 1024, "", "search: ", "text", "")
 	if k1 == k2 {
 		t.Error("different queryPrefix must produce different cache keys")
 	}
 }
 
 func TestCacheKey_DifferentText_DifferentKey(t *testing.T) {
-	k1 := cacheKey("model", 1024, "", "", "text A")
-	k2 := cacheKey("model", 1024, "", "", "text B")
+	k1 := cacheKey("model", 1024, "", "", "text A", "")
+	k2 := cacheKey("model", 1024, "", "", "text B", "")
 	if k1 == k2 {
 		t.Error("different text must produce different cache keys")
 	}
@@ -151,7 +151,7 @@ func TestCache_FullBatchHit_SkipsBackend(t *testing.T) {
 
 	// Pre-populate cache for all 3 texts (dim=4, no prefixes).
 	for i, txt := range texts {
-		cache.Set(ctx, cacheKey(model, 4, "", "", txt), []float32{float32(i + 1), 0, 0, 0})
+		cache.Set(ctx, cacheKey(model, 4, "", "", txt, ""), []float32{float32(i + 1), 0, 0, 0})
 	}
 
 	c, err := NewClient(srv.URL,
@@ -190,8 +190,8 @@ func TestCache_PartialMiss_HitsBackend(t *testing.T) {
 	ctx := context.Background()
 
 	// Only populate 2 of 3 — partial miss → backend must be called.
-	cache.Set(ctx, cacheKey(model, 4, "", "", "alpha"), []float32{1, 0, 0, 0})
-	cache.Set(ctx, cacheKey(model, 4, "", "", "beta"), []float32{2, 0, 0, 0})
+	cache.Set(ctx, cacheKey(model, 4, "", "", "alpha", ""), []float32{1, 0, 0, 0})
+	cache.Set(ctx, cacheKey(model, 4, "", "", "beta", ""), []float32{2, 0, 0, 0})
 	// "gamma" is absent.
 
 	c, err := NewClient(srv.URL,
@@ -273,8 +273,8 @@ func TestCache_OnCacheHitHookFires(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate cache.
-	cache.Set(ctx, cacheKey(model, 4, "", "", "alpha"), []float32{1, 0, 0, 0})
-	cache.Set(ctx, cacheKey(model, 4, "", "", "beta"), []float32{2, 0, 0, 0})
+	cache.Set(ctx, cacheKey(model, 4, "", "", "alpha", ""), []float32{1, 0, 0, 0})
+	cache.Set(ctx, cacheKey(model, 4, "", "", "beta", ""), []float32{2, 0, 0, 0})
 
 	obs := &countingObserver{}
 	c, err := NewClient(srv.URL,
@@ -382,4 +382,38 @@ func counterValue(c prometheus.Counter) float64 {
 	var m dto.Metric
 	_ = c.Write(&m)
 	return m.GetCounter().GetValue()
+}
+
+// TestEmbedCacheKey_RoleDistinguishes verifies that role="query" and
+// role="passage" produce different keys for otherwise identical inputs.
+// Without this, EmbedQuery(text) and Embed([text]) silently share cache
+// entries on the HTTP backend (which applies role prefixes server-side
+// even when client-side docPrefix/queryPrefix are both empty).
+func TestEmbedCacheKey_RoleDistinguishes(t *testing.T) {
+	kQuery := cacheKey("model", 1024, "", "", "text", "query")
+	kPassage := cacheKey("model", 1024, "", "", "text", "passage")
+	kEmpty := cacheKey("model", 1024, "", "", "text", "")
+	if kQuery == kPassage {
+		t.Error("role=query and role=passage must produce different cache keys")
+	}
+	if kQuery == kEmpty {
+		t.Error("role=query and role=\"\" must produce different cache keys")
+	}
+	if kPassage == kEmpty {
+		t.Error("role=passage and role=\"\" must produce different cache keys")
+	}
+}
+
+// TestEmbedCacheKey_BackwardCompatRoleEmpty verifies that role="" is
+// deterministic — useful for callers that have not yet adopted role-aware
+// caching (tests pre-staging cache entries with role="").
+func TestEmbedCacheKey_BackwardCompatRoleEmpty(t *testing.T) {
+	k1 := cacheKey("model", 1024, "", "", "text", "")
+	k2 := cacheKey("model", 1024, "", "", "text", "")
+	if k1 != k2 {
+		t.Errorf("cacheKey with role=\"\" not deterministic: %q != %q", k1, k2)
+	}
+	if len(k1) != 64 {
+		t.Errorf("expected 64-char hex SHA-256, got len %d", len(k1))
+	}
 }
