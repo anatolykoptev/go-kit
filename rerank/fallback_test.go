@@ -37,7 +37,7 @@ func TestFallback_PrimarySuccessNoSecondaryCall(t *testing.T) {
 	secondary := newFallbackTestClient(t, secondarySrv.URL)
 
 	docs := []Doc{{ID: "a", Text: "x"}}
-	res := rerankWithFallback(context.Background(), primary, secondary, "q", docs)
+	res := rerankWithFallback(context.Background(), primary, secondary, "secondary", "q", docs)
 
 	if res.Status != StatusOk {
 		t.Errorf("Status: got %v want StatusOk", res.Status)
@@ -65,7 +65,7 @@ func TestFallback_PrimaryDegradedSecondaryCalled(t *testing.T) {
 	secondary := newFallbackTestClient(t, secondarySrv.URL)
 
 	docs := []Doc{{ID: "a", Text: "x"}}
-	res := rerankWithFallback(context.Background(), primary, secondary, "q", docs)
+	res := rerankWithFallback(context.Background(), primary, secondary, "secondary", "q", docs)
 
 	if res.Status != StatusFallback {
 		t.Errorf("Status: got %v want StatusFallback", res.Status)
@@ -94,7 +94,7 @@ func TestFallback_PrimaryClientErrorNoSecondary(t *testing.T) {
 	secondary := newFallbackTestClient(t, secondarySrv.URL)
 
 	docs := []Doc{{ID: "a"}, {ID: "b"}}
-	res := rerankWithFallback(context.Background(), primary, secondary, "q", docs)
+	res := rerankWithFallback(context.Background(), primary, secondary, "secondary", "q", docs)
 
 	if res.Status != StatusDegraded {
 		t.Errorf("Status: got %v want StatusDegraded", res.Status)
@@ -118,7 +118,7 @@ func TestFallback_BothFail(t *testing.T) {
 	secondary := newFallbackTestClient(t, secondarySrv.URL)
 
 	docs := []Doc{{ID: "a"}, {ID: "b"}}
-	res := rerankWithFallback(context.Background(), primary, secondary, "q", docs)
+	res := rerankWithFallback(context.Background(), primary, secondary, "secondary", "q", docs)
 
 	if res.Status != StatusDegraded {
 		t.Errorf("Status: got %v want StatusDegraded", res.Status)
@@ -141,7 +141,7 @@ func TestFallback_NilSecondaryDegraded(t *testing.T) {
 	primary := newFallbackTestClient(t, primarySrv.URL)
 
 	docs := []Doc{{ID: "a"}}
-	res := rerankWithFallback(context.Background(), primary, nil, "q", docs)
+	res := rerankWithFallback(context.Background(), primary, Reranker(nil), "", "q", docs)
 
 	if res.Status != StatusDegraded {
 		t.Errorf("Status: got %v want StatusDegraded (nil secondary)", res.Status)
