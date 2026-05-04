@@ -20,6 +20,7 @@ package httpmw
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -57,10 +58,25 @@ func HandlerWithFormatter(service string, next http.Handler, fn func(string, *ht
 
 // stdlibFormatter names spans "<method> <pattern>" using Go 1.22 ServeMux
 // route patterns. Bounds cardinality on routes with path variables.
+//
+// Go 1.22 ServeMux supports two registration styles:
+//
+//   - method-qualified: mux.HandleFunc("POST /webhook", h) — r.Pattern
+//     comes back as "POST /webhook" (already includes the method)
+//   - bare:             mux.HandleFunc("/webhook", h)      — r.Pattern
+//     comes back as "/webhook" (no method)
+//
+// The formatter handles both: if the pattern already begins with the
+// request method followed by a space, it is used verbatim; otherwise the
+// method is prepended. This produces "POST /webhook" in both cases — no
+// duplicated method, stable cardinality.
 func stdlibFormatter(_ string, r *http.Request) string {
 	pattern := r.Pattern
 	if pattern == "" {
-		pattern = "unmatched"
+		return fmt.Sprintf("%s unmatched", r.Method)
+	}
+	if methodPrefix := r.Method + " "; strings.HasPrefix(pattern, methodPrefix) {
+		return pattern
 	}
 	return fmt.Sprintf("%s %s", r.Method, pattern)
 }
