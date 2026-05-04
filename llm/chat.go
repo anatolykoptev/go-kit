@@ -16,10 +16,15 @@ type Message struct {
 }
 
 // ContentPart is a part of a multimodal message.
+//
+// CacheControl is honoured by Anthropic-compatible APIs as a prompt-cache
+// breakpoint; see CacheControl docs in cache.go. Other providers ignore
+// the unknown field, so it is safe to always send.
 type ContentPart struct {
-	Type     string    `json:"type"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *ImageURL `json:"image_url,omitempty"`
+	Type         string        `json:"type"`
+	Text         string        `json:"text,omitempty"`
+	ImageURL     *ImageURL     `json:"image_url,omitempty"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
 // ImageURL holds an image reference for vision requests.
@@ -53,16 +58,34 @@ type ChatRequest struct {
 }
 
 // Usage holds token usage from the API response.
+//
+// The struct is shape-tolerant: UnmarshalJSON (in cache.go) reads BOTH
+// OpenAI's {prompt_tokens, completion_tokens, total_tokens,
+// prompt_tokens_details.cached_tokens} and Anthropic's {input_tokens,
+// output_tokens, cache_read_input_tokens, cache_creation_input_tokens}
+// shapes and normalises into the fields below.
+//
+// CachedTokens is the count served from the prompt cache on this call —
+// emit as a span/metric attribute to verify caching is actually working
+// in production. CacheCreationTokens is Anthropic-only (tokens written
+// to the cache; OpenAI's automatic caching does not separate creation).
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	CachedTokens        int `json:"cached_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 }
 
 // Tool defines a function tool for the API.
+//
+// CacheControl marks the tool definition as a cache breakpoint (Anthropic
+// only — useful when a long, stable tool catalog is sent on every turn).
+// Set on the LAST tool in the slice to cache the cumulative tools prefix.
 type Tool struct {
-	Type     string       `json:"type"`
-	Function ToolFunction `json:"function"`
+	Type         string        `json:"type"`
+	Function     ToolFunction  `json:"function"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
 // ToolFunction describes a callable function.
