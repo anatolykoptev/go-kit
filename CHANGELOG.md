@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.38.0](https://github.com/anatolykoptev/go-kit/compare/v0.37.0...v0.38.0) (2026-05-07)
+
+
+### Features
+
+* **hedge:** DoFallback for primary→fallback chains ([b1461de](https://github.com/anatolykoptev/go-kit/commit/b1461dee059c60de417ce0abb907f6168a89b22a))
+* **llm/budget:** token usage tracker with warn/switch/hard-stop tiers ([a6f7999](https://github.com/anatolykoptev/go-kit/commit/a6f7999baa57059a43ad4398d11f4b05d6fbd910))
+* **llm/budget:** token usage tracker with warn/switch/hard-stop tiers ([822abbb](https://github.com/anatolykoptev/go-kit/commit/822abbb1e62d207bb76a652b894685759010caa5))
+* **llm:** MemDB-aligned message metadata + WithMessageTimestamps option ([ed534b8](https://github.com/anatolykoptev/go-kit/commit/ed534b8b85ea1dccaf22e803b7ab8412b7483fba))
+* **llm:** prompt caching support — Anthropic cache_control + universal cache token visibility ([801284c](https://github.com/anatolykoptev/go-kit/commit/801284cfce854e881e7349e25acac7b61e3212dd))
+* **rerank:** VoyageRerankClient + JinaRerankClient + llm.ExtractJSON fix ([#39](https://github.com/anatolykoptev/go-kit/issues/39)) ([a88a3b6](https://github.com/anatolykoptev/go-kit/commit/a88a3b6fb57f1c995351661d6c4e466c9c5e789e))
+* **rerank:** WithFallback now accepts any Reranker (not just *Client) ([#41](https://github.com/anatolykoptev/go-kit/issues/41)) ([09f795a](https://github.com/anatolykoptev/go-kit/commit/09f795a0ee32f4f0ceaf18894cfae1f2e2e0dc58))
+* **session:** integrate go-session into go-kit ([aec99c6](https://github.com/anatolykoptev/go-kit/commit/aec99c6ee59226120857d4f0166c71045bcd05bf))
+* **telegram:** smart HTML sanitizer + format auto-detect + PrepareForTelegram ([#43](https://github.com/anatolykoptev/go-kit/issues/43)) ([aefb5c0](https://github.com/anatolykoptev/go-kit/commit/aefb5c0da79ada181e185ec57d71a3de191922ec))
+
+
+### Bug Fixes
+
+* **cache:** embed role + rerank truncation cap in cache keys (PR C — v0.39.0) ([#40](https://github.com/anatolykoptev/go-kit/issues/40)) ([581b2aa](https://github.com/anatolykoptev/go-kit/commit/581b2aa03a538bc2bba0d1c3825fdb0aff82eafb))
+* **metrics:** prevent panic on prom_bridge shape collisions ([#37](https://github.com/anatolykoptev/go-kit/issues/37)) ([1aea60c](https://github.com/anatolykoptev/go-kit/commit/1aea60cfa1957f47b46f31653d316ccbfc87ee40))
+* **tracing/httpmw:** stdlibFormatter must not duplicate the HTTP method ([48a5152](https://github.com/anatolykoptev/go-kit/commit/48a5152d6940c6c8dcb0e7c6514278bb0ad2f244))
+
 ## [Unreleased]
 
 ### Fixed
