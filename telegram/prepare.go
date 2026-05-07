@@ -17,7 +17,7 @@ func PrepareForTelegram(text string) (out string, parseMode string) {
 	}
 	switch Detect(text) {
 	case FormatHTML:
-		out = RepairHTMLNesting(SanitizeHTML(text))
+		out = RepairHTMLNesting(SanitizeHTML(text)) // belt-and-braces: SanitizeHTML already walks the AST; RepairHTMLNesting catches any edge-case nesting the regex-free pass missed
 	case FormatMarkdown:
 		out = SanitizeHTML(MarkdownToHTML(text))
 	default: // FormatPlain

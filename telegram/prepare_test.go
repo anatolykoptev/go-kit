@@ -16,12 +16,14 @@ func TestPrepareForTelegram(t *testing.T) {
 		wantMode     string
 		wantContains string
 		wantExact    string
+		checkExact   bool
 	}{
 		{
-			name:      "empty string",
-			in:        "",
-			wantMode:  "HTML",
-			wantExact: "",
+			name:       "empty string",
+			in:         "",
+			wantMode:   "HTML",
+			wantExact:  "",
+			checkExact: true,
 		},
 		{
 			name:         "HTML input passes through sanitized",
@@ -72,9 +74,10 @@ func TestPrepareForTelegram(t *testing.T) {
 			wantContains: "<b>safe</b>",
 		},
 		{
-			name:     "all modes return HTML parse mode",
-			in:       "plain text",
-			wantMode: "HTML",
+			name:         "all modes return HTML parse mode",
+			in:           "plain text",
+			wantMode:     "HTML",
+			wantContains: "plain text",
 		},
 	}
 	for _, tc := range tests {
@@ -83,7 +86,7 @@ func TestPrepareForTelegram(t *testing.T) {
 			if mode != tc.wantMode {
 				t.Errorf("PrepareForTelegram(%q) mode = %q, want %q", tc.in, mode, tc.wantMode)
 			}
-			if tc.wantExact != "" || (tc.wantExact == "" && tc.in == "") {
+			if tc.checkExact {
 				if out != tc.wantExact {
 					t.Errorf("PrepareForTelegram(%q) out = %q, want exact %q", tc.in, out, tc.wantExact)
 				}

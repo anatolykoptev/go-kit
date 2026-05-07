@@ -2,6 +2,7 @@
 package telegram
 
 import (
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -65,7 +66,7 @@ func SanitizeHTML(input string) string {
 func walkNode(b *strings.Builder, n *html.Node, listCtx *listContext) {
 	switch n.Type {
 	case html.TextNode:
-		b.WriteString(n.Data)
+		b.WriteString(EscapeHTML(n.Data))
 	case html.ElementNode:
 		renderElement(b, n, listCtx)
 	default:
@@ -175,14 +176,17 @@ func renderPassThru(b *strings.Builder, n *html.Node, listCtx *listContext, outT
 }
 
 // renderAnchor writes <a href="..."> keeping only safe href, or strips to text.
+// If href contains a literal quote character (which would indicate an entity-
+// decoded injection attempt like &quot; inside the attribute value), the link
+// is stripped to its text content rather than emitted.
 func renderAnchor(b *strings.Builder, n *html.Node, listCtx *listContext) {
 	href := attrVal(n, "href")
-	if href == "" || !isSafeHref(href) {
+	if href == "" || !isSafeHref(href) || strings.ContainsAny(href, `"'`) {
 		walkChildren(b, n, listCtx)
 		return
 	}
 	b.WriteString(`<a href="`)
-	b.WriteString(href)
+	b.WriteString(html.EscapeString(href))
 	b.WriteString(`">`)
 	walkChildren(b, n, listCtx)
 	b.WriteString("</a>")
@@ -234,10 +238,8 @@ func renderListItem(b *strings.Builder, n *html.Node, listCtx *listContext) {
 		b.WriteString("• ")
 	} else {
 		listCtx.counter++
-		b.WriteString(strings.Join([]string{
-			itoa(listCtx.counter),
-			". ",
-		}, ""))
+		b.WriteString(strconv.Itoa(listCtx.counter))
+		b.WriteString(". ")
 	}
 	walkChildren(b, n, listCtx)
 	b.WriteString("\n")
@@ -277,25 +279,14 @@ func attrVal(n *html.Node, key string) string {
 }
 
 // isSafeHref returns true if href starts with an allowed scheme.
+// Scheme detection is case-insensitive; the href value is returned unmodified.
 func isSafeHref(href string) bool {
+	lower := strings.ToLower(href)
 	for _, scheme := range allowedAnchorSchemes {
-		if strings.HasPrefix(href, scheme) {
+		if strings.HasPrefix(lower, scheme) {
 			return true
 		}
 	}
 	return false
 }
 
-// itoa converts a non-negative int to its decimal string representation
-// without importing strconv (small integers only, for list counters).
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	digits := make([]byte, 0, 10) //nolint:mnd // max digits for int32
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
-}

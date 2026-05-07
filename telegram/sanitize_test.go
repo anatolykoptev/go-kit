@@ -265,3 +265,119 @@ func TestSanitizeHTML_UnclosedTags(t *testing.T) {
 		t.Errorf("SanitizeHTML: content lost on unclosed tag: %q", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// BLOCKER 1: text node entity re-escaping
+// ---------------------------------------------------------------------------
+
+func TestSanitizeHTML_TextNodeEntities(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "text_node_with_entities_re_escaped",
+			in:   `<b>a &lt; b &amp; c</b>`,
+			want: `<b>a &lt; b &amp; c</b>`,
+		},
+		{
+			name: "bare_ampersand_escaped",
+			in:   `<b>a & b</b>`,
+			want: `<b>a &amp; b</b>`,
+		},
+		{
+			name: "bare_less_than_escaped",
+			in:   `plain < text`,
+			want: `plain &lt; text`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeHTML(tc.in)
+			if got != tc.want {
+				t.Errorf("SanitizeHTML(%q)\n  got:  %q\n  want: %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BLOCKER 2: href attribute entity re-escaping / injection prevention
+// ---------------------------------------------------------------------------
+
+func TestSanitizeHTML_AnchorHrefInjection(t *testing.T) {
+	tests := []struct {
+		name        string
+		in          string
+		notContains []string
+		wantContain string
+	}{
+		{
+			name:        "anchor_href_with_quote_entity_re_escaped",
+			in:          `<a href="https://x.com&quot; onclick=&quot;evil()">click</a>`,
+			notContains: []string{"onclick", "https://x.com\" "},
+		},
+		{
+			name:        "javascript_scheme_stripped",
+			in:          `<a href="javascript:alert(1)">js</a>`,
+			notContains: []string{"javascript"},
+			wantContain: "js",
+		},
+		{
+			name:        "relative_href_stripped_to_text",
+			in:          `<a href="/relative/path">rel</a>`,
+			notContains: []string{`href=`},
+			wantContain: "rel",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeHTML(tc.in)
+			for _, bad := range tc.notContains {
+				if strings.Contains(got, bad) {
+					t.Errorf("SanitizeHTML(%q) output contains forbidden string %q:\n  got: %q", tc.in, bad, got)
+				}
+			}
+			if tc.wantContain != "" && !strings.Contains(got, tc.wantContain) {
+				t.Errorf("SanitizeHTML(%q) missing expected %q:\n  got: %q", tc.in, tc.wantContain, got)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BLOCKER 3: case-insensitive href scheme detection
+// ---------------------------------------------------------------------------
+
+func TestSanitizeHTML_UppercaseScheme(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "anchor_uppercase_https_scheme_kept",
+			in:   `<a href="HTTPS://example.com">x</a>`,
+			want: `<a href="HTTPS://example.com">x</a>`,
+		},
+		{
+			name: "anchor_uppercase_http_scheme_kept",
+			in:   `<a href="HTTP://example.com">x</a>`,
+			want: `<a href="HTTP://example.com">x</a>`,
+		},
+		{
+			name: "anchor_mixed_case_mailto_kept",
+			in:   `<a href="MAILTO:a@b.com">mail</a>`,
+			want: `<a href="MAILTO:a@b.com">mail</a>`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeHTML(tc.in)
+			if got != tc.want {
+				t.Errorf("SanitizeHTML(%q)\n  got:  %q\n  want: %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
