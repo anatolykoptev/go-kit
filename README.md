@@ -629,4 +629,4 @@ vecs, err := c.EmbedSparse(ctx, []string{"first text", "second text"})
 
 ## License
 
-MIT
+Apache 2.0
