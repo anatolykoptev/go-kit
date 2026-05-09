@@ -2,7 +2,11 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -47,6 +51,25 @@ func newClientFromInternal(cfg *cfgInternal) (*Client, error) {
 		cb = NewCircuitBreaker(cbCfg, model, makeCircuitHook(model, cfg.observer))
 	}
 
+	// E5: resolve chunkSize. Priority: explicit opt > env > default.
+	chunkSz := cfg.chunkSize
+	if chunkSz <= 0 {
+		// Try environment override.
+		if raw := os.Getenv("GOKIT_EMBED_CHUNK_SIZE"); raw != "" {
+			if n, parseErr := strconv.Atoi(raw); parseErr != nil || n <= 0 {
+				slog.Default().Warn("GOKIT_EMBED_CHUNK_SIZE: invalid value, falling back to default",
+					slog.String("value", raw),
+					slog.Int("default", defaultChunkSize),
+				)
+			} else {
+				chunkSz = n
+			}
+		}
+	}
+	if chunkSz <= 0 {
+		chunkSz = defaultChunkSize
+	}
+
 	return &Client{
 		inner:       inner,
 		observer:    cfg.observer,
@@ -59,6 +82,7 @@ func newClientFromInternal(cfg *cfgInternal) (*Client, error) {
 		cache:       cfg.cache,
 		docPrefix:   cfg.ollamaDocPrefix,
 		queryPrefix: cfg.ollamaQueryPrefix,
+		chunkSize:   chunkSz,
 	}, nil
 }
 
@@ -101,6 +125,7 @@ func WithDryRun() EmbedOpt {
 //
 // E1 wires retry/circuit/fallback on top of this call.
 // E2 wires auto-batching, E3 wires cache, E4 wires per-text Status reasoning.
+// E5 wires client-side chunking when len(texts) > c.chunkSize.
 func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...EmbedOpt) (*Result, error) {
 	// E1: if fallback is configured, route through embedWithFallback.
 	if c != nil && c.fallback != nil {
@@ -118,11 +143,88 @@ func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...Em
 		}
 		return res, nil
 	}
+
+	// E5: client-side chunking. When len(texts) > chunkSize, split into
+	// sequential sub-batches. Each chunk goes through embedWithResultUnchained
+	// independently so per-text cache lookups (E3) fire per-chunk — better
+	// cache hit rate than a single full-batch lookup before splitting.
+	//
+	// Why above cache: cache keys are per-text (model,dim,prefix,text,role).
+	// A chunk where all texts are cached returns StatusOk with 0 backend calls.
+	// If we checked the whole batch cache first, a single cache miss would
+	// force ALL texts to the backend, defeating per-text cache granularity.
+	//
+	// Why sequential (not parallel): ox-embed-server's batcher already coalesces
+	// concurrent calls; parallel client chunks cause batcher contention.
+	// Sequential also keeps client memory bounded.
+	if c != nil && c.inner != nil && c.chunkSize > 0 && len(texts) > c.chunkSize {
+		return c.embedChunked(ctx, texts, opts...)
+	}
+
 	res := c.embedWithResultUnchained(ctx, texts, opts...)
 	if res.Status == StatusDegraded {
 		return res, res.Err
 	}
 	return res, nil
+}
+
+// embedChunked splits texts into sequential sub-batches of c.chunkSize and
+// merges results. Called only when len(texts) > c.chunkSize.
+//
+// Metrics:
+//   - embed_chunks_per_call{model}: recorded once per call with the number of chunks.
+//   - embed_chunk_size{model}: recorded once per dispatched sub-batch.
+//   - All existing per-call counters/histograms (embed_batch_size, embed_duration_seconds)
+//     record the ORIGINAL len(texts) inside embedWithResultUnchained per chunk —
+//     intentional: they reflect backend call sizes, not user intent.
+//     The embed_chunks_per_call metric captures user-facing intent separately.
+//
+// On any sub-batch error: returns that error AS-IS with no partial results
+// (all-or-nothing contract — callers expect vectors[i] corresponds to texts[i]).
+func (c *Client) embedChunked(ctx context.Context, texts []string, opts ...EmbedOpt) (*Result, error) {
+	numChunks := (len(texts) + c.chunkSize - 1) / c.chunkSize
+	// Record chunk-count metric once for the user-facing call.
+	recordChunksPerCall(c.model, numChunks)
+
+	allVectors := make([]*Vector, 0, len(texts))
+
+	for i := 0; i < len(texts); i += c.chunkSize {
+		end := i + c.chunkSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		chunk := texts[i:end]
+
+		// Record per-sub-batch size.
+		recordChunkSize(c.model, len(chunk))
+
+		res := c.embedWithResultUnchained(ctx, chunk, opts...)
+		if res.Status == StatusDegraded {
+			// Translate ErrDimMismatch.Index to report the chunk's start offset
+			// in the original input so callers can locate the offending record.
+			// Inner embedWithResultUnchained always sets Index=0 (no chunk context);
+			// we replace it with the chunk start position i.
+			if res.Err != nil {
+				var de *ErrDimMismatch
+				if errors.As(res.Err, &de) {
+					return nil, &ErrDimMismatch{
+						Got:   de.Got,
+						Want:  de.Want,
+						Model: de.Model,
+						Index: i,
+					}
+				}
+			}
+			return nil, res.Err
+		}
+		allVectors = append(allVectors, res.Vectors...)
+	}
+
+	return &Result{
+		Vectors: allVectors,
+		Status:  StatusOk,
+		Model:   c.model,
+	}, nil
 }
 
 // embedWithResultUnchained executes the embed call for this client WITHOUT
