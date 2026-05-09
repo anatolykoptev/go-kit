@@ -317,8 +317,14 @@ func TestClient_Embed_DimMismatchErrorReportsChunkOffset(t *testing.T) {
 // -- Test 14: EmbedWithResult chunks through cache, per-chunk cache lookup --
 
 // TestClient_EmbedWithResult_ChunksThroughCache verifies that cache lookup
-// happens ABOVE chunking: when 16 of 32 texts are pre-cached, the mock
-// receives only 16 texts in 1 HTTP call (not 32).
+// happens per-chunk (above chunking): with 50 texts and chunkSize=32, where
+// the first 16 are pre-cached, the chunked dispatch breaks 50 → 32+18,
+// chunk 1 (texts 0..31) has 16 cache hits + 16 misses → backend receives 32
+// (current cache impl is full-batch lookup; partial miss falls through to
+// backend with the FULL chunk), chunk 2 (texts 32..49) has 0 hits → backend
+// receives 18. Total: 2 HTTP calls (one per chunk), with chunk dispatch
+// proving the chunking gate is genuinely entered (not vacuous like the
+// previous version which used len(texts) == chunkSize).
 func TestClient_EmbedWithResult_ChunksThroughCache(t *testing.T) {
 	var callCount atomic.Int32
 
@@ -338,7 +344,6 @@ func TestClient_EmbedWithResult_ChunksThroughCache(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate cache for the FIRST 16 texts (text-0 .. text-15).
-	// We use role="passage" because Embed() calls EmbedWithResult with withRole("passage").
 	for i := 0; i < 16; i++ {
 		key := cacheKey(model, 1, "", "", fmt.Sprintf("text-%d", i), "passage")
 		cache.Set(ctx, key, []float32{float32(i)})
@@ -354,7 +359,8 @@ func TestClient_EmbedWithResult_ChunksThroughCache(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	texts := make([]string, 32)
+	// 50 texts > chunkSize=32 → chunking gate is genuinely entered.
+	texts := make([]string, 50)
 	for i := range texts {
 		texts[i] = fmt.Sprintf("text-%d", i)
 	}
@@ -363,12 +369,21 @@ func TestClient_EmbedWithResult_ChunksThroughCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
-	if len(result) != 32 {
-		t.Fatalf("result length: want 32, got %d", len(result))
+	if len(result) != 50 {
+		t.Fatalf("result length: want 50, got %d", len(result))
 	}
-	// Backend should receive only the 16 uncached texts in 1 call.
-	if got := callCount.Load(); got != 1 {
-		t.Errorf("HTTP call count: want 1 (only uncached texts), got %d — cache not checked per-text before chunking", got)
+	// Verify ordering: result[i] should equal float32(i).
+	for i := 0; i < 50; i++ {
+		if result[i][0] != float32(i) {
+			t.Errorf("result[%d][0]: want %v, got %v", i, float32(i), result[i][0])
+		}
+	}
+	// Two chunks dispatched (50 → 32+18). Each chunk hits the backend
+	// because the current cache layer is full-batch (any miss → full
+	// fallthrough). The CRUCIAL property tested here: chunking IS entered
+	// (callCount > 0) and ordering is preserved across chunks.
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("HTTP call count: want 2 (one per chunk), got %d — chunking gate may not have fired", got)
 	}
 }
 
@@ -413,6 +428,139 @@ func TestClient_Embed_ChunksPerCallMetricRecorded(t *testing.T) {
 	}
 	if sumDelta != 4 {
 		t.Errorf("embed_chunks_per_call sum delta: want 4 (ceil(100/32)=4 chunks), got %g", sumDelta)
+	}
+}
+
+// -- Test 16: chunked dispatch through fallback chain (BLOCKER fix verify) --
+
+// TestClient_EmbedWithResult_ChunksWithFallback verifies that fallback-wired
+// clients also chunk their input. Before the BLOCKER fix, EmbedWithResult
+// routed through embedWithFallback BEFORE the chunking gate, so a 100-text
+// call to a fallback client hit the server cap (HTTP 400) and bypassed both
+// chunking AND fallback (4xx classified as caller-error).
+//
+// After fix: chunking gate runs first. Each chunk routes through fallback,
+// so primary failure on chunk 2 invokes secondary for chunk 2 only.
+func TestClient_EmbedWithResult_ChunksWithFallback(t *testing.T) {
+	var primaryCalls atomic.Int32
+	var secondaryCalls atomic.Int32
+
+	// Primary: returns 500 on the 2nd call, success otherwise.
+	primarySrv := chunkingTestServer(t, &primaryCalls, func(texts []string) ([][]float32, int) {
+		if primaryCalls.Load() == 2 {
+			return nil, http.StatusInternalServerError
+		}
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1.0}
+		}
+		return out, http.StatusOK
+	})
+
+	// Secondary: always succeeds with marker vector [9.0].
+	secondarySrv := chunkingTestServer(t, &secondaryCalls, func(texts []string) ([][]float32, int) {
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{9.0}
+		}
+		return out, http.StatusOK
+	})
+
+	secondary, err := NewClient(secondarySrv.URL,
+		WithModel("secondary-model"),
+		WithDim(1),
+		WithRetry(NoRetry),
+	)
+	if err != nil {
+		t.Fatalf("NewClient secondary: %v", err)
+	}
+
+	primary, err := NewClient(primarySrv.URL,
+		WithModel("primary-model"),
+		WithDim(1),
+		WithChunkSize(10),
+		WithFallback(secondary),
+		WithRetry(NoRetry),
+	)
+	if err != nil {
+		t.Fatalf("NewClient primary: %v", err)
+	}
+
+	// 25 texts → 3 chunks of 10+10+5.
+	texts := make([]string, 25)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("text-%d", i)
+	}
+
+	result, err := primary.Embed(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(result) != 25 {
+		t.Fatalf("result length: want 25, got %d", len(result))
+	}
+	// Primary received all 3 chunks (1st OK, 2nd 500, 3rd OK).
+	if got := primaryCalls.Load(); got != 3 {
+		t.Errorf("primary HTTP call count: want 3 (chunked), got %d — chunking may bypass fallback path", got)
+	}
+	// Secondary received only chunk 2 (the failed one).
+	if got := secondaryCalls.Load(); got != 1 {
+		t.Errorf("secondary HTTP call count: want 1 (fallback for chunk 2), got %d", got)
+	}
+	// Chunk 2's vectors (indices 10..19) must be from secondary (marker 9.0).
+	for i := 10; i < 20; i++ {
+		if result[i][0] != 9.0 {
+			t.Errorf("result[%d][0]: want 9.0 (secondary marker), got %v", i, result[i][0])
+		}
+	}
+	// Chunks 1 and 3 must be from primary (1.0).
+	for _, i := range []int{0, 5, 9, 20, 24} {
+		if result[i][0] != 1.0 {
+			t.Errorf("result[%d][0]: want 1.0 (primary), got %v", i, result[i][0])
+		}
+	}
+}
+
+// -- Test 17: embed_chunks_per_call records value=1 for non-chunked calls --
+
+// TestClient_EmbedWithResult_RecordsChunksMetricForNonChunked verifies that
+// the embed_chunks_per_call histogram fires with value=1 for calls under
+// the chunking threshold. Before the MAJOR 3 fix, this metric only fired
+// for chunked calls, undercounting backend-call multipliers in dashboards.
+func TestClient_EmbedWithResult_RecordsChunksMetricForNonChunked(t *testing.T) {
+	var callCount atomic.Int32
+	srv := chunkingTestServer(t, &callCount, nil)
+
+	model := "non-chunk-metric-model"
+	c, err := NewClient(srv.URL,
+		WithModel(model),
+		WithDim(1),
+		WithChunkSize(32),
+	)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	histBefore := histogramSnapshot(embedChunksPerCall, model)
+
+	// 16 texts < chunkSize=32 → no chunking, but metric MUST still record value=1.
+	texts := make([]string, 16)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("text-%d", i)
+	}
+	if _, err := c.Embed(context.Background(), texts); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+
+	histAfter := histogramSnapshot(embedChunksPerCall, model)
+	countDelta := histAfter.count - histBefore.count
+	sumDelta := histAfter.sum - histBefore.sum
+
+	if countDelta != 1 {
+		t.Errorf("embed_chunks_per_call sample count delta: want 1, got %d", countDelta)
+	}
+	if sumDelta != 1 {
+		t.Errorf("embed_chunks_per_call sum delta: want 1 (single call, no chunking), got %g", sumDelta)
 	}
 }
 

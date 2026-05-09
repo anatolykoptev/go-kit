@@ -117,6 +117,12 @@ func WithDryRun() EmbedOpt {
 //
 //	OnBeforeEmbed → (fallback check) → callBackendResilient → OnAfterEmbed
 //
+// When chunking is active (len(texts) > chunkSize), `OnBeforeEmbed` /
+// `OnAfterEmbed` fire ONCE PER DISPATCHED CHUNK, not once per user-facing
+// call — observers tracking call count vs token count should reflect this.
+// `embed_chunks_per_call` is recorded once per `EmbedWithResult` call
+// (value=1 for non-chunked, value=N for chunked).
+//
 // Status semantics:
 //   - StatusOk       — request succeeded, vectors are valid
 //   - StatusDegraded — request failed, Err is set
@@ -127,6 +133,29 @@ func WithDryRun() EmbedOpt {
 // E2 wires auto-batching, E3 wires cache, E4 wires per-text Status reasoning.
 // E5 wires client-side chunking when len(texts) > c.chunkSize.
 func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...EmbedOpt) (*Result, error) {
+	// E5: client-side chunking gate FIRST — before fallback routing — so
+	// fallback-wired clients also chunk. Each chunk dispatches through
+	// `dispatchChunk` which routes via fallback if configured.
+	//
+	// Why above fallback: fallback's primary call hits server-side cap at
+	// HTTP 400 (4xx) which `embedWithFallback` classifies as caller error
+	// → no secondary attempt → caller sees raw 400 with no chunk, no retry.
+	// Chunking above fallback gives both paths the protection.
+	//
+	// Why sequential (not parallel): ox-embed-server's batcher already
+	// coalesces concurrent calls; parallel client chunks cause batcher
+	// contention. Sequential also keeps client memory bounded.
+	if c != nil && c.inner != nil && c.chunkSize > 0 && len(texts) > c.chunkSize {
+		return c.embedChunked(ctx, texts, opts...)
+	}
+
+	// Record chunks=1 for the non-chunked path so the histogram covers
+	// 100% of EmbedWithResult calls (chunked + non-chunked). Without this
+	// only chunked calls show up, undercounting backend-call multipliers.
+	if c != nil {
+		recordChunksPerCall(c.model, 1)
+	}
+
 	// E1: if fallback is configured, route through embedWithFallback.
 	if c != nil && c.fallback != nil {
 		callCfg := embedCallCfg{}
@@ -144,28 +173,21 @@ func (c *Client) EmbedWithResult(ctx context.Context, texts []string, opts ...Em
 		return res, nil
 	}
 
-	// E5: client-side chunking. When len(texts) > chunkSize, split into
-	// sequential sub-batches. Each chunk goes through embedWithResultUnchained
-	// independently so per-text cache lookups (E3) fire per-chunk — better
-	// cache hit rate than a single full-batch lookup before splitting.
-	//
-	// Why above cache: cache keys are per-text (model,dim,prefix,text,role).
-	// A chunk where all texts are cached returns StatusOk with 0 backend calls.
-	// If we checked the whole batch cache first, a single cache miss would
-	// force ALL texts to the backend, defeating per-text cache granularity.
-	//
-	// Why sequential (not parallel): ox-embed-server's batcher already coalesces
-	// concurrent calls; parallel client chunks cause batcher contention.
-	// Sequential also keeps client memory bounded.
-	if c != nil && c.inner != nil && c.chunkSize > 0 && len(texts) > c.chunkSize {
-		return c.embedChunked(ctx, texts, opts...)
-	}
-
 	res := c.embedWithResultUnchained(ctx, texts, opts...)
 	if res.Status == StatusDegraded {
 		return res, res.Err
 	}
 	return res, nil
+}
+
+// dispatchChunk dispatches a single chunk through the fallback chain if
+// configured, else direct via `embedWithResultUnchained`. Used by
+// `embedChunked` so chunked paths preserve fallback semantics.
+func (c *Client) dispatchChunk(ctx context.Context, chunk []string, opts ...EmbedOpt) *Result {
+	if c.fallback != nil {
+		return embedWithFallback(ctx, c, c.fallback, chunk, opts...)
+	}
+	return c.embedWithResultUnchained(ctx, chunk, opts...)
 }
 
 // embedChunked splits texts into sequential sub-batches of c.chunkSize and
@@ -198,12 +220,13 @@ func (c *Client) embedChunked(ctx context.Context, texts []string, opts ...Embed
 		// Record per-sub-batch size.
 		recordChunkSize(c.model, len(chunk))
 
-		res := c.embedWithResultUnchained(ctx, chunk, opts...)
+		// Each chunk goes through fallback chain if configured.
+		res := c.dispatchChunk(ctx, chunk, opts...)
 		if res.Status == StatusDegraded {
-			// Translate ErrDimMismatch.Index to report the chunk's start offset
-			// in the original input so callers can locate the offending record.
-			// Inner embedWithResultUnchained always sets Index=0 (no chunk context);
-			// we replace it with the chunk start position i.
+			// Translate ErrDimMismatch.Index to report the absolute position
+			// in the ORIGINAL input slice. validateDim populates Index with
+			// the per-vector position WITHIN this chunk; add the chunk start
+			// offset `i` to map it to the user-facing input index.
 			if res.Err != nil {
 				var de *ErrDimMismatch
 				if errors.As(res.Err, &de) {
@@ -211,7 +234,7 @@ func (c *Client) embedChunked(ctx context.Context, texts []string, opts ...Embed
 						Got:   de.Got,
 						Want:  de.Want,
 						Model: de.Model,
-						Index: i,
+						Index: i + de.Index,
 					}
 				}
 			}

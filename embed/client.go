@@ -191,13 +191,13 @@ func (c *Client) validateDim(vecs [][]float32) error {
 		return nil
 	}
 	var first *ErrDimMismatch
-	for _, v := range vecs {
+	for i, v := range vecs {
 		if len(v) == c.expectedDim {
 			continue
 		}
 		recordDimMismatch(c.model)
 		if first == nil {
-			first = &ErrDimMismatch{Got: len(v), Want: c.expectedDim, Model: c.model}
+			first = &ErrDimMismatch{Got: len(v), Want: c.expectedDim, Model: c.model, Index: i}
 		}
 	}
 	if first == nil {
