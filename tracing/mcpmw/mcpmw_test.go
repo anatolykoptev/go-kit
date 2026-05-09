@@ -107,3 +107,30 @@ func TestMiddleware_EmptyToolName(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 }
+
+// callToolWithClientParams exercises the *mcp.CallToolParams branch of
+// extractToolName (defensive guard for future SDK changes or unexpected wrapping).
+// In the current SDK (v1.5.0) the server MethodHandler always receives
+// *CallToolParamsRaw; this test passes a synthetic ClientRequest to confirm
+// the switch arm compiles and does not panic.
+func TestExtractToolName_TypedParams(t *testing.T) {
+	mw := mcpmw.Middleware("svc")
+	wrapped := mw(makeHandler(func() (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{}, nil
+	}))
+
+	// Construct a request carrying *CallToolParams (client-side type).
+	// mcp.ClientRequest is the generic counterpart of ServerRequest.
+	type clientCallReq = mcp.ClientRequest[*mcp.CallToolParams]
+	req := &clientCallReq{Params: &mcp.CallToolParams{Name: "my_tool"}}
+
+	res, err := wrapped(context.Background(), "tools/call", req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if res == nil {
+		t.Fatal("nil result")
+	}
+	// We can't easily inspect the span name in a unit test without a real
+	// TracerProvider; we rely on no-panic + correct result propagation.
+}

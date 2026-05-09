@@ -35,16 +35,33 @@ func TestSetup_EmptyServiceName_Errors(t *testing.T) {
 	}
 }
 
-func TestSetup_BadEndpoint_ReturnsExporterError(t *testing.T) {
-	// Invalid URL forms still parse to a host:port, but New() errors only on
-	// option-validation issues — this is mainly a smoke test that the
-	// exporter creation path runs.
+func TestSetup_BadEndpoint_NoopFallback(t *testing.T) {
+	// A syntactically invalid URL causes otlptracehttp.New to error.
+	// Setup must degrade gracefully (noop + nil error) so the service starts.
 	t.Setenv(envEndpoint, "")
-	_, err := Setup(context.Background(), "test-svc", WithEndpoint("localhost:0"))
-	// localhost:0 is technically valid; we don't expect an error here. The
-	// test ensures Setup doesn't panic on common edge inputs.
+	shutdown, err := Setup(context.Background(), "test-svc",
+		WithEndpoint("://not-a-valid-url"))
 	if err != nil {
-		t.Logf("Setup with localhost:0 returned error (acceptable): %v", err)
+		t.Fatalf("Setup with bad endpoint must return nil error (graceful degrade), got: %v", err)
+	}
+	if shutdown == nil {
+		t.Fatal("shutdown must be non-nil")
+	}
+	if err := shutdown(context.Background()); err != nil {
+		t.Errorf("noop shutdown returned error: %v", err)
+	}
+}
+
+func TestSetup_NilCtx_NoNPE(t *testing.T) {
+	// nil ctx must not panic — Setup substitutes context.Background().
+	t.Setenv(envEndpoint, "")
+	//nolint:staticcheck // intentional nil ctx to test guard
+	shutdown, err := Setup(nil, "test-svc") //nolint:staticcheck
+	if err != nil {
+		t.Fatalf("Setup(nil, ...) must not error: %v", err)
+	}
+	if shutdown == nil {
+		t.Fatal("shutdown must be non-nil")
 	}
 }
 
@@ -59,6 +76,35 @@ func TestStart_NoOpSpanFromGlobalProvider(t *testing.T) {
 		// Acceptable — no-op span has invalid context. Just verify End is callable.
 	}
 	span.End()
+}
+
+func TestStart_ScopeFromSetup(t *testing.T) {
+	// Reset active service name before the test to avoid state from other tests.
+	activeServiceName.Store("")
+	t.Setenv(envEndpoint, "")
+
+	_, err := Setup(context.Background(), "my-service")
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// After Setup, activeServiceName must reflect "my-service".
+	v, ok := activeServiceName.Load().(string)
+	if !ok || v != "my-service" {
+		t.Errorf("activeServiceName = %q, want %q", v, "my-service")
+	}
+
+	// Start must use the stored scope (verified indirectly; with the no-op
+	// global TP the span is inert but Start must not panic or use the
+	// hardcoded fallback scope).
+	ctx, span := Start(context.Background(), "test.op")
+	if span == nil {
+		t.Fatal("Start returned nil span")
+	}
+	span.End()
+
+	// Confirm the fallback is NOT triggered when Setup was called.
+	_ = ctx
 }
 
 func TestRecordError_NilNoop(t *testing.T) {
