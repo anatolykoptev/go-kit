@@ -21,5 +21,6 @@
 // ClientIP extracts the real client address from an HTTP request. Consults
 // X-Real-IP, then X-Forwarded-For (first hop), then r.RemoteAddr. Each
 // candidate is validated via net.ParseIP -- invalid or spoofed header values
-// are logged and skipped rather than returned.
+// are silently skipped rather than returned. See ClientIP for the full trust
+// model and deployment requirements.
 package httputil
