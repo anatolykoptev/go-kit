@@ -44,6 +44,32 @@ func WithPathLabel(fn func(*http.Request) string) Option {
 	return func(c *config) { c.pathLabel = fn }
 }
 
+// WithStdlibPattern is a convenience shorthand for the common case where the
+// HTTP handler is dispatched via stdlib http.ServeMux (Go 1.22+). It returns
+// an Option equivalent to:
+//
+//	WithPathLabel(func(r *http.Request) string {
+//	    if r.Pattern == "" {
+//	        return "unknown"
+//	    }
+//	    return r.Pattern
+//	})
+//
+// r.Pattern is populated by ServeMux before the matched handler runs, so the
+// metrics middleware reads a meaningful pattern after next.ServeHTTP returns
+// - provided the middleware is invoked from inside ServeMux dispatch chain
+// (i.e. it wraps the mux output, not the mux itself).
+//
+// For chi or gorilla/mux pass a custom function via WithPathLabel.
+func WithStdlibPattern() Option {
+	return WithPathLabel(func(r *http.Request) string {
+		if r.Pattern == "" {
+			return "unknown"
+		}
+		return r.Pattern
+	})
+}
+
 // WithDurationHistogram enables an opt-in Prometheus histogram at
 // <subsystem>_request_duration_histogram_seconds{method,path} in addition to
 // the existing gauge (which is preserved for backward compatibility with
