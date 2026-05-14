@@ -36,6 +36,9 @@ type SlidingWindowConfig struct {
 	Limit int
 	// FailOpen controls behaviour on Redis errors: if true, the call is allowed.
 	FailOpen bool
+	// Now, if non-nil, is used instead of time.Now to determine the current time.
+	// Primarily intended for testing. Defaults to time.Now when nil.
+	Now func() time.Time
 }
 
 // SlidingWindow is a Redis-backed sliding-window rate limiter.
@@ -43,14 +46,31 @@ type SlidingWindow struct {
 	cfg        SlidingWindowConfig
 	bucketTTL  time.Duration
 	numBuckets int
-	now        func() time.Time // override in tests via wrapping; exposed for testing via config extension
+	now        func() time.Time
 }
 
 // NewSlidingWindow creates a new SlidingWindow limiter from cfg.
 //
 // Window should be a multiple of one minute; sub-minute windows use
 // second-granularity buckets when Window < 1 minute.
+//
+// Panics on misconfiguration: nil Redis, non-positive Limit, or empty KeyPrefix.
 func NewSlidingWindow(cfg SlidingWindowConfig) *SlidingWindow {
+	if cfg.Redis == nil {
+		panic("ratelimit: Redis is required")
+	}
+	if cfg.Limit <= 0 {
+		panic("ratelimit: Limit must be positive")
+	}
+	if cfg.KeyPrefix == "" {
+		panic("ratelimit: KeyPrefix must not be empty")
+	}
+
+	nowFn := cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+
 	bucketSec := int64(60) // 1-minute bucket matches donor
 	if cfg.Window < time.Minute {
 		// For sub-minute windows, use 1-second buckets.
@@ -65,7 +85,7 @@ func NewSlidingWindow(cfg SlidingWindowConfig) *SlidingWindow {
 		cfg:        cfg,
 		bucketTTL:  cfg.Window + bucketDur, // slightly longer than window (donor pattern)
 		numBuckets: numBuckets,
-		now:        time.Now,
+		now:        nowFn,
 	}
 }
 
@@ -73,9 +93,18 @@ func NewSlidingWindow(cfg SlidingWindowConfig) *SlidingWindow {
 // limit. It returns (allowed, remaining, error).
 //
 // remaining is the number of calls still permitted in the current window after
-// this call. On denial remaining is 0.
+// this call. On denial remaining is clamped to 0.
 //
-// On Redis errors the limiter fails open when FailOpen is true.
+// On Redis errors the limiter fails open (allowed=true, err non-nil) when
+// FailOpen is true, or fails closed (allowed=false, err non-nil) when
+// FailOpen is false.
+//
+// Note: the INCR and EXPIRE for the current bucket are issued in a pipeline
+// but are not atomic. If the process crashes between INCR and EXPIRE the
+// incremented key will have no TTL and will persist until Reset is called or
+// the key is manually removed. Callers that require stronger guarantees should
+// use a Lua script; this implementation deliberately avoids that complexity to
+// keep the porting surface small.
 func (s *SlidingWindow) Allow(ctx context.Context, key string) (allowed bool, remaining int, err error) {
 	now := s.now()
 	bucketSec := s.bucketTTLSeconds()
@@ -117,26 +146,34 @@ func (s *SlidingWindow) Allow(ctx context.Context, key string) (allowed bool, re
 // Reset deletes all bucket keys for key using SCAN + DEL.
 // Called on successful login so isolated typos do not erode the budget.
 //
+// All matching keys are collected first, then deleted in a single DEL call.
+// This avoids partial-reset semantics: either all keys are removed or none
+// (subject to Redis atomicity of DEL). A partial collection failure returns
+// an error without attempting deletion.
+//
 // Note: the donor used SCAN+DEL (not KEYS+DEL) to avoid blocking Redis.
 // This implementation preserves that choice.
 func (s *SlidingWindow) Reset(ctx context.Context, key string) error {
 	pattern := fmt.Sprintf("%s:%s:*", s.cfg.KeyPrefix, key)
 	var cursor uint64
+	var allKeys []string
 	for {
 		keys, nextCursor, err := s.cfg.Redis.Scan(ctx, cursor, pattern, 50).Result()
 		if err != nil {
 			return err
 		}
-		if len(keys) > 0 {
-			if err := s.cfg.Redis.Del(ctx, keys...).Err(); err != nil {
-				return err
-			}
-		}
+		allKeys = append(allKeys, keys...)
 		cursor = nextCursor
 		if cursor == 0 {
-			return nil
+			break
 		}
 	}
+	if len(allKeys) > 0 {
+		if err := s.cfg.Redis.Del(ctx, allKeys...).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bucketKey returns the Redis key for a given key and bucket epoch.
