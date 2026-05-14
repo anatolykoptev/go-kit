@@ -4,8 +4,8 @@ package ratelimit
 //
 // Algorithm (ported from oxpulse-admin internal/admin/rate_limit_redis.go):
 // Each window is divided into 1-minute buckets. On Allow, the current bucket
-// is incremented (INCR + EXPIRE) and all buckets in the window are summed via
-// GET. If the sum exceeds Limit the call is denied.
+// is incremented and all buckets in the window are summed via GET. If the sum
+// exceeds Limit the call is denied.
 //
 // Key schema: <KeyPrefix>:<key>:<unix-minute-epoch>
 // Reset:      SCAN + DEL matching <KeyPrefix>:<key>:*
@@ -19,10 +19,24 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+// incrExpireScript atomically INCRs a key and, only on the first increment
+// (v==1), sets its TTL. Set-once semantics prevent TTL reset on every call
+// while still guaranteeing that a newly created key is always given a TTL —
+// bucket keys are never orphaned even on a process crash between INCR and EXPIRE.
+//
+// KEYS[1] — bucket key
+// ARGV[1] — TTL in seconds (integer string)
+var incrExpireScript = redis.NewScript(`
+local v = redis.call('INCR', KEYS[1])
+if v == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return v
+`)
 
 // SlidingWindowConfig holds the configuration for a SlidingWindow limiter.
 type SlidingWindowConfig struct {
@@ -99,35 +113,39 @@ func NewSlidingWindow(cfg SlidingWindowConfig) *SlidingWindow {
 // FailOpen is true, or fails closed (allowed=false, err non-nil) when
 // FailOpen is false.
 //
-// Note: the INCR and EXPIRE for the current bucket are issued in a pipeline
-// but are not atomic. If the process crashes between INCR and EXPIRE the
-// incremented key will have no TTL and will persist until Reset is called or
-// the key is manually removed. Callers that require stronger guarantees should
-// use a Lua script; this implementation deliberately avoids that complexity to
-// keep the porting surface small.
+// INCR and TTL are set atomically via a Lua script (incrExpireScript): the key
+// is incremented and EXPIRE is called only on the first hit (v==1). Bucket keys
+// are therefore never orphaned — a process crash between INCR and EXPIRE cannot
+// produce a key without a TTL.
 func (s *SlidingWindow) Allow(ctx context.Context, key string) (allowed bool, remaining int, err error) {
 	now := s.now()
 	bucketSec := s.bucketTTLSeconds()
 	currentBucket := now.Unix() / bucketSec
-
-	pipe := s.cfg.Redis.Pipeline()
 	bucketKey := s.bucketKey(key, currentBucket)
-	incrCmd := pipe.Incr(ctx, bucketKey)
-	pipe.Expire(ctx, bucketKey, s.bucketTTL)
+	ttlSecs := strconv.FormatInt(int64(s.bucketTTL.Seconds()), 10)
 
+	// Atomic INCR + conditional EXPIRE via Lua.
+	if err := incrExpireScript.Run(ctx, s.cfg.Redis, []string{bucketKey}, ttlSecs).Err(); err != nil && err != redis.Nil {
+		if s.cfg.FailOpen {
+			return true, 0, err
+		}
+		return false, 0, err
+	}
+
+	// Sum all buckets in the window (non-atomic with the INCR above; a rolling
+	// window tolerates this small skew, which is at most one bucket duration).
+	pipe := s.cfg.Redis.Pipeline()
 	getCmds := make([]*redis.StringCmd, s.numBuckets)
 	for i := 0; i < s.numBuckets; i++ {
 		b := currentBucket - int64(i)
 		getCmds[i] = pipe.Get(ctx, s.bucketKey(key, b))
 	}
-
 	if _, execErr := pipe.Exec(ctx); execErr != nil && execErr != redis.Nil {
 		if s.cfg.FailOpen {
 			return true, 0, execErr
 		}
 		return false, 0, execErr
 	}
-	_ = incrCmd // result included in GET sum below (same key)
 
 	var total int64
 	for _, cmd := range getCmds {
