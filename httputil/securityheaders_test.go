@@ -12,9 +12,11 @@ import (
 // oxpulse-admin overrides via WithCSP to allow 'unsafe-inline'.
 
 const (
-	defaultCSP            = "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"
-	adminCSP              = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
-	defaultReferrerPolicy = "strict-origin-when-cross-origin"
+	defaultCSP               = "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"
+	adminCSP                 = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+	defaultReferrerPolicy    = "strict-origin-when-cross-origin"
+	defaultPermissionsPolicy = "camera=(), microphone=(), geolocation=()"
+	defaultXSSProtection     = "0"
 )
 
 // defaultHeaders is the canonical set of values SecurityHeaders writes.
@@ -25,6 +27,8 @@ var defaultHeaders = map[string]string{
 	"Referrer-Policy":         defaultReferrerPolicy,
 	"Content-Security-Policy": defaultCSP,
 	"Cache-Control":           "no-store",
+	"Permissions-Policy":      defaultPermissionsPolicy,
+	"X-XSS-Protection":        defaultXSSProtection,
 }
 
 // assertHeaders checks that every key in defaultHeaders is present with the
@@ -91,4 +95,45 @@ func TestSecurityHeaders_ReplacesExistingHeader(t *testing.T) {
 	if rpVals[0] == "stale-referrer" {
 		t.Fatal("Referrer-Policy not replaced — implementation likely uses Add() instead of Set()")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Commit 3: Permissions-Policy and X-XSS-Protection defaults
+// ---------------------------------------------------------------------------
+
+// TestSecurityHeaders_DefaultsIncludePermissionsPolicy verifies the new default.
+func TestSecurityHeaders_DefaultsIncludePermissionsPolicy(t *testing.T) {
+	rec := httptest.NewRecorder()
+	httputil.SecurityHeaders(rec)
+	if got := rec.Header().Get("Permissions-Policy"); got != defaultPermissionsPolicy {
+		t.Errorf("Permissions-Policy = %q, want %q", got, defaultPermissionsPolicy)
+	}
+}
+
+// TestSecurityHeaders_DefaultsIncludeXSSProtectionZero verifies the new default.
+func TestSecurityHeaders_DefaultsIncludeXSSProtectionZero(t *testing.T) {
+	rec := httptest.NewRecorder()
+	httputil.SecurityHeaders(rec)
+	if got := rec.Header().Get("X-XSS-Protection"); got != "0" {
+		t.Errorf("X-XSS-Protection = %q, want %q", got, "0")
+	}
+}
+
+// TestSecurityHeaders_WithPermissionsPolicy verifies the override option.
+func TestSecurityHeaders_WithPermissionsPolicy(t *testing.T) {
+	rec := httptest.NewRecorder()
+	custom := "camera=(), microphone=()"
+	httputil.SecurityHeaders(rec, httputil.WithPermissionsPolicy(custom))
+	assertHeaders(t, rec.Header(), map[string]string{
+		"Permissions-Policy": custom,
+	})
+}
+
+// TestSecurityHeaders_WithXSSProtection verifies the override option.
+func TestSecurityHeaders_WithXSSProtection(t *testing.T) {
+	rec := httptest.NewRecorder()
+	httputil.SecurityHeaders(rec, httputil.WithXSSProtection("1; mode=block"))
+	assertHeaders(t, rec.Header(), map[string]string{
+		"X-XSS-Protection": "1; mode=block",
+	})
 }

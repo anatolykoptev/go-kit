@@ -184,3 +184,89 @@ func TestSlidingWindow_PanicsOnEmptyKeyPrefix(t *testing.T) {
 		Limit:  5,
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Commit 4: Atomic INCR+EXPIRE via Lua
+// ---------------------------------------------------------------------------
+
+// TestSlidingWindow_TTLSetOnFirstIncr verifies that after the first Allow call
+// the bucket key has a TTL (not -1 / no TTL), confirming the Lua EXPIRE ran.
+func TestSlidingWindow_TTLSetOnFirstIncr(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	now := time.Now().Truncate(time.Second)
+	window := 2 * time.Minute
+	sw := ratelimit.NewSlidingWindow(ratelimit.SlidingWindowConfig{
+		Redis:     rdb,
+		KeyPrefix: "ttltest",
+		Window:    window,
+		Limit:     10,
+		FailOpen:  true,
+		Now:       func() time.Time { return now },
+	})
+
+	ok, _, err := sw.Allow(context.Background(), "user1")
+	if !ok || err != nil {
+		t.Fatalf("Allow: ok=%v err=%v", ok, err)
+	}
+
+	// Scan all keys with the prefix and check each has a TTL.
+	keys, err := rdb.Keys(context.Background(), "ttltest:user1:*").Result()
+	if err != nil {
+		t.Fatalf("KEYS: %v", err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("no bucket keys found after Allow")
+	}
+	for _, k := range keys {
+		ttl := mr.TTL(k)
+		if ttl <= 0 {
+			t.Errorf("key %q has TTL=%v (want > 0; no-TTL = orphaned key)", k, ttl)
+		}
+	}
+}
+
+// TestSlidingWindow_TTLNotResetOnSubsequentIncr verifies that the set-once Lua
+// semantics (EXPIRE only when v==1) do NOT reset the TTL on subsequent calls.
+// This distinguishes the Lua implementation from the previous pipeline which
+// sent EXPIRE on every call — with set-once, the TTL should decrease between
+// the first and second call (not jump back to the initial value).
+func TestSlidingWindow_TTLNotResetOnSubsequentIncr(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	now := time.Now().Truncate(time.Second)
+	window := 2 * time.Minute
+	sw := ratelimit.NewSlidingWindow(ratelimit.SlidingWindowConfig{
+		Redis:     rdb,
+		KeyPrefix: "ttltest2",
+		Window:    window,
+		Limit:     10,
+		FailOpen:  true,
+		Now:       func() time.Time { return now },
+	})
+
+	ctx := context.Background()
+	sw.Allow(ctx, "user2") //nolint:errcheck
+
+	// Capture TTL after first call.
+	keys, _ := rdb.Keys(ctx, "ttltest2:user2:*").Result()
+	if len(keys) == 0 {
+		t.Fatal("no bucket keys after first Allow")
+	}
+	ttl1 := mr.TTL(keys[0])
+
+	// Advance miniredis clock slightly so TTL decreases.
+	mr.FastForward(5 * time.Second)
+
+	// Second Allow in the same bucket.
+	sw.Allow(ctx, "user2") //nolint:errcheck
+
+	ttl2 := mr.TTL(keys[0])
+
+	// With set-once semantics: TTL2 < TTL1 (TTL was not reset to Window+bucket).
+	// With reset-every semantics: TTL2 ≈ TTL1 (TTL was refreshed).
+	// We assert set-once: TTL must have decreased, not been reset.
+	if ttl2 >= ttl1 {
+		t.Errorf("TTL reset on 2nd call (set-once expected): ttl1=%v ttl2=%v", ttl1, ttl2)
+	}
+}
