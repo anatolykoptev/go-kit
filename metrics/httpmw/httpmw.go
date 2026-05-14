@@ -5,7 +5,9 @@
 package httpmw
 
 import (
+	"bufio"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -175,4 +177,23 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	n, err := rw.ResponseWriter.Write(b)
 	rw.written += n
 	return n, err
+}
+
+// Flush implements http.Flusher by delegating to the underlying ResponseWriter
+// if it supports flushing. Required for SSE and other streaming responses.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker by delegating to the underlying ResponseWriter
+// if it supports hijacking. Required for WebSocket upgrades and raw TCP takeover.
+// Returns http.ErrNotSupported (Go 1.20+) if the underlying writer does not
+// implement Hijacker.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
