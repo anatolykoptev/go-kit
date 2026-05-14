@@ -21,12 +21,13 @@ const (
 
 // defaultHeaders is the canonical set of values SecurityHeaders writes.
 // Used by assertHeaders to verify every header in one call.
+// Cache-Control is intentionally absent: SecurityHeaders does not set it by
+// default. Callers must use WithCacheControl or set it directly.
 var defaultHeaders = map[string]string{
 	"X-Frame-Options":         "DENY",
 	"X-Content-Type-Options":  "nosniff",
 	"Referrer-Policy":         defaultReferrerPolicy,
 	"Content-Security-Policy": defaultCSP,
-	"Cache-Control":           "no-store",
 	"Permissions-Policy":      defaultPermissionsPolicy,
 	"X-XSS-Protection":        defaultXSSProtection,
 }
@@ -136,4 +137,41 @@ func TestSecurityHeaders_WithXSSProtection(t *testing.T) {
 	assertHeaders(t, rec.Header(), map[string]string{
 		"X-XSS-Protection": "1; mode=block",
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Cache-Control behaviour (BREAKING CHANGE v0.56.0)
+// ---------------------------------------------------------------------------
+
+// TestSecurityHeadersDoesNotSetCacheControlByDefault verifies that
+// SecurityHeaders no longer sets Cache-Control unconditionally.
+// Callers must declare cache policy explicitly — marketing pages and admin
+// pages have different requirements and the function must not guess.
+func TestSecurityHeadersDoesNotSetCacheControlByDefault(t *testing.T) {
+	rec := httptest.NewRecorder()
+	httputil.SecurityHeaders(rec)
+	if got := rec.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("Cache-Control = %q, want empty (not set by default)", got)
+	}
+}
+
+// TestWithCacheControlExplicit verifies that WithCacheControl sets the header
+// when the caller opts in — both no-store (authed admin) and public (assets).
+func TestWithCacheControlExplicit(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"no-store for authed admin", "no-store"},
+		{"public max-age for marketing page", "public, max-age=3600"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			httputil.SecurityHeaders(rec, httputil.WithCacheControl(tc.value))
+			if got := rec.Header().Get("Cache-Control"); got != tc.value {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.value)
+			}
+		})
+	}
 }
