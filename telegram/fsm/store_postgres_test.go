@@ -2,6 +2,7 @@ package fsm_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -166,5 +167,28 @@ func TestPostgresStore_Sweep(t *testing.T) {
 	got, err := store.Get(ctx, 1011)
 	if err != nil || got == nil {
 		t.Fatalf("Sweep: alive session gone: err=%v got=%v", err, got)
+	}
+}
+
+// TestPostgresStore_Get_ContextCancelled_PropagatesError verifies that a
+// cancelled context returns an error (not nil, nil).
+// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md M1
+func TestPostgresStore_Get_ContextCancelled_PropagatesError(t *testing.T) {
+	pool := newTestPool(t)
+
+	store, err := fsm.NewPostgresStore(context.Background(), pool, time.Hour)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err = store.Get(ctx, 9999)
+	if err == nil {
+		t.Fatal("Get with cancelled ctx: expected non-nil error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get with cancelled ctx: expected context.Canceled in error chain, got: %v", err)
 	}
 }
