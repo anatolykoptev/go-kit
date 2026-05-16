@@ -92,6 +92,7 @@ type Machine struct {
 	store   Store
 	initial func(flow string) StateFn
 	ttl     time.Duration
+	cfg     machineConfig
 	// fnCache maps chatID (int64) → StateFn for the current step.
 	// Populated by Start and updated on each Feed transition.
 	// Cleared by Cancel and terminal-state transitions.
@@ -108,8 +109,13 @@ type Machine struct {
 //   - store: where sessions are persisted.
 //   - initial: factory that returns the first StateFn for a named flow.
 //   - ttl: inactivity timeout; sessions older than ttl are swept.
-func New(store Store, initial func(flow string) StateFn, ttl time.Duration) *Machine {
-	return &Machine{store: store, initial: initial, ttl: ttl}
+//   - opts: optional configuration (WithCancelCmds, WithOnCancel, …).
+func New(store Store, initial func(flow string) StateFn, ttl time.Duration, opts ...Option) *Machine {
+	var cfg machineConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &Machine{store: store, initial: initial, ttl: ttl, cfg: cfg}
 }
 
 // Start creates a new session for chatID in the given flow. If a session
@@ -160,6 +166,21 @@ func (m *Machine) Feed(ctx context.Context, e Event) (handled bool, err error) {
 	if sess == nil {
 		// No active session — let caller decide what to do.
 		return false, nil
+	}
+
+	// Check if the incoming text is a cancel command. If so, end the session
+	// without dispatching to the StateFn and invoke the OnCancel hook.
+	if len(m.cfg.cancelCmds) > 0 {
+		if _, ok := m.cfg.cancelCmds[e.Text]; ok {
+			m.clearFn(e.ChatID)
+			if delErr := m.store.Delete(ctx, e.ChatID); delErr != nil {
+				return true, fmt.Errorf("fsm.Feed cancel delete: %w", delErr)
+			}
+			if m.cfg.onCancel != nil {
+				m.cfg.onCancel(ctx, e.ChatID)
+			}
+			return true, nil
+		}
 	}
 
 	// Look up the current StateFn from the in-process cache (populated by
