@@ -147,3 +147,44 @@ commands:
 		t.Errorf("cmd[1] = %+v, want {domains, Получить адрес}", cmds[1])
 	}
 }
+
+// TestLocale_Button_SingleKey verifies the new Button(lang, key) accessor
+// returns the correct label without allocating a full map (item 1.3 — v0.57 polish).
+func TestLocale_Button_SingleKey(t *testing.T) {
+	fsys := fstest.MapFS{
+		"ru.yaml": {Data: []byte(`
+buttons:
+  confirm: "Подтвердить"
+  cancel: "Отмена"
+`)},
+		"en.yaml": {Data: []byte(`
+buttons:
+  confirm: "Confirm"
+`)},
+	}
+
+	loc, err := NewLocale(fsys, "ru")
+	if err != nil {
+		t.Fatalf("NewLocale: %v", err)
+	}
+
+	// Known key in the requested lang.
+	if got := loc.Button("en", "confirm"); got != "Confirm" {
+		t.Errorf("Button(en, confirm) = %q, want %q", got, "Confirm")
+	}
+
+	// Key missing in EN — must fall back to RU.
+	if got := loc.Button("en", "cancel"); got != "Отмена" {
+		t.Errorf("Button(en, cancel) = %q, want %q (fallback)", got, "Отмена")
+	}
+
+	// Key present in default lang.
+	if got := loc.Button("ru", "confirm"); got != "Подтвердить" {
+		t.Errorf("Button(ru, confirm) = %q, want %q", got, "Подтвердить")
+	}
+
+	// Totally unknown key — must return key as sentinel.
+	if got := loc.Button("ru", "no_such_key"); got != "no_such_key" {
+		t.Errorf("Button(ru, no_such_key) = %q, want sentinel %q", got, "no_such_key")
+	}
+}

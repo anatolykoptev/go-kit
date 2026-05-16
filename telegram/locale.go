@@ -175,3 +175,22 @@ func (l *Locale) Commands(lang string) []Command {
 	}
 	return out
 }
+
+// Button returns the label for a single button key in lang, without allocating
+// a full map. Falls back to the default lang if the key is absent in lang.
+// Returns key itself if absent everywhere (same sentinel behaviour as Get).
+func (l *Locale) Button(lang, key string) string {
+	// Check requested lang first.
+	if ld, ok := l.langs[lang]; ok {
+		if v, ok := ld.Buttons[key]; ok {
+			return v
+		}
+	}
+	// Fall back to default lang.
+	if ld, ok := l.langs[l.defaultLang]; ok {
+		if v, ok := ld.Buttons[key]; ok {
+			return v
+		}
+	}
+	return key // sentinel: return key for debuggability
+}
