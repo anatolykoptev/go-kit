@@ -9,7 +9,15 @@
 //   - X-Content-Type-Options: nosniff
 //   - X-Frame-Options: DENY
 //   - Referrer-Policy: strict-origin-when-cross-origin
-//   - Cache-Control: no-store
+//   - Permissions-Policy: camera=(), microphone=(), geolocation=()
+//   - X-XSS-Protection: 0
+//
+// Cache-Control is NOT set by default. Cache policy is orthogonal to security
+// headers — marketing pages, API endpoints, and authed admin pages have
+// fundamentally different caching requirements. Use WithCacheControl to set it:
+//
+//	SecurityHeaders(w, WithCacheControl("no-store"))           // authed admin
+//	SecurityHeaders(w, WithCacheControl("public, max-age=3600")) // public assets
 //
 // Services that require a less restrictive CSP (e.g. oxpulse-admin, which
 // needs unsafe-inline for its embedded scripts) should call

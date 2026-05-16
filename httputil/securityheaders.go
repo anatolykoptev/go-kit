@@ -13,6 +13,13 @@ import "net/http"
 // XSS auditor is disabled in modern browsers and is itself an XSS vector in
 // older ones. Setting "0" explicitly ensures any residual browser behaviour
 // is switched off.
+//
+// BREAKING CHANGE (v0.56.0): Cache-Control is no longer set by default.
+// SecurityHeaders focuses on security headers; cache policy is orthogonal and
+// must be declared explicitly by each handler. Callers that relied on the
+// implicit "no-store" must either:
+//   - pass WithCacheControl("no-store") to SecurityHeaders, or
+//   - call w.Header().Set("Cache-Control", "no-store") directly.
 const (
 	defaultCSP               = "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"
 	defaultReferrerPolicy    = "strict-origin-when-cross-origin"
@@ -26,6 +33,7 @@ type config struct {
 	referrerPolicy    string
 	permissionsPolicy string
 	xssProtection     string
+	cacheControl      string // empty = do not set Cache-Control
 }
 
 // Option modifies the header configuration applied by SecurityHeaders.
@@ -53,6 +61,17 @@ func WithXSSProtection(value string) Option {
 	return func(c *config) { c.xssProtection = value }
 }
 
+// WithCacheControl sets the Cache-Control header value.
+// SecurityHeaders does not set Cache-Control by default — cache policy is
+// orthogonal to security headers and must be declared per handler.
+// Use this option when the caller wants a single call to cover both concerns:
+//
+//	SecurityHeaders(w, WithCacheControl("no-store"))          // authed admin pages
+//	SecurityHeaders(w, WithCacheControl("public, max-age=3600")) // public assets
+func WithCacheControl(value string) Option {
+	return func(c *config) { c.cacheControl = value }
+}
+
 // SecurityHeaders writes a conservative set of HTTP security headers to w.
 // Each header is set via Header().Set (replaces, never appends).
 // Pass Option values to override specific headers from their defaults.
@@ -62,13 +81,12 @@ func WithXSSProtection(value string) Option {
 //   - X-Frame-Options: DENY
 //   - Referrer-Policy: strict-origin-when-cross-origin
 //   - Content-Security-Policy: default-src 'self'; script-src 'self'; ...
-//   - Cache-Control: no-store
 //   - Permissions-Policy: camera=(), microphone=(), geolocation=()
 //   - X-XSS-Protection: 0
 //
-// Downstream consumers (oxpulse-admin, go-nerv) will emit Permissions-Policy
-// and X-XSS-Protection automatically on the next go-kit dependency bump —
-// this is a deliberate widening of the security baseline.
+// Cache-Control is NOT set by default. Pass WithCacheControl to set it.
+// Each handler must declare its own cache policy — marketing pages, API
+// endpoints, and authed admin pages have fundamentally different requirements.
 func SecurityHeaders(w http.ResponseWriter, opts ...Option) {
 	cfg := config{
 		csp:               defaultCSP,
@@ -84,7 +102,9 @@ func SecurityHeaders(w http.ResponseWriter, opts ...Option) {
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", cfg.referrerPolicy)
 	h.Set("Content-Security-Policy", cfg.csp)
-	h.Set("Cache-Control", "no-store")
+	if cfg.cacheControl != "" {
+		h.Set("Cache-Control", cfg.cacheControl)
+	}
 	h.Set("Permissions-Policy", cfg.permissionsPolicy)
 	h.Set("X-XSS-Protection", cfg.xssProtection)
 }
