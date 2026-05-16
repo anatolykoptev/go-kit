@@ -3,6 +3,7 @@ package kb_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -194,3 +195,40 @@ func TestURLButton(t *testing.T) {
 		t.Fatalf("expected URL https://example.com, got %v", btn.URL)
 	}
 }
+
+// TestDefaultOnError_UsesSlog verifies that the built-in error handler (no WithOnError)
+// emits an slog record at ERROR or WARN level (not INFO as log.Printf would) (item 1.4 — v0.57 polish).
+// We trigger it by passing data exceeding maxDataBytes (64) to Button().
+func TestDefaultOnError_UsesSlog(t *testing.T) {
+	var records []slog.Record
+	handler := &kbCaptureHandler{records: &records}
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	k := kb.New() // uses defaultOnError
+	oversized := strings.Repeat("x", 65)
+	k.Button("label", []byte(oversized), func(_ context.Context, _ *tgbotapi.CallbackQuery) error {
+		return nil
+	})
+
+	if len(records) != 1 {
+		t.Fatalf("expected 1 slog record from defaultOnError, got %d", len(records))
+	}
+	// log.Printf routes through slog at INFO; explicit slog.Error/Warn is ERROR/WARN.
+	if records[0].Level == slog.LevelInfo {
+		t.Errorf("defaultOnError used log.Printf (level=INFO); want slog.Error or slog.Warn (level > INFO)")
+	}
+}
+
+type kbCaptureHandler struct {
+	records *[]slog.Record
+}
+
+func (h *kbCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *kbCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h *kbCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *kbCaptureHandler) WithGroup(_ string) slog.Handler      { return h }

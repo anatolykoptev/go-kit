@@ -13,7 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -94,7 +94,7 @@ func randomPrefix() string {
 }
 
 func defaultOnError(err error) {
-	log.Printf("[kb] error: %v", err)
+	slog.Error("[kb] error", "err", err)
 }
 
 // Prefix returns this keyboard's namespace prefix.

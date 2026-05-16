@@ -73,3 +73,21 @@ func TestMetrics_MultipleInvocations(t *testing.T) {
 		t.Errorf("error = %d, want 1", snap["h{result=error}"])
 	}
 }
+
+// TestMetrics_UsesLabelAPI verifies that Metrics() builds counter names via
+// metrics.Label() rather than string concatenation (item 1.5 — v0.57 polish).
+// The counter name must be exactly metrics.Label(name, "result", "ok") for a
+// success result — no manual brace construction.
+func TestMetrics_UsesLabelAPI(t *testing.T) {
+	reg := metrics.NewRegistry()
+	const name = "bot_updates"
+	h := Metrics(reg, name)(nopHandler)
+	if err := h(context.Background(), mkMsgUpd(1)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantKey := metrics.Label(name, "result", "ok")
+	snap := reg.Snapshot()
+	if snap[wantKey] != 1 {
+		t.Errorf("counter %q = %d, want 1; snapshot=%v", wantKey, snap[wantKey], snap)
+	}
+}

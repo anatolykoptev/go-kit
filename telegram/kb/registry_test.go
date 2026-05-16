@@ -132,3 +132,43 @@ func TestRegistry_ConcurrentRegisterAndDispatch(t *testing.T) {
 	wg.Wait()
 	// If no data race or panic: test passes. Run under -race to catch H1.
 }
+
+// --- Test: longest-prefix-match correctness (item 1.2 — v0.57 polish) ---
+// When two registered prefixes share a common prefix (e.g. "a" and "abc"),
+// a callback_data "abc0" must route to "abc", not "a".
+// Map iteration order is non-deterministic, so without sorting this test
+// could fail ~50% of the time before the fix.
+func TestRegistryDispatch_LongestPrefixMatch(t *testing.T) {
+	calledShort, calledLong := false, false
+
+	kShort := kb.New(kb.WithPrefix("a"))
+	kShort.Button("short", nil, func(_ context.Context, _ *tgbotapi.CallbackQuery) error {
+		calledShort = true
+		return nil
+	})
+
+	kLong := kb.New(kb.WithPrefix("abc"))
+	kLong.Button("long", nil, func(_ context.Context, _ *tgbotapi.CallbackQuery) error {
+		calledLong = true
+		return nil
+	})
+
+	reg := kb.NewRegistry()
+	reg.Register(kShort)
+	reg.Register(kLong)
+
+	// "abc0" starts with both "a" and "abc"; must match "abc" (longest).
+	handled, err := reg.Dispatch(context.Background(), makeQuery("abc0"))
+	if !handled {
+		t.Fatal("expected handled=true for abc0")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calledShort {
+		t.Error("short keyboard handler must NOT be called for abc0")
+	}
+	if !calledLong {
+		t.Error("long keyboard handler must be called for abc0")
+	}
+}

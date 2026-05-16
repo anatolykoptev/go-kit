@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -50,3 +51,40 @@ func TestAutoRespond_AnswerFails_StillCallsNext(t *testing.T) {
 		t.Error("next() was not called after Answer failure")
 	}
 }
+
+// TestAutoRespond_AnswerFails_LogsWarn verifies that when answer() returns an error,
+// AutoRespond logs a WarnContext entry (item 1.1 — v0.57 polish).
+func TestAutoRespond_AnswerFails_LogsWarn(t *testing.T) {
+	// Capture slog output by replacing the default handler temporarily.
+	var records []slog.Record
+	handler := &captureHandler{records: &records}
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	answerErr := errors.New("tg: too many requests")
+	answer := func(id string) error { return answerErr }
+	h := AutoRespond(answer)(nopHandler)
+	if err := h(context.Background(), mkCbUpd(1, "cb-warn", 0)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 slog record, got %d: %v", len(records), records)
+	}
+	if records[0].Level != slog.LevelWarn {
+		t.Errorf("log level = %v, want Warn", records[0].Level)
+	}
+}
+
+// captureHandler is a minimal slog.Handler that captures records for test assertions.
+type captureHandler struct {
+	records *[]slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler  { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler       { return h }

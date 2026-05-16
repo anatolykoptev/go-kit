@@ -23,7 +23,7 @@ func Metrics(reg *metrics.Registry, name string) Middleware {
 		return func(ctx context.Context, upd *tgbotapi.Update) error {
 			err := next(ctx, upd)
 			result := classifyResult(err)
-			reg.Incr(name + "{result=" + result + "}")
+			reg.Incr(metrics.Label(name, "result", result))
 			return err
 		}
 	}
