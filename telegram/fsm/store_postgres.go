@@ -3,9 +3,11 @@ package fsm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,8 +69,12 @@ func (s *PostgresStore) Get(ctx context.Context, chatID int64) (*Session, error)
 		&sess.UpdatedAt, &sess.ExpiresAt,
 	)
 	if err != nil {
-		// pgx.ErrNoRows — return nil, nil per Store contract.
-		return nil, nil //nolint:nilerr
+		// No row — not an error per Store contract.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		// All other errors (context.DeadlineExceeded, conn failures, etc.) propagate.
+		return nil, fmt.Errorf("fsm: get session: %w", err)
 	}
 
 	if err := json.Unmarshal(stateJSON, &sess.State); err != nil {

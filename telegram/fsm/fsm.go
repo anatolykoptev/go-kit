@@ -29,14 +29,23 @@
 // chatID (missing or expired). Callers should treat handled=false as "not in
 // a multi-turn flow" and route the update through their default handler.
 //
-// Note: promise-chain mutex is non-re-entrant; do not call Feed from a
-// running StateFn.
+// # Concurrency
+//
+// Feed serializes concurrent calls for the same chatID via a per-chatID
+// non-re-entrant mutex (do not call Feed from within a running StateFn).
+// Concurrent Feeds for different chatIDs proceed independently.
+//
+// chatLocks accumulates one *sync.Mutex per chatID indefinitely. This is
+// acceptable at our scale (one entry per active or historical conversation);
+// document as a known footprint if the bot handles millions of unique users.
 package fsm
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -84,9 +93,14 @@ type Machine struct {
 	initial func(flow string) StateFn
 	ttl     time.Duration
 	// fnCache maps chatID (int64) → StateFn for the current step.
-	// Populated by Start and updated by each Feed transition.
+	// Populated by Start and updated on each Feed transition.
 	// Cleared by Cancel and terminal-state transitions.
 	fnCache sync.Map
+	// chatLocks maps chatID (int64) → *sync.Mutex.
+	// Each Feed call acquires the per-chatID lock for the full
+	// Get→execute→Put window, preventing TOCTOU races on duplicate delivery.
+	// Entries accumulate indefinitely (one per unique chatID ever seen).
+	chatLocks sync.Map
 }
 
 // New creates a Machine.
@@ -132,7 +146,13 @@ func (m *Machine) Start(ctx context.Context, chatID int64, flow string) error {
 // When a StateFn returns itself the session persists at the same Step.
 // When a StateFn returns an error the session is NOT deleted (caller may retry
 // or cancel).
+//
+// Concurrent Feeds for the same chatID are serialized by a per-chatID mutex.
 func (m *Machine) Feed(ctx context.Context, e Event) (handled bool, err error) {
+	mu := m.chatLock(e.ChatID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	sess, err := m.store.Get(ctx, e.ChatID)
 	if err != nil {
 		return false, fmt.Errorf("fsm.Feed get: %w", err)
@@ -212,6 +232,13 @@ func (m *Machine) StartSweeper(ctx context.Context, interval time.Duration) {
 	}()
 }
 
+// chatLock returns the per-chatID mutex, creating it if absent.
+// Uses LoadOrStore to avoid races on first access from concurrent goroutines.
+func (m *Machine) chatLock(chatID int64) *sync.Mutex {
+	v, _ := m.chatLocks.LoadOrStore(chatID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // ---- function cache (in-process) ----
 //
 // We use a sync.Map to map chatID → StateFn. This avoids any global lock and
@@ -228,13 +255,27 @@ func (m *Machine) callFn(ctx context.Context, fn StateFn, e Event) (next StateFn
 	return fn(ctx, e)
 }
 
+// funcName returns a stable, human-readable label for fn suitable for use
+// as the Step column value in Postgres. It uses runtime.FuncForPC to extract
+// the symbol name (e.g. "github.com/.../bootstrap.askPartnerID"), which is
+// stable across invocations within a binary and across recompiles as long as
+// the function's source path and name are unchanged.
+//
+// Anonymous functions (closures) produce names ending in ".func1", ".func2",
+// etc. These are stable within a binary but may shift after source edits that
+// add or remove other closures in the same scope — prefer named StateFns for
+// long-lived flows stored in Postgres.
 func funcName(fn StateFn) string {
-	// We use the function pointer identity via fmt.Sprintf as a best-effort
-	// step label. Consumers should name their StateFn vars descriptively.
 	if fn == nil {
 		return ""
 	}
-	return fmt.Sprintf("%p", fn)
+	pc := reflect.ValueOf(fn).Pointer()
+	f := runtime.FuncForPC(pc)
+	if f == nil {
+		// Fallback: should not happen for valid function values.
+		return fmt.Sprintf("0x%x", pc)
+	}
+	return f.Name()
 }
 
 func (m *Machine) loadFn(chatID int64) StateFn {

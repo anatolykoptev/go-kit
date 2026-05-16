@@ -35,6 +35,53 @@
 
 * **rerank:** VoyageRerankClient — Voyage AI rerank-2.5 client mirroring embed/voyage.go (retries on 429/5xx, StatusSkipped on missing API key, WithTopN forwards to top_k).
 
+## [v0.56.1] -- 2026-05-16
+
+### Fixed
+
+* **telegram/kb:** Registry -- add sync.RWMutex around keyboards map.
+  Register takes write lock; Dispatch takes read lock. Prevents data race
+  and concurrent-map-write panic under concurrent update dispatch. (H1)
+* **telegram/fsm:** Machine.Feed -- per-chatID sync.Mutex around the full
+  Get->execute->Put window. Prevents TOCTOU race on duplicate Telegram delivery
+  for the same chatID. chatLocks entries accumulate indefinitely (one per
+  unique chatID); acceptable at our scale. (H2)
+* **telegram/fsm:** store_postgres.go -- explicit errors.Is(err, pgx.ErrNoRows)
+  guard replaces //nolint:nilerr that silently swallowed context.DeadlineExceeded
+  and other errors as "session not found". (M1)
+* **telegram/fsm:** funcName -- use runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name()
+  instead of fmt.Sprintf("%p", fn). Returns stable symbol name across recompiles;
+  prevents silent flow restart on every deploy. Anonymous closures produce
+  .func1/.func2 suffixes -- prefer named StateFns for long-lived Postgres flows. (M3)
+
+### Added
+
+* CHANGELOG: add missing v0.56.0 entry. (M2)
+
+## [v0.56.0] -- 2026-05-16
+
+### Added
+
+* **telegram:** new Locale (YAML i18n) at root pkg level -- vendored from
+  tucnak/telebot/v4/layout (MIT). See LICENSE.telebot.md.
+* **telegram/kb:** new subpkg -- inline keyboard builder + Registry,
+  vendored from go-telegram/ui/keyboard/inline (MIT). See LICENSE.go-telegram.
+* **telegram/middleware:** new subpkg -- 7 composable middlewares (AutoRespond,
+  DeletePrev, OperatorOnly, RateLimit, ShadowBan, Metrics, Recover) + Chain
+  primitive. Reuses go-kit/ratelimit.KeyLimiter.
+* **telegram/fsm:** new subpkg -- conversation Machine + MemoryStore + PostgresStore
+  (echotron-style one-assignment StateFn idiom).
+
+### Added (transitive dep)
+
+* github.com/go-telegram-bot-api/telegram-bot-api/v5 -- first go-kit subpkg
+  requiring it; used by kb / middleware / fsm.
+
+### Reference
+
+* Spec: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-telegram-bot-pkg-v0.1.md
+* Research: ~/deploy/krolik-server/reports/go-kit/research/2026-05-16-tg-bot-lib-landscape.md
+
 ## [0.37.0](https://github.com/anatolykoptev/go-kit/compare/v0.36.0...v0.37.0) (2026-05-01)
 
 

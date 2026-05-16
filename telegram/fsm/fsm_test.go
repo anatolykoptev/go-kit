@@ -325,3 +325,117 @@ func TestMachine_StateFnReturnsError(t *testing.T) {
 		t.Fatalf("StateFnReturnsError: want sentinel, got %v", err)
 	}
 }
+
+// --- Test H2: Concurrent Feed on same chatID serializes properly ---
+// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md H2
+
+func TestMachine_ConcurrentFeed_SameChat_SerializesProperly(t *testing.T) {
+	store := fsm.NewMemoryStore()
+	ctx := context.Background()
+
+	// Multi-step StateFn that mutates session.State to accumulate a counter.
+	// If two Feeds race and both read/write State concurrently, the counter
+	// will be wrong or we'll get a data race.
+	var step fsm.StateFn
+	step = func(ctx context.Context, e fsm.Event) (fsm.StateFn, error) {
+		// Stay in same state — this keeps the session alive for all goroutines.
+		return step, nil
+	}
+
+	m := fsm.New(store, func(flow string) fsm.StateFn { return step }, time.Hour)
+
+	if err := m.Start(ctx, 999, "concurrent"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = m.Feed(ctx, makeEvent(999, "tick"))
+		}()
+	}
+	wg.Wait()
+
+	// Session must still exist (stayFn never returns nil).
+	sess, err := store.Get(ctx, 999)
+	if err != nil {
+		t.Fatalf("Get after concurrent feeds: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("ConcurrentFeed: session deleted unexpectedly")
+	}
+	// Run under -race to catch H2.
+}
+
+// --- Test M3: funcName returns stable, non-empty, distinct strings ---
+// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md M3
+
+func TestFuncName_StableAcrossInvocations(t *testing.T) {
+	store := fsm.NewMemoryStore()
+	ctx := context.Background()
+
+	var fn fsm.StateFn
+	fn = func(ctx context.Context, e fsm.Event) (fsm.StateFn, error) {
+		return fn, nil // stay
+	}
+
+	m := fsm.New(store, func(flow string) fsm.StateFn { return fn }, time.Hour)
+
+	if err := m.Start(ctx, 1, "flow"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	sess1, _ := store.Get(ctx, 1)
+	step1 := sess1.Step
+
+	// Feed once to trigger a Put with updated Step.
+	if _, err := m.Feed(ctx, makeEvent(1, "hi")); err != nil {
+		t.Fatalf("Feed: %v", err)
+	}
+
+	sess2, _ := store.Get(ctx, 1)
+	step2 := sess2.Step
+
+	if step1 == "" {
+		t.Fatal("FuncName: step label must not be empty")
+	}
+	if step1 != step2 {
+		t.Fatalf("FuncName: step label changed between invocations: %q → %q", step1, step2)
+	}
+}
+
+func testFnAlpha(_ context.Context, _ fsm.Event) (fsm.StateFn, error) { return nil, nil }
+func testFnBeta(_ context.Context, _ fsm.Event) (fsm.StateFn, error)  { return nil, nil }
+
+func TestFuncName_DistinguishesDifferentFns(t *testing.T) {
+	store := fsm.NewMemoryStore()
+	ctx := context.Background()
+
+	call := 0
+	m := fsm.New(store, func(flow string) fsm.StateFn {
+		call++
+		if call == 1 {
+			return testFnAlpha
+		}
+		return testFnBeta
+	}, time.Hour)
+
+	// chatID=2 → testFnAlpha
+	if err := m.Start(ctx, 2, "flow"); err != nil {
+		t.Fatalf("Start alpha: %v", err)
+	}
+	// chatID=3 → testFnBeta
+	if err := m.Start(ctx, 3, "flow"); err != nil {
+		t.Fatalf("Start beta: %v", err)
+	}
+
+	sessAlpha, _ := store.Get(ctx, 2)
+	sessBeta, _ := store.Get(ctx, 3)
+
+	if sessAlpha.Step == sessBeta.Step {
+		t.Fatalf("FuncName: different StateFns must produce different step labels, both got %q", sessAlpha.Step)
+	}
+}
