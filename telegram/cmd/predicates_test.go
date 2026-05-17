@@ -320,3 +320,74 @@ func TestNot_FlipsPredicate(t *testing.T) {
 		t.Fatal("Not(PrivateChat()) should return true for group chat")
 	}
 }
+
+// ─── InTopic ─────────────────────────────────────────────────────────────────
+
+func topicMsg(threadID int) *tgbotapi.Update {
+	return &tgbotapi.Update{
+		Message: &tgbotapi.Message{
+			Chat:            tgbotapi.Chat{Type: "supergroup"},
+			MessageThreadID: threadID,
+		},
+	}
+}
+
+func TestInTopic_Match(t *testing.T) {
+	p := cmd.InTopic(42)
+	if !p(topicMsg(42)) {
+		t.Fatal("InTopic(42): should match update with MessageThreadID=42")
+	}
+}
+
+func TestInTopic_NoMatch(t *testing.T) {
+	p := cmd.InTopic(42)
+	if p(topicMsg(99)) {
+		t.Fatal("InTopic(42): should not match update with MessageThreadID=99")
+	}
+}
+
+func TestInTopic_Zero_MatchesNonTopicMessages(t *testing.T) {
+	// InTopic(0) matches messages without a topic (MessageThreadID==0).
+	// This is a deliberate design: it's the caller's responsibility to
+	// use AnyTopic() or InTopic(>0) for topic-scoped filtering.
+	p := cmd.InTopic(0)
+	if !p(topicMsg(0)) {
+		t.Fatal("InTopic(0): should match update with MessageThreadID=0")
+	}
+	if p(topicMsg(5)) {
+		t.Fatal("InTopic(0): should not match update with MessageThreadID=5")
+	}
+}
+
+func TestInTopic_NilMessage(t *testing.T) {
+	p := cmd.InTopic(42)
+	if p(&tgbotapi.Update{}) {
+		t.Fatal("InTopic: should return false for update with nil Message")
+	}
+}
+
+// ─── AnyTopic ────────────────────────────────────────────────────────────────
+
+func TestAnyTopic_MatchPositiveThreadID(t *testing.T) {
+	p := cmd.AnyTopic()
+	if !p(topicMsg(1)) {
+		t.Fatal("AnyTopic: should match MessageThreadID=1")
+	}
+	if !p(topicMsg(99)) {
+		t.Fatal("AnyTopic: should match MessageThreadID=99")
+	}
+}
+
+func TestAnyTopic_NoMatchZeroThreadID(t *testing.T) {
+	p := cmd.AnyTopic()
+	if p(topicMsg(0)) {
+		t.Fatal("AnyTopic: should not match MessageThreadID=0 (general/no topic)")
+	}
+}
+
+func TestAnyTopic_NilMessage(t *testing.T) {
+	p := cmd.AnyTopic()
+	if p(&tgbotapi.Update{}) {
+		t.Fatal("AnyTopic: should return false for update with nil Message")
+	}
+}
