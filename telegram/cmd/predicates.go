@@ -165,3 +165,33 @@ func AnyTopic() Predicate {
 		return upd.Message.MessageThreadID > 0
 	}
 }
+
+// OnReaction returns a Predicate that passes when the Update contains a
+// message_reaction event (Update.MessageReaction != nil).
+//
+// If emojis is empty, any reaction update matches. If emojis are provided,
+// the predicate passes only when at least one emoji in Update.MessageReaction.NewReaction
+// intersects with the provided list. Non-emoji reaction types (custom_emoji, paid)
+// are ignored during intersection.
+func OnReaction(emojis ...string) Predicate {
+	filter := make(map[string]struct{}, len(emojis))
+	for _, e := range emojis {
+		filter[e] = struct{}{}
+	}
+	return func(upd *tgbotapi.Update) bool {
+		if upd.MessageReaction == nil {
+			return false
+		}
+		if len(filter) == 0 {
+			return true
+		}
+		for _, rt := range upd.MessageReaction.NewReaction {
+			if rt.Type == tgbotapi.ReactionTypeEmoji {
+				if _, ok := filter[rt.Emoji]; ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
