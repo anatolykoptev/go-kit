@@ -142,8 +142,16 @@ func Not(p Predicate) Predicate {
 
 // InTopic returns a Predicate that passes when the message's MessageThreadID
 // equals id. Callers should pass a positive id for a specific topic.
-// Passing id=0 matches messages that are NOT in any topic (the general chat
-// stream); prefer AnyTopic() for filtering any non-general topic.
+//
+// Warning: in non-forum chats every message has MessageThreadID=0 — InTopic(0)
+// will fire on every message in any non-forum chat. For general-topic-only
+// semantics in forum chats, combine with a forum check:
+//
+//	cmd.And(cmd.InTopic(0), func(upd *tgbotapi.Update) bool {
+//	    return upd.Message != nil && !upd.Message.IsTopicMessage
+//	})
+//
+// Prefer AnyTopic() for matching any non-general topic.
 // Returns false when Message is nil.
 func InTopic(id int) Predicate {
 	return func(upd *tgbotapi.Update) bool {

@@ -1,6 +1,7 @@
 package tgapi5_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -273,3 +274,114 @@ var (
 	_ interface{ DeleteMessage(chatID int64, messageID int) error }                                  = (*tgapi5.BotMessageDeleter)(nil)
 	_ tgapi5.InlineAnswerer                                                                          = (*tgapi5.BotInlineAnswerer)(nil)
 )
+
+// ---- BotInvoiceSender -------------------------------------------------------
+
+func TestBotInvoiceSender_SendInvoice_success(t *testing.T) {
+	invoiceResp := `{"ok":true,"result":{"message_id":99,"chat":{"id":123,"type":"private"},"date":0}}`
+	srv := mockTGServer(t, map[string]string{
+		"/sendInvoice": invoiceResp,
+	})
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	s := tgapi5.NewInvoiceSender(bot)
+
+	cfg := tgbotapi.InvoiceConfig{
+		BaseChat:      tgbotapi.BaseChat{ChatConfig: tgbotapi.ChatConfig{ChatID: 123}},
+		Title:         "T",
+		Description:   "D",
+		Payload:       "P",
+		ProviderToken: "tok",
+		Currency:      "USD",
+		Prices:        []tgbotapi.LabeledPrice{{Label: "X", Amount: 100}},
+	}
+	msg, err := s.SendInvoice(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("SendInvoice: unexpected error: %v", err)
+	}
+	if msg.MessageID != 99 {
+		t.Errorf("MessageID = %d; want 99", msg.MessageID)
+	}
+}
+
+func TestBotInvoiceSender_SendInvoice_error(t *testing.T) {
+	srv := mockTGServer(t, map[string]string{
+		"/sendInvoice": `{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`,
+	})
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	s := tgapi5.NewInvoiceSender(bot)
+
+	cfg := tgbotapi.InvoiceConfig{
+		BaseChat: tgbotapi.BaseChat{ChatConfig: tgbotapi.ChatConfig{ChatID: 999}},
+		Title:    "T",
+	}
+	_, err := s.SendInvoice(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("SendInvoice: expected error, got nil")
+	}
+}
+
+func TestBotInvoiceSender_CreateInvoiceLink_success(t *testing.T) {
+	srv := mockTGServer(t, map[string]string{
+		"/createInvoiceLink": `{"ok":true,"result":"https://t.me/invoice/xyz"}`,
+	})
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	s := tgapi5.NewInvoiceSender(bot)
+
+	cfg := tgbotapi.InvoiceLinkConfig{
+		Title:         "T",
+		Description:   "D",
+		Payload:       "P",
+		ProviderToken: "tok",
+		Currency:      "USD",
+		Prices:        []tgbotapi.LabeledPrice{{Label: "X", Amount: 100}},
+	}
+	link, err := s.CreateInvoiceLink(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("CreateInvoiceLink: unexpected error: %v", err)
+	}
+	if link != "https://t.me/invoice/xyz" {
+		t.Errorf("link = %q; want %q", link, "https://t.me/invoice/xyz")
+	}
+}
+
+// ---- BotWebAppAnswerer -------------------------------------------------------
+
+func TestBotWebAppAnswerer_AnswerWebAppQuery_success(t *testing.T) {
+	srv := mockTGServer(t, map[string]string{
+		"/answerWebAppQuery": `{"ok":true,"result":{"inline_message_id":"msg-7"}}`,
+	})
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	a := tgapi5.NewWebAppAnswerer(bot)
+
+	result := tgbotapi.InlineQueryResultArticle{Type: "article", ID: "1", Title: "Hi"}
+	msg, err := a.AnswerWebAppQuery(context.Background(), "q-id-1", result)
+	if err != nil {
+		t.Fatalf("AnswerWebAppQuery: unexpected error: %v", err)
+	}
+	if msg.InlineMessageID != "msg-7" {
+		t.Errorf("InlineMessageID = %q; want %q", msg.InlineMessageID, "msg-7")
+	}
+}
+
+func TestBotWebAppAnswerer_AnswerWebAppQuery_error(t *testing.T) {
+	srv := mockTGServer(t, map[string]string{
+		"/answerWebAppQuery": `{"ok":false,"error_code":400,"description":"QUERY_ID_INVALID"}`,
+	})
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	a := tgapi5.NewWebAppAnswerer(bot)
+
+	_, err := a.AnswerWebAppQuery(context.Background(), "bad-id", tgbotapi.InlineQueryResultArticle{})
+	if err == nil {
+		t.Fatal("AnswerWebAppQuery: expected error, got nil")
+	}
+}

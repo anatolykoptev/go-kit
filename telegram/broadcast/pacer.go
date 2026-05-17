@@ -150,3 +150,19 @@ func (p *Pacer) sendWithRetry(ctx context.Context, chatID int64, msg string) err
 	}
 	return lastErr
 }
+
+// waitTimer returns a channel that fires after d. Extracted for testability.
+func waitTimer(d time.Duration) <-chan time.Time {
+	return time.After(d)
+}
+
+// waitInterval blocks for the Pacer's inter-send interval, respecting ctx.
+// Returns ctx.Err() if the context is cancelled while waiting.
+func (p *Pacer) waitInterval(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(p.interval):
+		return nil
+	}
+}

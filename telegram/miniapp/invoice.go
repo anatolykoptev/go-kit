@@ -22,6 +22,14 @@ var (
 
 	// ErrInvalidPrices is returned when InvoiceParams.Prices is nil or empty.
 	ErrInvalidPrices = errors.New("miniapp: invoice Prices must not be empty")
+
+	// ErrInvoiceLinkChatIDNotAllowed is returned by CreateInvoiceLink when ChatID != 0.
+	// Invoice links are not associated with a specific chat — pass ChatID=0.
+	ErrInvoiceLinkChatIDNotAllowed = errors.New("miniapp: ChatID must be 0 for invoice links (links are not chat-specific)")
+
+	// ErrInvoiceLinkMessageThreadNotAllowed is returned by CreateInvoiceLink when
+	// MessageThread != 0. Invoice links are not posted to forum topics.
+	ErrInvoiceLinkMessageThreadNotAllowed = errors.New("miniapp: MessageThread must be 0 for invoice links (links are not forum-topic-specific)")
 )
 
 // Sender is the minimal sender interface for sending invoices and creating
@@ -41,9 +49,12 @@ type Sender interface {
 //     for all other payment methods.
 //
 // MessageThread is only used by SendInvoice (forum-topic thread ID).
-// CreateInvoiceLink silently ignores it — invoice links are not chat-posted.
+// CreateInvoiceLink rejects non-zero MessageThread with ErrInvoiceLinkMessageThreadNotAllowed.
+//
+// ChatID is only used by SendInvoice (target chat).
+// CreateInvoiceLink rejects non-zero ChatID with ErrInvoiceLinkChatIDNotAllowed.
 type InvoiceParams struct {
-	// ChatID is the target chat for sendInvoice. Ignored by CreateInvoiceLink.
+	// ChatID is the target chat for sendInvoice. Must be 0 for CreateInvoiceLink.
 	ChatID int64
 	// Title is the invoice title shown to the user. Required.
 	Title string
@@ -58,7 +69,7 @@ type InvoiceParams struct {
 	// Prices lists the price breakdown (label + amount in the smallest currency unit).
 	Prices []tgbotapi.LabeledPrice
 	// MessageThread is the forum-topic thread ID for sendInvoice. Zero means no thread.
-	// Ignored by CreateInvoiceLink.
+	// Must be 0 for CreateInvoiceLink.
 	MessageThread int
 }
 
@@ -76,6 +87,22 @@ func validateInvoiceParams(p InvoiceParams) error {
 	}
 	if p.Currency != "XTR" && p.ProviderToken == "" {
 		return ErrInvalidProviderToken
+	}
+	return nil
+}
+
+// validateInvoiceLinkParams extends validateInvoiceParams with link-specific
+// constraints: ChatID and MessageThread must be zero (invoice links are not
+// chat-specific or forum-topic-specific).
+func validateInvoiceLinkParams(p InvoiceParams) error {
+	if err := validateInvoiceParams(p); err != nil {
+		return err
+	}
+	if p.ChatID != 0 {
+		return ErrInvoiceLinkChatIDNotAllowed
+	}
+	if p.MessageThread != 0 {
+		return ErrInvoiceLinkMessageThreadNotAllowed
 	}
 	return nil
 }
@@ -107,13 +134,14 @@ func SendInvoice(ctx context.Context, s Sender, p InvoiceParams) (*tgbotapi.Mess
 // CreateInvoiceLink validates p and creates a Telegram invoice link that can
 // be shared with users. On success it returns the invoice URL.
 //
-// Note: p.ChatID and p.MessageThread are not relevant for invoice links and
-// are silently ignored.
+// Link-specific validation (before calling Sender):
+//   - p.ChatID must be 0 (returns ErrInvoiceLinkChatIDNotAllowed if non-zero).
+//   - p.MessageThread must be 0 (returns ErrInvoiceLinkMessageThreadNotAllowed if non-zero).
 //
-// Validation errors (ErrInvalidTitle, ErrInvalidPrices, ErrInvalidStarsConfig,
-// ErrInvalidProviderToken) are returned before the Sender is called.
+// General validation errors (ErrInvalidTitle, ErrInvalidPrices, ErrInvalidStarsConfig,
+// ErrInvalidProviderToken) are also returned before the Sender is called.
 func CreateInvoiceLink(ctx context.Context, s Sender, p InvoiceParams) (string, error) {
-	if err := validateInvoiceParams(p); err != nil {
+	if err := validateInvoiceLinkParams(p); err != nil {
 		return "", err
 	}
 	cfg := tgbotapi.InvoiceLinkConfig{
