@@ -35,6 +35,17 @@
 
 * **rerank:** VoyageRerankClient — Voyage AI rerank-2.5 client mirroring embed/voyage.go (retries on 429/5xx, StatusSkipped on missing API key, WithTopN forwards to top_k).
 
+## [v0.57.1] — 2026-05-16
+
+### Fixed
+
+* **telegram/cmd:** `Router.AutoHelp` API contradiction — doc said "wrap or
+  replace" the no-op handler but `On()` panics on dup-registration, making
+  replace impossible. AutoHelp now takes the Handler directly:
+  `r.AutoHelp("/help", h)`. Caller controls send; HelpText generation +
+  helpCmd tracking stay in Router. Breaking change vs v0.57.0; only known
+  caller (oxpulse-admin) already worked around with bare On in hotfix (PR #43).
+
 ## [v0.56.1] -- 2026-05-16
 
 ### Fixed

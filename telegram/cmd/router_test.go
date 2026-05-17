@@ -243,7 +243,7 @@ func TestAutoHelp_generated(t *testing.T) {
 	r := cmd.NewRouter()
 	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Start the bot")
 	r.On("/domains", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Get domains")
-	r.AutoHelp("/help")
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
 
 	h, ok := r.Resolve("/help")
 	if !ok {
@@ -263,7 +263,7 @@ func TestAutoHelp_stableOrder(t *testing.T) {
 	r.On("/zzz", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Last command")
 	r.On("/aaa", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("First command")
 	r.On("/mmm", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Middle command")
-	r.AutoHelp("/help")
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
 
 	text := r.HelpText()
 	// Commands should appear in lexicographic order.
@@ -282,7 +282,7 @@ func TestAutoHelp_stableOrder(t *testing.T) {
 func TestAutoHelp_textContainsCommandAndHelp(t *testing.T) {
 	r := cmd.NewRouter()
 	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Запустить бота")
-	r.AutoHelp("/help")
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
 
 	text := r.HelpText()
 	if !strings.Contains(text, "/start") {
@@ -297,7 +297,7 @@ func TestAutoHelp_textContainsCommandAndHelp(t *testing.T) {
 func TestAutoHelp_aliasInHelpText(t *testing.T) {
 	r := cmd.NewRouter()
 	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Запустить").Alias("/begin")
-	r.AutoHelp("/help")
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
 
 	text := r.HelpText()
 	if !strings.Contains(text, "/begin") {
@@ -310,7 +310,7 @@ func TestAutoHelp_commandWithoutHelp(t *testing.T) {
 	r := cmd.NewRouter()
 	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Описание")
 	r.On("/hidden", func(_ context.Context, _ *tgbotapi.Update) error { return nil }) // no Help
-	r.AutoHelp("/help")
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
 
 	text := r.HelpText()
 	if strings.Contains(text, "/hidden") {
@@ -342,4 +342,52 @@ func TestConflict_aliasShadowsPrimaryPanics(t *testing.T) {
 	r := cmd.NewRouter()
 	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
 	r.On("/other", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Alias("/start") // panic here
+}
+
+// TestAutoHelp_HandlerExecuted verifies that AutoHelp registers the provided handler
+// and it executes on dispatch (not a silent no-op sentinel).
+func TestAutoHelp_HandlerExecuted(t *testing.T) {
+	var called bool
+	r := cmd.NewRouter()
+	r.AutoHelp("/help", func(_ context.Context, upd *tgbotapi.Update) error {
+		called = true
+		return nil
+	})
+
+	err := r.Dispatch(context.Background(), makeUpdate("/help"))
+	if err != nil {
+		t.Fatalf("AutoHelp handler returned unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("AutoHelp handler was not called on dispatch")
+	}
+}
+
+// TestAutoHelp_DuplicateRegistration_Panics verifies that calling AutoHelp then On
+// with the same command panics (same rule as On+On).
+func TestAutoHelp_DuplicateRegistration_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic when registering same command after AutoHelp")
+		}
+	}()
+	r := cmd.NewRouter()
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil })
+	r.On("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil }) // must panic
+}
+
+// TestAutoHelp_Route_ChainsHelp verifies that AutoHelp returns a *Route so callers
+// can chain .Help("...") and see /help included in HelpText output.
+func TestAutoHelp_Route_ChainsHelp(t *testing.T) {
+	r := cmd.NewRouter()
+	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Start")
+	r.AutoHelp("/help", func(_ context.Context, _ *tgbotapi.Update) error { return nil }).Help("Show help")
+
+	text := r.HelpText()
+	if !strings.Contains(text, "/help") {
+		t.Errorf("expected /help in HelpText when chained with .Help(): %q", text)
+	}
+	if !strings.Contains(text, "Show help") {
+		t.Errorf("expected 'Show help' in HelpText: %q", text)
+	}
 }
