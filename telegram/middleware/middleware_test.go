@@ -5,14 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // mkMsgUpd returns a minimal message Update for a given chatID.
 func mkMsgUpd(chatID int64) *tgbotapi.Update {
 	return &tgbotapi.Update{
 		Message: &tgbotapi.Message{
-			Chat: &tgbotapi.Chat{ID: chatID},
+			Chat: tgbotapi.Chat{ID: chatID},
 			From: &tgbotapi.User{ID: chatID},
 		},
 	}
@@ -26,7 +26,7 @@ func mkCbUpd(chatID int64, callbackID string, msgID int) *tgbotapi.Update {
 			From: &tgbotapi.User{ID: chatID},
 			Message: &tgbotapi.Message{
 				MessageID: msgID,
-				Chat:      &tgbotapi.Chat{ID: chatID},
+				Chat:      tgbotapi.Chat{ID: chatID},
 			},
 		},
 	}

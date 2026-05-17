@@ -2,7 +2,7 @@ package tgapi5
 
 import (
 	"github.com/anatolykoptev/go-kit/metrics"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // MetricSendTotal is the counter name incremented on every Send or SendChattable call.

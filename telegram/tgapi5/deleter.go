@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/anatolykoptev/go-kit/metrics"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // MetricDeleteTotal is the counter name incremented on every DeleteMessage call.

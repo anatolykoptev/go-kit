@@ -1,6 +1,6 @@
 // Package tgapi5 provides default implementations of the Telegram adapter
 // interfaces defined in the go-kit/telegram/middleware and related packages,
-// backed by github.com/go-telegram-bot-api/telegram-bot-api/v5.
+// backed by github.com/OvyFlash/telegram-bot-api.
 //
 // # Usage
 //

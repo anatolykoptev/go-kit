@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 
 	"github.com/anatolykoptev/go-kit/telegram/middleware"
 )
@@ -15,7 +15,7 @@ import (
 func makeUpdate(chatID int64) *tgbotapi.Update {
 	return &tgbotapi.Update{
 		Message: &tgbotapi.Message{
-			Chat: &tgbotapi.Chat{ID: chatID},
+			Chat: tgbotapi.Chat{ID: chatID},
 		},
 	}
 }
@@ -174,7 +174,7 @@ func TestNewChatQuota_CustomKeyFn(t *testing.T) {
 	makeUpdWithUser := func(chatID, userID int64) *tgbotapi.Update {
 		return &tgbotapi.Update{
 			Message: &tgbotapi.Message{
-				Chat: &tgbotapi.Chat{ID: chatID},
+				Chat: tgbotapi.Chat{ID: chatID},
 				From: &tgbotapi.User{ID: userID},
 			},
 		}
