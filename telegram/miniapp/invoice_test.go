@@ -51,6 +51,14 @@ func baseValidParams() InvoiceParams {
 	}
 }
 
+// baseLinkParams returns a valid InvoiceParams for CreateInvoiceLink (ChatID=0, MessageThread=0).
+func baseLinkParams() InvoiceParams {
+	p := baseValidParams()
+	p.ChatID = 0
+	p.MessageThread = 0
+	return p
+}
+
 // --- SendInvoice tests ---
 
 func TestSendInvoice_GoldenPath(t *testing.T) {
@@ -178,7 +186,7 @@ func TestSendInvoice_XTRWithEmptyToken_GoldenPath(t *testing.T) {
 
 func TestCreateInvoiceLink_GoldenPath(t *testing.T) {
 	fs := &fakeSender{returnLink: "https://t.me/invoice/abc"}
-	p := baseValidParams()
+	p := baseLinkParams()
 
 	got, err := CreateInvoiceLink(context.Background(), fs, p)
 	if err != nil {
@@ -258,5 +266,51 @@ func TestCreateInvoiceLink_ErrInvalidProviderToken(t *testing.T) {
 	}
 	if fs.linkCallCount != 0 {
 		t.Error("Sender must not be called on validation failure")
+	}
+}
+
+// --- CreateInvoiceLink link-specific validation ---
+
+func TestCreateInvoiceLink_ErrChatIDNotAllowed(t *testing.T) {
+	fs := &fakeSender{}
+	p := baseValidParams()
+	p.ChatID = 123 // non-zero — must be rejected
+
+	_, err := CreateInvoiceLink(context.Background(), fs, p)
+	if !errors.Is(err, ErrInvoiceLinkChatIDNotAllowed) {
+		t.Errorf("CreateInvoiceLink with ChatID!=0: got %v; want ErrInvoiceLinkChatIDNotAllowed", err)
+	}
+	if fs.linkCallCount != 0 {
+		t.Error("Sender must not be called on validation failure")
+	}
+}
+
+func TestCreateInvoiceLink_ErrMessageThreadNotAllowed(t *testing.T) {
+	fs := &fakeSender{}
+	p := baseValidParams()
+	p.ChatID = 0
+	p.MessageThread = 7 // non-zero — must be rejected
+
+	_, err := CreateInvoiceLink(context.Background(), fs, p)
+	if !errors.Is(err, ErrInvoiceLinkMessageThreadNotAllowed) {
+		t.Errorf("CreateInvoiceLink with MessageThread!=0: got %v; want ErrInvoiceLinkMessageThreadNotAllowed", err)
+	}
+	if fs.linkCallCount != 0 {
+		t.Error("Sender must not be called on validation failure")
+	}
+}
+
+func TestCreateInvoiceLink_ZeroChatIDAndThread_GoldenPath(t *testing.T) {
+	fs := &fakeSender{returnLink: "https://t.me/invoice/ok"}
+	p := baseValidParams()
+	p.ChatID = 0
+	p.MessageThread = 0
+
+	got, err := CreateInvoiceLink(context.Background(), fs, p)
+	if err != nil {
+		t.Fatalf("CreateInvoiceLink zero fields: unexpected error: %v", err)
+	}
+	if got == "" {
+		t.Error("expected non-empty link")
 	}
 }

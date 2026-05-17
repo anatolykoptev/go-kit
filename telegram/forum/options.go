@@ -24,6 +24,8 @@ func WithIconCustomEmoji(emojiID string) CreateOption {
 
 // EditOption is a functional option for Manager.Edit.
 // Options are applied left to right; later options override earlier ones.
+// Note: only the topic name and custom emoji ID are editable after creation;
+// icon color is fixed at creation time and cannot be changed via editForumTopic.
 type EditOption func(*tgbotapi.EditForumTopicConfig)
 
 // WithName sets a new display name for the forum topic.

@@ -15,7 +15,7 @@ import (
 // dispatches with [100, 100, 50] ID counts.
 func TestBroadcaster_Delete_ExactChunks(t *testing.T) {
 	fs := &fakeSender{}
-	b := broadcast.NewBroadcaster(fs)
+	b := broadcast.NewBroadcaster(fs, noopPacer())
 
 	err := b.Delete(context.Background(), 123, makeIDs(250))
 	if err != nil {
@@ -42,7 +42,7 @@ func TestBroadcaster_Delete_ExactChunks(t *testing.T) {
 // TestBroadcaster_Delete_ExactBoundary verifies exactly 100 IDs produce 1 dispatch.
 func TestBroadcaster_Delete_ExactBoundary(t *testing.T) {
 	fs := &fakeSender{}
-	b := broadcast.NewBroadcaster(fs)
+	b := broadcast.NewBroadcaster(fs, noopPacer())
 
 	err := b.Delete(context.Background(), 123, makeIDs(100))
 	if err != nil {
@@ -62,7 +62,7 @@ func TestBroadcaster_Delete_ExactBoundary(t *testing.T) {
 // TestBroadcaster_Delete_SingleMessage verifies 1 ID produces 1 dispatch.
 func TestBroadcaster_Delete_SingleMessage(t *testing.T) {
 	fs := &fakeSender{}
-	b := broadcast.NewBroadcaster(fs)
+	b := broadcast.NewBroadcaster(fs, noopPacer())
 
 	err := b.Delete(context.Background(), 456, []int{99})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestBroadcaster_Delete_SingleMessage(t *testing.T) {
 // TestBroadcaster_Delete_ChunkIDOrder verifies IDs in chunks preserve original order.
 func TestBroadcaster_Delete_ChunkIDOrder(t *testing.T) {
 	fs := &fakeSender{}
-	b := broadcast.NewBroadcaster(fs)
+	b := broadcast.NewBroadcaster(fs, noopPacer())
 
 	ids := makeIDs(150) // [1..150]
 	err := b.Delete(context.Background(), 123, ids)

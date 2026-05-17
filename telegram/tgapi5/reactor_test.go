@@ -2,7 +2,12 @@ package tgapi5_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"io"
 
 	"github.com/anatolykoptev/go-kit/telegram/tgapi5"
 )
@@ -33,7 +38,6 @@ func TestReactor_SetReaction_IsBig(t *testing.T) {
 	bot := newTestBot(t, srv.URL)
 	r := tgapi5.NewReactor(bot)
 
-	// IsBig=true should still succeed when server returns ok.
 	err := r.SetReaction(context.Background(), 100, 42, []string{"🔥"}, true)
 	if err != nil {
 		t.Fatalf("SetReaction with IsBig: unexpected error: %v", err)
@@ -55,40 +59,35 @@ func TestReactor_SetReaction_Error(t *testing.T) {
 	}
 }
 
-func TestReactor_DeleteReaction_CallsSetReactionWithEmptySlice(t *testing.T) {
-	// DeleteReaction is implemented as SetReaction with empty reaction slice.
-	// The mock server returns ok for /setMessageReaction.
-	srv := mockTGServer(t, map[string]string{
-		"/setMessageReaction": `{"ok":true,"result":true}`,
-	})
+// TestReactor_ClearBotReaction verifies the renamed method dispatches
+// setMessageReaction with an empty reaction slice (Telegram bot-scope clear).
+func TestReactor_ClearBotReaction_CallsSetReactionWithEmptySlice(t *testing.T) {
+	var capturedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getMe") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, getMeResponse)
+			return
+		}
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
 	defer srv.Close()
 
 	bot := newTestBot(t, srv.URL)
 	r := tgapi5.NewReactor(bot)
 
-	err := r.DeleteReaction(context.Background(), 100, 42)
+	err := r.ClearBotReaction(context.Background(), 100, 42)
 	if err != nil {
-		t.Fatalf("DeleteReaction: unexpected error: %v", err)
+		t.Fatalf("ClearBotReaction: unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(capturedPath, "/setMessageReaction") {
+		t.Errorf("ClearBotReaction used endpoint %q; want /setMessageReaction", capturedPath)
 	}
 }
 
-func TestReactor_DeleteAllReactions_CallsSetReactionWithEmptySlice(t *testing.T) {
-	srv := mockTGServer(t, map[string]string{
-		"/setMessageReaction": `{"ok":true,"result":true}`,
-	})
-	defer srv.Close()
-
-	bot := newTestBot(t, srv.URL)
-	r := tgapi5.NewReactor(bot)
-
-	err := r.DeleteAllReactions(context.Background(), 100, 42)
-	if err != nil {
-		t.Fatalf("DeleteAllReactions: unexpected error: %v", err)
-	}
-}
-
-// TestReactor_SetReaction_EmptyEmojis verifies empty slice is accepted (no Telegram call error
-// from our code; server decides).
+// TestReactor_SetReaction_EmptyEmojis verifies empty slice is accepted.
 func TestReactor_SetReaction_EmptyEmojis(t *testing.T) {
 	srv := mockTGServer(t, map[string]string{
 		"/setMessageReaction": `{"ok":true,"result":true}`,
@@ -101,5 +100,75 @@ func TestReactor_SetReaction_EmptyEmojis(t *testing.T) {
 	err := r.SetReaction(context.Background(), 100, 42, []string{}, false)
 	if err != nil {
 		t.Fatalf("SetReaction empty emojis: unexpected error: %v", err)
+	}
+}
+
+// TestReactor_AdminRemoveUserReaction verifies correct endpoint and userID plumbing.
+func TestReactor_AdminRemoveUserReaction_CorrectEndpoint(t *testing.T) {
+	var capturedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getMe") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, getMeResponse)
+			return
+		}
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	r := tgapi5.NewReactor(bot)
+
+	err := r.AdminRemoveUserReaction(context.Background(), 100, 42, 9999)
+	if err != nil {
+		t.Fatalf("AdminRemoveUserReaction: unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(capturedPath, "/deleteMessageReaction") {
+		t.Errorf("AdminRemoveUserReaction used endpoint %q; want /deleteMessageReaction", capturedPath)
+	}
+}
+
+// TestReactor_AdminRemoveAllUserReactions verifies correct endpoint.
+func TestReactor_AdminRemoveAllUserReactions_CorrectEndpoint(t *testing.T) {
+	var capturedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getMe") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, getMeResponse)
+			return
+		}
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	r := tgapi5.NewReactor(bot)
+
+	err := r.AdminRemoveAllUserReactions(context.Background(), 100, 9999)
+	if err != nil {
+		t.Fatalf("AdminRemoveAllUserReactions: unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(capturedPath, "/deleteAllMessageReactions") {
+		t.Errorf("AdminRemoveAllUserReactions used endpoint %q; want /deleteAllMessageReactions", capturedPath)
+	}
+}
+
+// TestReactor_AdminRemoveUserReaction_Error verifies error propagation.
+func TestReactor_AdminRemoveUserReaction_Error(t *testing.T) {
+	srv := mockTGServer(t, map[string]string{
+		"/deleteMessageReaction": `{"ok":false,"error_code":403,"description":"Forbidden: not an admin"}`,
+	})
+	defer srv.Close()
+
+	bot := newTestBot(t, srv.URL)
+	r := tgapi5.NewReactor(bot)
+
+	err := r.AdminRemoveUserReaction(context.Background(), 100, 42, 9999)
+	if err == nil {
+		t.Fatal("AdminRemoveUserReaction: expected error for non-admin, got nil")
 	}
 }
