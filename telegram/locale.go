@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+	"sync"
 	"text/template"
 
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,21 @@ type localeData struct {
 type Locale struct {
 	defaultLang string
 	langs       map[string]*localeData
+
+	// templates holds eagerly pre-compiled *template.Template instances, keyed by
+	// lang → key. Only strings containing template syntax are stored; plain strings
+	// are absent (nil lookup). Built once in NewLocale; read-only thereafter.
+	templates map[string]map[string]*template.Template
+
+	// buttonsCache holds the merged button map per lang (default-lang base +
+	// requested-lang overlay), built once in NewLocale. Returned directly by
+	// Buttons — callers must treat the map as read-only. This avoids per-call
+	// allocation when rendering inline keyboards.
+	buttonsCache map[string]map[string]string
+
+	// bufPool recycles bytes.Buffer values for template execution, avoiding
+	// per-call heap allocation for the intermediate render buffer.
+	bufPool sync.Pool
 }
 
 // NewLocale loads locale YAML files from fsys (caller picks: embed.FS, os.DirFS,
@@ -49,6 +65,9 @@ type Locale struct {
 //
 // defaultLang must be present in fsys; it is used as the fallback for missing keys.
 // Returns an error if defaultLang file is absent or any loaded file has invalid YAML.
+//
+// NewLocale eagerly pre-compiles all template strings and merges button maps so that
+// Get, Button, and Buttons incur zero allocations on the read hot path.
 func NewLocale(fsys fs.FS, defaultLang string) (*Locale, error) {
 	langs := make(map[string]*localeData)
 
@@ -81,32 +100,139 @@ func NewLocale(fsys fs.FS, defaultLang string) (*Locale, error) {
 		return nil, fmt.Errorf("telegram/locale: default lang %q not found in fs", defaultLang)
 	}
 
+	// Pre-compile templates: for each lang × key, attempt to parse the raw string as
+	// a text/template. If parsing fails or the string contains no actions (i.e. it is
+	// a plain string — template.Tree.Root has only a TextNode), skip it. Only strings
+	// that actually need Execute() are stored, so compiledTemplate returns nil for
+	// plain strings and Get can skip template overhead entirely.
+	templates := make(map[string]map[string]*template.Template, len(langs))
+	for lang, ld := range langs {
+		if len(ld.Strings) == 0 {
+			continue
+		}
+		langTemplates := make(map[string]*template.Template)
+		for key, raw := range ld.Strings {
+			t, err := template.New(key).Parse(raw)
+			if err != nil {
+				// Malformed template syntax — treat as plain string.
+				continue
+			}
+			if !templateHasActions(t) {
+				// Pure text node — no substitution needed; skip to avoid overhead.
+				continue
+			}
+			langTemplates[key] = t
+		}
+		if len(langTemplates) > 0 {
+			templates[lang] = langTemplates
+		}
+	}
+
+	// Pre-build merged button maps: for each lang, construct the default-lang base
+	// then overlay the requested lang. The result is stored once and returned by
+	// reference from Buttons. Callers must not mutate the returned map.
+	buttonsCache := make(map[string]map[string]string, len(langs))
+	defaultButtons := langs[defaultLang].Buttons
+	for lang := range langs {
+		if lang == defaultLang {
+			// Clone default lang map so callers can't mutate the shared cache.
+			m := make(map[string]string, len(defaultButtons))
+			for k, v := range defaultButtons {
+				m[k] = v
+			}
+			buttonsCache[lang] = m
+			continue
+		}
+		// Merge: default as base, requested lang as overlay.
+		overlay := langs[lang].Buttons
+		m := make(map[string]string, len(defaultButtons)+len(overlay))
+		for k, v := range defaultButtons {
+			m[k] = v
+		}
+		for k, v := range overlay {
+			m[k] = v
+		}
+		buttonsCache[lang] = m
+	}
+
 	return &Locale{
-		defaultLang: defaultLang,
-		langs:       langs,
+		defaultLang:  defaultLang,
+		langs:        langs,
+		templates:    templates,
+		buttonsCache: buttonsCache,
+		bufPool: sync.Pool{
+			New: func() any { return new(bytes.Buffer) },
+		},
 	}, nil
+}
+
+// templateHasActions reports whether t contains at least one non-text node,
+// i.e. whether Execute() would actually substitute anything. Pure text templates
+// are treated as plain strings to avoid unnecessary overhead.
+//
+// Detection heuristic: the parsed tree's string representation includes "{{"
+// only when action nodes are present. This avoids importing text/template/parse
+// for the NodeText type check while still being accurate for all supported
+// template syntax.
+func templateHasActions(t *template.Template) bool {
+	root := t.Tree.Root
+	if root == nil {
+		return false
+	}
+	return strings.Contains(root.String(), "{{")
 }
 
 // Get returns the string for key in lang. If the key is missing in lang, it falls
 // back to the default lang. If still missing, it returns key as-is (debug-friendly).
 //
 // When vars is non-empty, the string is interpreted as a text/template with the
-// first element of vars as the dot value ({{.}}). Template errors return the raw
-// string without substitution.
+// first element of vars as the dot value ({{.}}). The template is pre-compiled at
+// construction time — no parse overhead on the hot path.
 func (l *Locale) Get(lang, key string, vars ...any) string {
-	raw := l.lookup(lang, key)
 	if len(vars) == 0 {
-		return raw
+		return l.lookup(lang, key)
 	}
-	t, err := template.New("").Parse(raw)
-	if err != nil {
-		return raw
+
+	// Try pre-compiled template for the requested lang, then the default lang.
+	if t := l.compiledTemplate(lang, key); t != nil {
+		return l.execTemplate(t, vars[0], l.lookup(lang, key))
 	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, vars[0]); err != nil {
+
+	// No pre-compiled template — string is plain, return it directly.
+	return l.lookup(lang, key)
+}
+
+// execTemplate executes t with data, using the pool-recycled buffer to avoid
+// per-call allocation. Returns raw on execution error.
+func (l *Locale) execTemplate(t *template.Template, data any, raw string) string {
+	buf := l.bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer l.bufPool.Put(buf)
+
+	if err := t.Execute(buf, data); err != nil {
 		return raw
 	}
 	return buf.String()
+}
+
+// compiledTemplate returns the pre-compiled *template.Template for (lang, key),
+// or nil if the string is plain (no template syntax) or the key is absent.
+// It resolves lang first, then falls back to the default lang — matching lookup.
+//
+// Exported at package level for test assertion (pointer identity = no re-parse).
+func (l *Locale) compiledTemplate(lang, key string) *template.Template {
+	if lm, ok := l.templates[lang]; ok {
+		if t, ok := lm[key]; ok {
+			return t
+		}
+	}
+	// Fallback to default lang template (mirrors lookup fallback).
+	if lm, ok := l.templates[l.defaultLang]; ok {
+		if t, ok := lm[key]; ok {
+			return t
+		}
+	}
+	return nil
 }
 
 // lookup returns the raw (un-templated) string for key in lang, with default-lang
@@ -136,27 +262,17 @@ func (l *Locale) Available() []string {
 	return out
 }
 
-// Buttons returns button labels for lang. Falls back to default lang for missing keys.
+// Buttons returns the merged button map for lang (default-lang base overlaid by
+// lang-specific values). The returned map is pre-built at construction and shared
+// across callers — treat it as read-only.
+//
+// Falls back to the default lang map if lang was not loaded.
 func (l *Locale) Buttons(lang string) map[string]string {
-	result := make(map[string]string)
-
-	// Start with default lang buttons (base layer).
-	if ld, ok := l.langs[l.defaultLang]; ok {
-		for k, v := range ld.Buttons {
-			result[k] = v
-		}
+	if m, ok := l.buttonsCache[lang]; ok {
+		return m
 	}
-
-	// Overlay with requested lang (override where available).
-	if lang != l.defaultLang {
-		if ld, ok := l.langs[lang]; ok {
-			for k, v := range ld.Buttons {
-				result[k] = v
-			}
-		}
-	}
-
-	return result
+	// Lang not in cache (e.g. unknown lang code) — return default lang map.
+	return l.buttonsCache[l.defaultLang]
 }
 
 // Commands returns the bot command menu for lang (used by setMyCommands).

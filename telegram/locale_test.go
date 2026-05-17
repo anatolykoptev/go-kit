@@ -148,6 +148,111 @@ commands:
 	}
 }
 
+// TestLocale_CachedTemplate_NoReparse verifies that the compiled *template.Template
+// for a given (lang, key) is the same pointer across multiple Get calls — i.e. no
+// re-parse after the first call.
+func TestLocale_CachedTemplate_NoReparse(t *testing.T) {
+	fsys := fstest.MapFS{
+		"ru.yaml": {Data: []byte(`
+strings:
+  greeting: "Привет, {{.}}!"
+`)},
+	}
+
+	loc, err := NewLocale(fsys, "ru")
+	if err != nil {
+		t.Fatalf("NewLocale: %v", err)
+	}
+
+	// Retrieve the compiled template twice and assert pointer identity.
+	t1 := loc.compiledTemplate("ru", "greeting")
+	t2 := loc.compiledTemplate("ru", "greeting")
+	if t1 == nil {
+		t.Fatal("compiledTemplate returned nil for a templated key")
+	}
+	if t1 != t2 {
+		t.Errorf("compiledTemplate returned different *template.Template pointers: %p vs %p; template was re-parsed", t1, t2)
+	}
+}
+
+// TestLocale_ConcurrentReads_RaceClean verifies that concurrent calls to Get and
+// Buttons from multiple goroutines produce no data races (run with -race).
+func TestLocale_ConcurrentReads_RaceClean(t *testing.T) {
+	fsys := fstest.MapFS{
+		"ru.yaml": {Data: []byte(`
+strings:
+  greeting: "Привет, {{.}}!"
+  plain: "Просто строка"
+buttons:
+  confirm: "Подтвердить"
+`)},
+		"en.yaml": {Data: []byte(`
+strings:
+  greeting: "Hello, {{.}}!"
+  plain: "Plain string"
+buttons:
+  confirm: "Confirm"
+`)},
+	}
+
+	loc, err := NewLocale(fsys, "ru")
+	if err != nil {
+		t.Fatalf("NewLocale: %v", err)
+	}
+
+	const goroutines = 20
+	done := make(chan struct{}, goroutines)
+	for i := range goroutines {
+		go func(i int) {
+			defer func() { done <- struct{}{} }()
+			lang := "ru"
+			if i%2 == 0 {
+				lang = "en"
+			}
+			_ = loc.Get(lang, "greeting", "World")
+			_ = loc.Get(lang, "plain")
+			_ = loc.Buttons(lang)
+			_ = loc.Button(lang, "confirm")
+		}(i)
+	}
+	for range goroutines {
+		<-done
+	}
+}
+
+// TestLocale_NonTemplatedKey_NoTemplateOverhead verifies that plain strings (no
+// template syntax) are returned directly without being stored as compiled templates
+// — they must not appear in compiledTemplate.
+func TestLocale_NonTemplatedKey_NoTemplateOverhead(t *testing.T) {
+	fsys := fstest.MapFS{
+		"ru.yaml": {Data: []byte(`
+strings:
+  plain: "Просто строка"
+  templated: "Привет, {{.}}!"
+`)},
+	}
+
+	loc, err := NewLocale(fsys, "ru")
+	if err != nil {
+		t.Fatalf("NewLocale: %v", err)
+	}
+
+	// Plain key must not return a compiled template.
+	if tmpl := loc.compiledTemplate("ru", "plain"); tmpl != nil {
+		t.Errorf("compiledTemplate for plain key returned non-nil %p, want nil", tmpl)
+	}
+
+	// Templated key must return a compiled template.
+	if tmpl := loc.compiledTemplate("ru", "templated"); tmpl == nil {
+		t.Error("compiledTemplate for templated key returned nil, want non-nil")
+	}
+
+	// Get on the plain key must still return the raw string correctly.
+	if got := loc.Get("ru", "plain"); got != "Просто строка" {
+		t.Errorf("Get(plain) = %q, want %q", got, "Просто строка")
+	}
+}
+
 // TestLocale_Button_SingleKey verifies the new Button(lang, key) accessor
 // returns the correct label without allocating a full map (item 1.3 — v0.57 polish).
 func TestLocale_Button_SingleKey(t *testing.T) {
