@@ -7,6 +7,7 @@
 //
 //	mw.Chain(
 //	    Recover(log),           // outermost — catch any panic
+//	    Tracing("my-bot"),      // span-per-update; after Recover so panics are caught first
 //	    Metrics(reg, "name"),
 //	    AutoRespond(answer),    // before next() — spinner always clears
 //	    DeletePrev(del),        // before next() — UX cleanup
