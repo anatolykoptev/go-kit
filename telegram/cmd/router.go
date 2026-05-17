@@ -39,19 +39,28 @@ import (
 type Handler func(ctx context.Context, upd *tgbotapi.Update) error
 
 // Route is a single command registration returned by Router.On.
-// Its fluent methods (.Help, .Alias) configure the route inline.
+// Its fluent methods (.Help, .Alias, .When) configure the route inline.
 type Route struct {
-	primary  string
-	handler  Handler
-	helpText string
-	aliases  []string
-	router   *Router
+	primary    string
+	handler    Handler
+	helpText   string
+	aliases    []string
+	predicates []Predicate
+	router     *Router
 }
 
 // Help sets the human-readable description shown in auto-generated /help output.
 // Pass an empty string or omit the call to hide the command from /help.
 func (rt *Route) Help(text string) *Route {
 	rt.helpText = text
+	return rt
+}
+
+// When adds a Predicate that must pass for this route to be selected.
+// Multiple When calls compose as AND — all predicates must pass.
+// Routes without any When calls always match (backward-compatible).
+func (rt *Route) When(p Predicate) *Route {
+	rt.predicates = append(rt.predicates, p)
 	return rt
 }
 
@@ -173,6 +182,9 @@ func (r *Router) HelpText() string {
 //   - Strips @botname suffix (e.g. "/start@my_bot" → "/start").
 //   - Does not require a "/" prefix; non-command text routes to the default handler.
 //
+// Predicate-free lookup: predicates attached via When are NOT evaluated.
+// Use ResolveFor when predicate evaluation is required.
+//
 // Returns (handler, true) if found (primary, alias, or default).
 // Returns (nil, false) if not found and no default is registered.
 func (r *Router) Resolve(text string) (Handler, bool) {
@@ -187,7 +199,47 @@ func (r *Router) Resolve(text string) (Handler, bool) {
 	return nil, false
 }
 
-// Dispatch resolves the command in upd.Message.Text and calls the appropriate handler.
+// ResolveFor extracts the command token from text, looks up the route, and
+// evaluates any predicates attached via When against upd.
+//
+// If the route has no predicates the behaviour is identical to Resolve.
+// If any predicate fails, the route is skipped and the default handler is
+// returned (if registered), exactly as if the command were unrecognised.
+//
+// Returns (handler, true) on success.
+// Returns (nil, false) if the command is unknown, predicates fail, and no default is set.
+func (r *Router) ResolveFor(text string, upd *tgbotapi.Update) (Handler, bool) {
+	token := extractCommand(text)
+
+	if rt, ok := r.index[token]; ok {
+		if r.matchPredicates(rt, upd) {
+			return rt.handler, true
+		}
+		// Predicate failed — fall through to default.
+		if r.def != nil {
+			return r.def, true
+		}
+		return nil, false
+	}
+	if r.def != nil {
+		return r.def, true
+	}
+	return nil, false
+}
+
+// matchPredicates returns true when all predicates on rt pass for upd.
+// Routes with no predicates always match.
+func (r *Router) matchPredicates(rt *Route, upd *tgbotapi.Update) bool {
+	for _, p := range rt.predicates {
+		if !p(upd) {
+			return false
+		}
+	}
+	return true
+}
+
+// Dispatch resolves the command in upd.Message.Text, evaluates route predicates,
+// and calls the appropriate handler.
 // It satisfies middleware.Handler and can be used as the innermost handler in a
 // middleware.Chain.
 //
@@ -197,7 +249,7 @@ func (r *Router) Dispatch(ctx context.Context, upd *tgbotapi.Update) error {
 	if upd.Message == nil {
 		return nil
 	}
-	h, ok := r.Resolve(upd.Message.Text)
+	h, ok := r.ResolveFor(upd.Message.Text, upd)
 	if !ok {
 		return nil
 	}

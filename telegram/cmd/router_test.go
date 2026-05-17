@@ -391,3 +391,154 @@ func TestAutoHelp_Route_ChainsHelp(t *testing.T) {
 		t.Errorf("expected 'Show help' in HelpText: %q", text)
 	}
 }
+
+// ─── Predicate / When ────────────────────────────────────────────────────────
+
+// makePrivateUpdate builds a private-chat Update with the given command text and user ID.
+func makePrivateUpdate(text string, userID int64) *tgbotapi.Update {
+	return &tgbotapi.Update{
+		Message: &tgbotapi.Message{
+			Chat: tgbotapi.Chat{Type: "private"},
+			From: &tgbotapi.User{ID: userID},
+			Text: text,
+		},
+	}
+}
+
+// makeGroupUpdate builds a group-chat Update with the given command text.
+func makeGroupUpdate(text string) *tgbotapi.Update {
+	return &tgbotapi.Update{
+		Message: &tgbotapi.Message{
+			Chat: tgbotapi.Chat{Type: "group"},
+			From: &tgbotapi.User{ID: 1},
+			Text: text,
+		},
+	}
+}
+
+// TestRoute_WhenPredicateMatches_ResolvesHandler verifies that ResolveFor returns
+// the handler when the predicate passes.
+func TestRoute_WhenPredicateMatches_ResolvesHandler(t *testing.T) {
+	var called bool
+	r := cmd.NewRouter()
+	r.On("/admin", noopHandler(&called)).When(cmd.PrivateChat())
+
+	upd := makePrivateUpdate("/admin", 1)
+	h, ok := r.ResolveFor("/admin", upd)
+	if !ok {
+		t.Fatal("expected ResolveFor to return ok=true when predicate matches")
+	}
+	if err := h(context.Background(), upd); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("handler was not called")
+	}
+}
+
+// TestRoute_WhenPredicateFails_FallsToDefault verifies that ResolveFor falls through
+// to the default handler when the predicate does not pass.
+func TestRoute_WhenPredicateFails_FallsToDefault(t *testing.T) {
+	var defaultCalled bool
+	r := cmd.NewRouter()
+	r.On("/admin", func(_ context.Context, _ *tgbotapi.Update) error {
+		t.Fatal("route handler must not be called when predicate fails")
+		return nil
+	}).When(cmd.PrivateChat())
+	r.OnDefault(noopHandler(&defaultCalled))
+
+	upd := makeGroupUpdate("/admin")
+	h, ok := r.ResolveFor("/admin", upd)
+	if !ok {
+		t.Fatal("expected ResolveFor ok=true (default handler present)")
+	}
+	_ = h(context.Background(), upd)
+	if !defaultCalled {
+		t.Fatal("default handler should be called when predicate fails")
+	}
+}
+
+// TestRoute_MultipleWhen_AllMustMatch verifies that chained When() calls compose as AND.
+func TestRoute_MultipleWhen_AllMustMatch(t *testing.T) {
+	const adminID int64 = 777
+	var called bool
+	r := cmd.NewRouter()
+	r.On("/secret", noopHandler(&called)).
+		When(cmd.PrivateChat()).
+		When(cmd.FromUser(adminID))
+
+	// Both conditions met — should resolve.
+	upd := makePrivateUpdate("/secret", adminID)
+	h, ok := r.ResolveFor("/secret", upd)
+	if !ok {
+		t.Fatal("expected ok=true when both predicates pass")
+	}
+	_ = h(context.Background(), upd)
+	if !called {
+		t.Fatal("handler not called when both predicates pass")
+	}
+
+	// Wrong user — should not resolve to route handler.
+	called = false
+	upd2 := makePrivateUpdate("/secret", 999)
+	h2, _ := r.ResolveFor("/secret", upd2)
+	if h2 != nil {
+		_ = h2(context.Background(), upd2)
+		if called {
+			t.Fatal("handler must not be called when second predicate fails")
+		}
+	}
+}
+
+// TestRoute_NoPredicates_AlwaysMatches verifies backward-compat: a route without
+// When() always resolves regardless of update content.
+func TestRoute_NoPredicates_AlwaysMatches(t *testing.T) {
+	var called bool
+	r := cmd.NewRouter()
+	r.On("/start", noopHandler(&called))
+
+	// Group update — should still resolve (no predicates means always match).
+	upd := makeGroupUpdate("/start")
+	h, ok := r.ResolveFor("/start", upd)
+	if !ok {
+		t.Fatal("expected ok=true for route without predicates (backward-compat)")
+	}
+	_ = h(context.Background(), upd)
+	if !called {
+		t.Fatal("handler not called for predicate-free route")
+	}
+}
+
+// TestDispatch_WhenPredicate_Matches verifies end-to-end Dispatch with predicate.
+func TestDispatch_WhenPredicate_Matches(t *testing.T) {
+	var called bool
+	r := cmd.NewRouter()
+	r.On("/start", noopHandler(&called)).When(cmd.PrivateChat())
+
+	err := r.Dispatch(context.Background(), makePrivateUpdate("/start", 1))
+	if err != nil {
+		t.Fatalf("Dispatch returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("handler not called via Dispatch when predicate matches")
+	}
+}
+
+// TestDispatch_WhenPredicate_Fails_GoesToDefault verifies Dispatch falls through when predicate fails.
+func TestDispatch_WhenPredicate_Fails_GoesToDefault(t *testing.T) {
+	var defaultCalled bool
+	r := cmd.NewRouter()
+	r.On("/start", func(_ context.Context, _ *tgbotapi.Update) error {
+		t.Fatal("route handler must not fire when predicate fails")
+		return nil
+	}).When(cmd.PrivateChat())
+	r.OnDefault(noopHandler(&defaultCalled))
+
+	err := r.Dispatch(context.Background(), makeGroupUpdate("/start"))
+	if err != nil {
+		t.Fatalf("Dispatch returned error: %v", err)
+	}
+	if !defaultCalled {
+		t.Fatal("default handler should fire when predicate fails")
+	}
+}
