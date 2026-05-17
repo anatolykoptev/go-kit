@@ -3,7 +3,7 @@ package middleware
 import (
 	"context"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // chatIDFromUpdate extracts the chat/user ID for operator and rate-limit checks.

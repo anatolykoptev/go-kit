@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // Recover catches panics in next(), calls log with the panic value, and returns a

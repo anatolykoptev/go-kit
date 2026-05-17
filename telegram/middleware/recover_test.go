@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // TestRecover_CatchesPanic_ReturnsErr verifies that Recover catches a panic and returns a wrapped error.

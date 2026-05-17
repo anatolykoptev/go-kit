@@ -30,7 +30,7 @@ import (
 	"sort"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // Handler is the unit of work for a text command: process a Telegram update and return an error.

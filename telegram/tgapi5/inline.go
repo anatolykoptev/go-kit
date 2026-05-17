@@ -1,7 +1,7 @@
 package tgapi5
 
 import (
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // InlineResult is a kit-level representation of a single inline query result article.

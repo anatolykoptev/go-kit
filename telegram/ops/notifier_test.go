@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 
 	"github.com/anatolykoptev/go-kit/telegram/ops"
 )
@@ -91,7 +91,7 @@ func TestNotifier_ButtonCallbackResolvesToHandler(t *testing.T) {
 		Data: "approve:req42",
 		From: &tgbotapi.User{ID: 99},
 		Message: &tgbotapi.Message{
-			Chat: &tgbotapi.Chat{ID: 12345},
+			Chat: tgbotapi.Chat{ID: 12345},
 		},
 	}
 
@@ -121,7 +121,7 @@ func TestNotifier_HandleCallback_UnknownData(t *testing.T) {
 		Data: "unknown:data",
 		From: &tgbotapi.User{ID: 99},
 		Message: &tgbotapi.Message{
-			Chat: &tgbotapi.Chat{ID: 12345},
+			Chat: tgbotapi.Chat{ID: 12345},
 		},
 	}
 

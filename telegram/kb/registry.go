@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // Registry composes multiple Keyboards into a single Dispatch entry point.

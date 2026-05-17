@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // TestOperatorOnly_AllowsOperatorChat verifies that an operator chat passes through.

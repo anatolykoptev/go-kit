@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // TestAutoRespond_AlwaysCallsAnswer verifies Answer fires even when next() errors.

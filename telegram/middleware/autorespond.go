@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // AutoRespond calls answer(callbackID) BEFORE next(), regardless of next()'s outcome,
