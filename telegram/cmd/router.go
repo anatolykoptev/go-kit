@@ -6,7 +6,11 @@
 //	r.On("/start", handleStart).Help("Запустить бота").Alias("/begin")
 //	r.On("/domains", handleDomains).Help("Получить адрес для звонков")
 //	r.OnDefault(handleUnknown)
-//	r.AutoHelp("/help")
+//	r.AutoHelp("/help", func(ctx context.Context, upd *tgbotapi.Update) error {
+//	    chatID := upd.Message.Chat.ID
+//	    // send r.HelpText() via your preferred transport
+//	    return nil
+//	}).Help("Show available commands")
 //
 //	// Dispatch directly:
 //	err := r.Dispatch(ctx, update)
@@ -100,26 +104,25 @@ func (r *Router) OnDefault(h Handler) {
 	r.def = h
 }
 
-// AutoHelp registers cmd (e.g. "/help") with a handler that sends r.HelpText() as a
-// reply. The help text is generated lazily at dispatch time, so commands registered
-// after AutoHelp are still included.
+// AutoHelp registers cmd (e.g. "/help") with the given handler AND marks this
+// command as the help command so r.HelpText() includes it in the listing.
 //
-// The help message is sent by returning a sentinel-free no-op; callers that need to
-// actually send the text should instead call r.HelpText() and send it themselves.
-// AutoHelp registers the command so that Resolve("/help") and Dispatch resolve it;
-// the built-in handler sends nothing — it is intended as a hook point for callers.
+// The handler is typically a small closure that calls r.HelpText() and sends
+// the result via the caller's preferred transport — cmd.Router intentionally
+// stays send-agnostic.
+//
+// Returns the Route for fluent chaining (.Help, .Alias).
+// Panics if cmd is already registered (same rule as On).
 //
 // Typical wiring:
 //
-//	r.AutoHelp("/help")
-//	// In handleHelp: send r.HelpText() via bot.Send(...)
-func (r *Router) AutoHelp(cmd string) {
+//	r.AutoHelp("/help", func(ctx context.Context, upd *tgbotapi.Update) error {
+//	    chatID := upd.Message.Chat.ID
+//	    return sender.Send(chatID, r.HelpText())
+//	}).Help("Show available commands")
+func (r *Router) AutoHelp(cmd string, h Handler) *Route {
 	r.helpCmd = cmd
-	r.On(cmd, func(ctx context.Context, upd *tgbotapi.Update) error {
-		// Default implementation is a no-op.
-		// Callers should wrap or replace this handler to send r.HelpText().
-		return nil
-	})
+	return r.On(cmd, h)
 }
 
 // HelpText returns a formatted string listing all commands that have a Help() string,
