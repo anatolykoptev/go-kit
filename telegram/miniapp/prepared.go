@@ -30,6 +30,34 @@ type PreparedOptions struct {
 // PreparedSender is the minimal sender interface for savePreparedInlineMessage.
 // Callers wrap *tgbotapi.BotAPI with an adapter (see tgapi5.BotPreparedSender)
 // that adds context support and config-construction boilerplate.
+//
+// The result parameter must be one of the SDK's concrete InlineQueryResult*
+// types (the SDK aliases tgbotapi.InlineQueryResult to `any`, so the compiler
+// cannot enforce this; passing other types fails at JSON-marshal or at the
+// Telegram API). The accepted concrete types are:
+//
+//   - InlineQueryResultArticle           (commonly used for share-flows)
+//   - InlineQueryResultPhoto
+//   - InlineQueryResultGIF
+//   - InlineQueryResultMPEG4GIF
+//   - InlineQueryResultVideo
+//   - InlineQueryResultAudio
+//   - InlineQueryResultVoice
+//   - InlineQueryResultDocument
+//   - InlineQueryResultLocation
+//   - InlineQueryResultVenue
+//   - InlineQueryResultContact
+//   - InlineQueryResultGame
+//   - InlineQueryResultCachedPhoto
+//   - InlineQueryResultCachedGIF
+//   - InlineQueryResultCachedMPEG4GIF
+//   - InlineQueryResultCachedSticker
+//   - InlineQueryResultCachedDocument
+//   - InlineQueryResultCachedVideo
+//   - InlineQueryResultCachedVoice
+//   - InlineQueryResultCachedAudio
+//
+// Reference: https://core.telegram.org/bots/api#inlinequeryresult
 type PreparedSender interface {
 	SavePreparedInlineMessage(
 		ctx context.Context,

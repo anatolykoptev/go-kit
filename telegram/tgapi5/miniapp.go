@@ -3,6 +3,7 @@ package tgapi5
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 
@@ -29,6 +30,9 @@ func (s *BotInvoiceSender) SendInvoice(ctx context.Context, cfg tgbotapi.Invoice
 	if err != nil {
 		return nil, err
 	}
+	if resp == nil {
+		return nil, errors.New("tgapi5: nil response from BotAPI")
+	}
 	var msg tgbotapi.Message
 	if err := json.Unmarshal(resp.Result, &msg); err != nil {
 		return nil, err
@@ -42,6 +46,9 @@ func (s *BotInvoiceSender) CreateInvoiceLink(ctx context.Context, cfg tgbotapi.I
 	resp, err := s.bot.RequestWithContext(ctx, cfg)
 	if err != nil {
 		return "", err
+	}
+	if resp == nil {
+		return "", errors.New("tgapi5: nil response from BotAPI")
 	}
 	var link string
 	if err := json.Unmarshal(resp.Result, &link); err != nil {
@@ -75,6 +82,9 @@ func (a *BotWebAppAnswerer) AnswerWebAppQuery(
 	resp, err := a.bot.RequestWithContext(ctx, cfg)
 	if err != nil {
 		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("tgapi5: nil response from BotAPI")
 	}
 	var msg tgbotapi.SentWebAppMessage
 	if err := json.Unmarshal(resp.Result, &msg); err != nil {
@@ -124,6 +134,9 @@ func (s *BotPreparedSender) SavePreparedInlineMessage(
 	resp, err := s.bot.MakeRequestWithContext(ctx, "savePreparedInlineMessage", p)
 	if err != nil {
 		return tgbotapi.PreparedInlineMessage{}, err
+	}
+	if resp == nil {
+		return tgbotapi.PreparedInlineMessage{}, errors.New("tgapi5: nil response from BotAPI")
 	}
 	var out tgbotapi.PreparedInlineMessage
 	if err := json.Unmarshal(resp.Result, &out); err != nil {
