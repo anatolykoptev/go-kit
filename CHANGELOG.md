@@ -42,6 +42,8 @@
 * **telegram/miniapp:** `SavePrepared` helper + `PreparedSender` interface — wraps Bot API 7.8+ `savePreparedInlineMessage` with sentinel-error validation (userID, result nil, no-chat-type-allowed).
 * **telegram/tgapi5:** `BotPreparedSender` adapter + `NewPreparedSender` constructor — honours context via `MakeRequestWithContext`.
 
+  **Implementation note:** the adapter bypasses the SDK's generic `tgbotapi.SavePreparedInlineMessage[T]` helper and builds `tgbotapi.Params` manually, because `tgbotapi.InlineQueryResult` (= `any`) does not satisfy the `InlineQueryResults` type-union constraint at compile time. The manual Params body mirrors `SavePreparedInlineMessageConfig[T].params()` byte-for-byte; behaviour is identical.
+
 ## [v0.57.1] — 2026-05-16
 
 ### Fixed

@@ -134,7 +134,7 @@ func (s *BotPreparedSender) SavePreparedInlineMessage(
 
 // Compile-time interface satisfaction checks.
 var (
-	_ miniapp.Sender          = (*BotInvoiceSender)(nil)
-	_ miniapp.WebAppAnswerer  = (*BotWebAppAnswerer)(nil)
-	_ miniapp.PreparedSender  = (*BotPreparedSender)(nil)
+	_ miniapp.Sender         = (*BotInvoiceSender)(nil)
+	_ miniapp.WebAppAnswerer = (*BotWebAppAnswerer)(nil)
+	_ miniapp.PreparedSender = (*BotPreparedSender)(nil)
 )

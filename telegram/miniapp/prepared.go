@@ -50,7 +50,7 @@ type PreparedSender interface {
 //
 // Returns ErrInvalidUserID if userID <= 0, ErrInvalidResult if result is nil,
 // or ErrNoChatTypeAllowed if all chat-type flags are false. Errors from the
-// underlying sender are wrapped and returned as-is.
+// underlying sender are returned as-is.
 //
 // Reference: https://core.telegram.org/bots/api#savepreparedinlinemessage
 func SavePrepared(

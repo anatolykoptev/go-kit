@@ -10,12 +10,12 @@ import (
 
 // fakePreparedSender implements PreparedSender for testing.
 type fakePreparedSender struct {
-	callCount    int
-	lastUserID   int64
-	lastResult   tgbotapi.InlineQueryResult
-	lastOpts     PreparedOptions
-	returnMsg    tgbotapi.PreparedInlineMessage
-	returnErr    error
+	callCount  int
+	lastUserID int64
+	lastResult tgbotapi.InlineQueryResult
+	lastOpts   PreparedOptions
+	returnMsg  tgbotapi.PreparedInlineMessage
+	returnErr  error
 }
 
 func (f *fakePreparedSender) SavePreparedInlineMessage(
@@ -141,12 +141,37 @@ func TestSavePrepared_SenderReturnsError(t *testing.T) {
 	}
 }
 
+// ctxAwarePreparedSender implements PreparedSender by reading ctx.Err itself
+// inside SavePreparedInlineMessage. It proves SavePrepared actually propagates
+// the cancelled context, rather than relying on a pre-baked error in the fake.
+type ctxAwarePreparedSender struct {
+	gotCtxErr   error
+	callCount   int
+	returnMsg   tgbotapi.PreparedInlineMessage
+	returnErrFn func(ctx context.Context) error
+}
+
+func (f *ctxAwarePreparedSender) SavePreparedInlineMessage(
+	ctx context.Context,
+	userID int64,
+	result tgbotapi.InlineQueryResult,
+	opts PreparedOptions,
+) (tgbotapi.PreparedInlineMessage, error) {
+	f.callCount++
+	f.gotCtxErr = ctx.Err()
+	if f.returnErrFn != nil {
+		return f.returnMsg, f.returnErrFn(ctx)
+	}
+	return f.returnMsg, nil
+}
+
 func TestSavePrepared_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	ctxErr := ctx.Err()
-	fs := &fakePreparedSender{returnErr: ctxErr}
+	fs := &ctxAwarePreparedSender{
+		returnErrFn: func(ctx context.Context) error { return ctx.Err() },
+	}
 	result := tgbotapi.InlineQueryResultArticle{Type: "article", ID: "1", Title: "Hi"}
 
 	_, err := SavePrepared(ctx, fs, 42, result, PreparedOptions{AllowUserChats: true})
@@ -155,5 +180,14 @@ func TestSavePrepared_ContextCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("got %v; want context.Canceled", err)
+	}
+	// Critical assertion: the cancelled ctx must have been observed by the sender,
+	// not synthesised by the fake. This proves SavePrepared propagates the ctx
+	// instead of dropping it on the floor.
+	if fs.callCount != 1 {
+		t.Fatalf("sender called %d times; want 1", fs.callCount)
+	}
+	if !errors.Is(fs.gotCtxErr, context.Canceled) {
+		t.Errorf("sender saw ctx.Err() = %v; want context.Canceled (proves propagation)", fs.gotCtxErr)
 	}
 }
