@@ -53,8 +53,18 @@ func TestNewOptional_NonEmptyKeyReturnsClient(t *testing.T) {
 	}
 }
 
-func TestClientSatisfiesCompleter(t *testing.T) {
-	// compile-time assertion covered by package-level var above;
-	// this test exists as a named record.
-	var _ llm.Completer = (*llm.Client)(nil)
+func TestNoOp_TolerateChatOptions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	// NoOp must silently ignore all ChatOptions and return ErrUnavailable without panicking.
+	got, err := llm.NoOp{}.Complete(ctx, "s", "u",
+		llm.WithChatMaxTokens(100),
+		llm.WithChatTemperature(0.5),
+	)
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+	if !errors.Is(err, llm.ErrUnavailable) {
+		t.Errorf("expected ErrUnavailable, got %v", err)
+	}
 }

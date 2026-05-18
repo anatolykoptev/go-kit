@@ -12,8 +12,12 @@ func (NoOp) Complete(context.Context, string, string, ...ChatOption) (string, er
 }
 
 // NewOptional returns a real *Client when apiKey is non-empty, otherwise
-// NoOp{}. The bool reports whether a real client was constructed — useful
-// for startup logging and metric labels. NewOptional never returns nil.
+// NoOp{}. The bool is true when a real client was constructed, false when
+// NoOp was returned — useful for startup logging and metric labels.
+//
+// The gating condition is apiKey only: an empty baseURL or empty model is
+// passed through to NewClient as-is (NewClient's own pre-existing behaviour
+// handles those). NewOptional never returns nil.
 func NewOptional(baseURL, apiKey, model string, opts ...Option) (Completer, bool) {
 	if apiKey == "" {
 		return NoOp{}, false
