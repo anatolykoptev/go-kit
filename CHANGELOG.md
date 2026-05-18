@@ -35,6 +35,16 @@
 
 * **rerank:** VoyageRerankClient — Voyage AI rerank-2.5 client mirroring embed/voyage.go (retries on 429/5xx, StatusSkipped on missing API key, WithTopN forwards to top_k).
 
+## [v0.61.1] — 2026-05-18
+
+### Fixed
+
+* **telegram/tgapi5:** `BotInvoiceSender.SendInvoice/CreateInvoiceLink`, `BotWebAppAnswerer.AnswerWebAppQuery`, and `BotPreparedSender.SavePreparedInlineMessage` now return a typed error (`"tgapi5: nil response from BotAPI"`) instead of panicking if the SDK's `RequestWithContext` ever returned `(nil, nil)`. Defence-in-depth — the SDK contract does not formally forbid that return shape.
+
+### Improved
+
+* **telegram/miniapp:** `PreparedSender.SavePreparedInlineMessage` godoc enumerates the 20 acceptable `tgbotapi.InlineQueryResult*` concrete types, recovering the compile-time discoverability lost to the SDK's `type InlineQueryResult any` alias.
+
 ## [v0.61.0] — 2026-05-18
 
 ### Added
