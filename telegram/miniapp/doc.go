@@ -20,4 +20,17 @@
 // Algorithm cross-referenced with the MIT-licensed reference implementation:
 // https://github.com/telegram-mini-apps/init-data-golang (MIT, Copyright 2022 Vladislav Kibenko).
 // No code was copied; only the algorithm was verified for correctness.
+//
+// In addition to InitData validation, this package provides high-level helpers
+// for Mini App server-side operations:
+//
+//   - Reply (answer.go): answerWebAppQuery — send an inline result back into
+//     the Mini App session.
+//   - SendInvoice / CreateInvoiceLink (invoice.go): Telegram Stars (XTR) +
+//     classic provider invoices.
+//   - SavePrepared (prepared.go): savePreparedInlineMessage — store a message
+//     that a Mini App user can later share into any chat picker.
+//
+// Adapters that wrap *tgbotapi.BotAPI for each of these interfaces live in
+// the sibling package telegram/tgapi5.
 package miniapp

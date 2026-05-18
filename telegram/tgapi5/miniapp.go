@@ -83,8 +83,58 @@ func (a *BotWebAppAnswerer) AnswerWebAppQuery(
 	return &msg, nil
 }
 
+// BotPreparedSender adapts *tgbotapi.BotAPI to the miniapp.PreparedSender
+// interface. It dispatches via bot.MakeRequestWithContext to honour context,
+// mirroring the body of the SDK's SavePreparedInlineMessage generic helper
+// (which calls bot.Request and therefore cannot propagate a context).
+//
+// The SDK's generic SavePreparedInlineMessage[T] requires T to satisfy the
+// InlineQueryResults union constraint; since the interface takes
+// tgbotapi.InlineQueryResult (= any), we build Params manually instead
+// of instantiating the generic config.
+type BotPreparedSender struct {
+	bot *tgbotapi.BotAPI
+}
+
+// NewPreparedSender returns a BotPreparedSender backed by bot.
+// It satisfies miniapp.PreparedSender.
+func NewPreparedSender(bot *tgbotapi.BotAPI) *BotPreparedSender {
+	return &BotPreparedSender{bot: bot}
+}
+
+// SavePreparedInlineMessage implements miniapp.PreparedSender.
+// It builds the request params manually (mirroring SDK configs.go params())
+// and calls bot.MakeRequestWithContext so the caller's context is honoured.
+func (s *BotPreparedSender) SavePreparedInlineMessage(
+	ctx context.Context,
+	userID int64,
+	result tgbotapi.InlineQueryResult,
+	opts miniapp.PreparedOptions,
+) (tgbotapi.PreparedInlineMessage, error) {
+	p := make(tgbotapi.Params)
+	p.AddNonZero64("user_id", userID)
+	if err := p.AddInterface("result", result); err != nil {
+		return tgbotapi.PreparedInlineMessage{}, err
+	}
+	p.AddBool("allow_user_chats", opts.AllowUserChats)
+	p.AddBool("allow_bot_chats", opts.AllowBotChats)
+	p.AddBool("allow_group_chats", opts.AllowGroupChats)
+	p.AddBool("allow_channel_chats", opts.AllowChannelChats)
+
+	resp, err := s.bot.MakeRequestWithContext(ctx, "savePreparedInlineMessage", p)
+	if err != nil {
+		return tgbotapi.PreparedInlineMessage{}, err
+	}
+	var out tgbotapi.PreparedInlineMessage
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return tgbotapi.PreparedInlineMessage{}, err
+	}
+	return out, nil
+}
+
 // Compile-time interface satisfaction checks.
 var (
 	_ miniapp.Sender          = (*BotInvoiceSender)(nil)
 	_ miniapp.WebAppAnswerer  = (*BotWebAppAnswerer)(nil)
+	_ miniapp.PreparedSender  = (*BotPreparedSender)(nil)
 )
