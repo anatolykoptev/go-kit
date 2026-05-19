@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -186,6 +187,66 @@ func TestPgStore_Forget_UserFirstThenEvents(t *testing.T) {
 	}
 	if !notFound {
 		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+// TestPgStore_StoreIPDisabledClearsExistingIP verifies that switching to
+// WithStoreIP(false) on subsequent upserts actively clears any previously
+// stored IP. M2 fix.
+func TestPgStore_StoreIPDisabledClearsExistingIP(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	// Store 1: IP enabled.
+	s1, err := pg.New(ctx, pool, botusers.WithStoreIP(true))
+	if err != nil {
+		t.Fatalf("pg.New (store_ip=true): %v", err)
+	}
+
+	user := botusers.TelegramUser{TgID: 11223344, Lang: "en"}
+	obs1 := botusers.Observation{IP: "1.2.3.4", Source: botusers.SourceBotCommand, At: time.Now()}
+	if err := s1.UpsertFromInitData(ctx, "botM2", user, obs1); err != nil {
+		t.Fatalf("upsert with IP: %v", err)
+	}
+
+	// Confirm IP was stored.
+	var storedIP string
+	if err := pool.QueryRow(ctx,
+		"SELECT client_ip FROM bot_users WHERE bot_id=$1 AND tg_id=$2",
+		"botM2", user.TgID,
+	).Scan(&storedIP); err != nil {
+		t.Fatalf("scan IP after first upsert: %v", err)
+	}
+	if storedIP != "1.2.3.4" {
+		t.Fatalf("expected stored IP 1.2.3.4, got %q", storedIP)
+	}
+
+	// Store 2: IP disabled — must clear the previously stored IP.
+	s2, err := pg.New(ctx, pool, botusers.WithStoreIP(false))
+	if err != nil {
+		t.Fatalf("pg.New (store_ip=false): %v", err)
+	}
+
+	obs2 := botusers.Observation{IP: "5.6.7.8", Source: botusers.SourceBotCommand, At: time.Now()}
+	if err := s2.UpsertFromInitData(ctx, "botM2", user, obs2); err != nil {
+		t.Fatalf("upsert without IP: %v", err)
+	}
+
+	// IP must be cleared.
+	got, err := s2.Get(ctx, "botM2", user.TgID)
+	if err != nil {
+		t.Fatalf("Get after second upsert: %v", err)
+	}
+	_ = got // IP is not exposed on User struct; verify via raw query.
+
+	if err := pool.QueryRow(ctx,
+		"SELECT client_ip FROM bot_users WHERE bot_id=$1 AND tg_id=$2",
+		"botM2", user.TgID,
+	).Scan(&storedIP); err != nil {
+		t.Fatalf("scan IP after second upsert: %v", err)
+	}
+	if storedIP != "" {
+		t.Errorf("expected cleared IP, got %q", storedIP)
 	}
 }
 

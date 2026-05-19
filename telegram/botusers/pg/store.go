@@ -102,7 +102,14 @@ func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botus
 		}
 	}()
 
-	_, err = tx.Exec(ctx, `
+	// M2: when StoreIP is disabled, unconditionally clear any prior stored IP
+	// rather than preserving it via CASE. This ensures disabling the option
+	// on subsequent upserts actively purges previously stored values.
+	clientIPClause := "client_ip = CASE WHEN EXCLUDED.client_ip != '' THEN EXCLUDED.client_ip ELSE bot_users.client_ip END,"
+	if !s.cfg.StoreIP {
+		clientIPClause = "client_ip = '',"
+	}
+	upsertSQL := `
 		INSERT INTO bot_users (
 			bot_id, tg_id, username, first_name, last_name, lang,
 			is_premium, is_bot, country, platform, client_ip,
@@ -121,11 +128,12 @@ func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botus
 			is_bot             = EXCLUDED.is_bot,
 			country            = CASE WHEN EXCLUDED.country != '' THEN EXCLUDED.country ELSE bot_users.country END,
 			platform           = CASE WHEN EXCLUDED.platform != '' THEN EXCLUDED.platform ELSE bot_users.platform END,
-			client_ip          = CASE WHEN EXCLUDED.client_ip != '' THEN EXCLUDED.client_ip ELSE bot_users.client_ip END,
+			` + clientIPClause + `
 			last_seen_at       = EXCLUDED.last_seen_at,
 			total_observations = bot_users.total_observations + 1
 			-- first_seen_at is intentionally NOT updated (immutable after INSERT)
-	`,
+	`
+	_, err = tx.Exec(ctx, upsertSQL,
 		bid, user.TgID, user.Username, user.FirstName, user.LastName, user.Lang,
 		user.IsPremium, user.IsBot, obs.Country, obs.Platform, ip,
 		at,

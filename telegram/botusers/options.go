@@ -45,6 +45,8 @@ func WithEventsTable(enabled bool) Option {
 
 // WithStoreIP enables persisting the client IP address from Observation.IP.
 // When false (default) the IP field is ignored and never stored.
+// Subsequent upserts with this option disabled also clear any prior IP stored
+// for the user — disabling WithStoreIP actively purges the value.
 func WithStoreIP(enabled bool) Option {
 	return func(c *Config) { c.StoreIP = enabled }
 }
