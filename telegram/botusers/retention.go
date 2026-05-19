@@ -2,6 +2,7 @@ package botusers
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
@@ -110,5 +111,15 @@ func (s *RetentionSweeper) sweep(ctx context.Context) {
 	if err != nil {
 		return // ErrBotIDRequired — caller misconfigured; silent.
 	}
-	_, _ = s.store.DeleteInactive(ctx, bid, s.inactivityWindow) //nolint:errcheck
+	n, err := s.store.DeleteInactive(ctx, bid, s.inactivityWindow)
+	if err != nil {
+		slog.Warn("bot_users sweep failed", "bot_id", bid, "err", err)
+		if s.cfg.Metrics != nil {
+			s.cfg.Metrics.Incr("bot_users.sweep_error")
+		}
+		return
+	}
+	if s.cfg.Metrics != nil {
+		s.cfg.Metrics.Gauge("bot_users.last_sweep_deleted", float64(n))
+	}
 }

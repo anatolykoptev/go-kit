@@ -2,6 +2,8 @@ package botusers_test
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,4 +82,108 @@ func isNotFoundErr(err error) bool {
 		}
 	}
 	return false
+}
+
+// errStore is a Store that always returns an error from DeleteInactive.
+// Used to test sweeper error handling.
+type errStore struct {
+	botuserstest.MemStore // embed to satisfy the full interface
+	deleteErr error
+}
+
+func (e *errStore) DeleteInactive(ctx context.Context, botID string, olderThan time.Duration) (int64, error) {
+	return 0, e.deleteErr
+}
+
+func TestRetentionSweeper_ErrorEmitsMetrics(t *testing.T) {
+	// M4: when DeleteInactive returns an error, the sweeper must call
+	// metrics.Incr("bot_users.sweep_error") and must NOT panic.
+	store := &errStore{
+		MemStore:  *botuserstest.NewMemStore(),
+		deleteErr: errors.New("simulated db error"),
+	}
+
+	emitter := &captureEmitter{}
+	sweeper := botusers.NewRetentionSweeper(store,
+		botusers.WithBotID("bot1"),
+		botusers.WithSweepInterval(5*time.Millisecond),
+		botusers.WithMetrics(emitter),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	sweeper.Run(ctx)
+
+	// At least one sweep_error counter bump must have occurred.
+	emitter.mu.Lock()
+	incrs := emitter.incrs
+	emitter.mu.Unlock()
+
+	found := false
+	for _, name := range incrs {
+		if name == "bot_users.sweep_error" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected Incr(%q) to be called on sweep error; got incrs: %v",
+			"bot_users.sweep_error", incrs)
+	}
+}
+
+func TestRetentionSweeper_SuccessEmitsGauge(t *testing.T) {
+	// M4: on successful sweep, bot_users.last_sweep_deleted gauge must be set.
+	store := botuserstest.NewMemStore()
+	const botID = "botGauge"
+
+	// Insert a user that will be deleted.
+	user := botusers.TelegramUser{TgID: 42}
+	obs := botusers.Observation{At: time.Now()}
+	if err := store.UpsertFromInitData(context.Background(), botID, user, obs); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	emitter := &captureEmitter{}
+	sweeper := botusers.NewRetentionSweeper(store,
+		botusers.WithBotID(botID),
+		botusers.WithSweepInterval(5*time.Millisecond),
+		botusers.WithInactivityWindow(0), // delete all
+		botusers.WithMetrics(emitter),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	sweeper.Run(ctx)
+
+	emitter.mu.Lock()
+	gauges := emitter.gauges
+	emitter.mu.Unlock()
+
+	if _, ok := gauges["bot_users.last_sweep_deleted"]; !ok {
+		t.Errorf("expected Gauge(%q) to be called after sweep; gauges: %v",
+			"bot_users.last_sweep_deleted", gauges)
+	}
+}
+
+// captureEmitter records all Incr and Gauge calls thread-safely.
+type captureEmitter struct {
+	mu     sync.Mutex
+	incrs  []string
+	gauges map[string]float64
+}
+
+func (c *captureEmitter) Incr(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.incrs = append(c.incrs, name)
+}
+
+func (c *captureEmitter) Gauge(name string, value float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gauges == nil {
+		c.gauges = make(map[string]float64)
+	}
+	c.gauges[name] = value
 }
