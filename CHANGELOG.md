@@ -52,6 +52,31 @@
 
 * **rerank:** VoyageRerankClient — Voyage AI rerank-2.5 client mirroring embed/voyage.go (retries on 429/5xx, StatusSkipped on missing API key, WithTopN forwards to top_k).
 
+## [v0.62.0] — 2026-05-18
+
+### Added
+
+* **telegram/botusers:** New package for tracking Telegram bot users across bots,
+  with multi-tenancy, privacy controls, keyset pagination, and GDPR forget support.
+
+  Core interfaces and types:
+  - `Store` interface: `UpsertFromInitData`, `UpsertFromCommand`, `Get`, `List`,
+    `Aggregate`, `Forget`, `DeleteInactive` — all scoped by `(bot_id, tg_id)` PK
+  - `Privacy` enum: `Off` (no-op), `SoftOptIn` (default); `HardOptIn` planned for a future release
+  - `Cursor` — opaque keyset pagination token (`last_seen_at DESC, tg_id ASC`)
+  - `SchemaSQL()` — embedded DDL via `go:embed`; idempotent (`IF NOT EXISTS`)
+
+  Sub-packages:
+  - `telegram/botusers/pg` — PostgreSQL implementer via pgxpool; `pg.New` applies
+    schema on first call; `Apply` is safe to call again for upgrades
+  - `telegram/botusers/botuserstest` — `RunContract(t, newStore)` contract suite +
+    `MemStore` in-memory reference implementation
+
+  Helpers:
+  - `RetentionSweeper.Run(ctx)` — caller-managed sweep loop; no background goroutines
+  - `EmitGauges` — emits `bot_users.{total,active_1d,active_7d,active_30d}` via
+    a `MetricsEmitter` interface; caller controls frequency
+
 ## [v0.61.2] — 2026-05-18
 
 ### Fixed
