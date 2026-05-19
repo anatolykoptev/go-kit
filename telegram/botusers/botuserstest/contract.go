@@ -360,6 +360,52 @@ func RunContract(t *testing.T, newStore func(t *testing.T) botusers.Store) {
 			t.Fatalf("Get after DeleteInactive: err=%v got=%v", err, got)
 		}
 	})
+
+	t.Run("UpsertFromCommand_PreservesPriorNames", func(t *testing.T) {
+		// C1: UpsertFromCommand must not clobber names written by UpsertFromInitData.
+		// When called with empty names, existing username/first_name/last_name must be preserved.
+		s := newStore(t)
+		ctx := context.Background()
+		const botID = "bot1"
+
+		// Step 1: upsert via init_data (has full names).
+		userFull := botusers.TelegramUser{
+			TgID:      88888,
+			Username:  "carol",
+			FirstName: "Carol",
+			LastName:  "Jones",
+			Lang:      "en",
+		}
+		obs1 := botusers.Observation{Source: botusers.SourceMiniAppInit, At: time.Now()}
+		if err := s.UpsertFromInitData(ctx, botID, userFull, obs1); err != nil {
+			t.Fatalf("UpsertFromInitData: %v", err)
+		}
+
+		// Step 2: upsert via command (no names in this path).
+		time.Sleep(time.Millisecond)
+		obs2 := botusers.Observation{Source: botusers.SourceBotCommand, At: time.Now()}
+		if err := s.UpsertFromCommand(ctx, botID, userFull.TgID, "ru", obs2); err != nil {
+			t.Fatalf("UpsertFromCommand: %v", err)
+		}
+
+		// Step 3: names must be preserved, lang must update.
+		got, err := s.Get(ctx, botID, userFull.TgID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Username != "carol" {
+			t.Errorf("Username: want %q got %q", "carol", got.Username)
+		}
+		if got.FirstName != "Carol" {
+			t.Errorf("FirstName: want %q got %q", "Carol", got.FirstName)
+		}
+		if got.LastName != "Jones" {
+			t.Errorf("LastName: want %q got %q", "Jones", got.LastName)
+		}
+		if got.Lang != "ru" {
+			t.Errorf("Lang: want %q got %q", "ru", got.Lang)
+		}
+	})
 }
 
 // isNotFound reports whether err is or wraps botusers.ErrNotFound.

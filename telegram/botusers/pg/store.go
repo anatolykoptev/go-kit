@@ -103,9 +103,9 @@ func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botus
 			$12, $12, 1, '{}'::jsonb
 		)
 		ON CONFLICT (bot_id, tg_id) DO UPDATE SET
-			username           = EXCLUDED.username,
-			first_name         = EXCLUDED.first_name,
-			last_name          = EXCLUDED.last_name,
+			username           = CASE WHEN EXCLUDED.username != '' THEN EXCLUDED.username ELSE bot_users.username END,
+			first_name         = CASE WHEN EXCLUDED.first_name != '' THEN EXCLUDED.first_name ELSE bot_users.first_name END,
+			last_name          = CASE WHEN EXCLUDED.last_name != '' THEN EXCLUDED.last_name ELSE bot_users.last_name END,
 			lang               = EXCLUDED.lang,
 			is_premium         = EXCLUDED.is_premium,
 			is_bot             = EXCLUDED.is_bot,

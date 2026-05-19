@@ -83,9 +83,16 @@ func (m *MemStore) UpsertFromInitData(ctx context.Context, botID string, user bo
 	if existing, ok := m.users[k]; ok {
 		// Update mutable fields; first_seen_at is immutable.
 		updated := *existing
-		updated.Username = user.Username
-		updated.FirstName = user.FirstName
-		updated.LastName = user.LastName
+		// Preserve existing non-empty names; UpsertFromCommand passes empty strings.
+		if user.Username != "" {
+			updated.Username = user.Username
+		}
+		if user.FirstName != "" {
+			updated.FirstName = user.FirstName
+		}
+		if user.LastName != "" {
+			updated.LastName = user.LastName
+		}
 		updated.Lang = user.Lang
 		updated.IsPremium = user.IsPremium
 		updated.IsBot = user.IsBot
