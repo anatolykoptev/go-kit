@@ -2,8 +2,8 @@ package botuserstest
 
 import (
 	"context"
-	"errors"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,33 +26,7 @@ func NewMemStore() *MemStore {
 }
 
 func key(botID string, tgID int64) string {
-	// Simple composite key; avoids strconv import by using fmt.
-	b := make([]byte, 0, len(botID)+20)
-	b = append(b, botID...)
-	b = append(b, ':')
-	// Manual int64 to decimal to avoid fmt dependency.
-	if tgID == 0 {
-		b = append(b, '0')
-	} else {
-		neg := tgID < 0
-		if neg {
-			tgID = -tgID
-		}
-		var digits [20]byte
-		n := 0
-		for tgID > 0 {
-			digits[n] = byte('0' + tgID%10)
-			n++
-			tgID /= 10
-		}
-		if neg {
-			b = append(b, '-')
-		}
-		for i := n - 1; i >= 0; i-- {
-			b = append(b, digits[i])
-		}
-	}
-	return string(b)
+	return botID + ":" + strconv.FormatInt(tgID, 10)
 }
 
 func (m *MemStore) resolveBot(botID string) (string, error) {
@@ -120,7 +94,7 @@ func (m *MemStore) UpsertFromInitData(ctx context.Context, botID string, user bo
 			FirstSeenAt:       at,
 			LastSeenAt:        at,
 			TotalObservations: 1,
-			CustomAttrs:       make(map[string]any),
+
 		}
 	}
 	return nil
@@ -152,9 +126,7 @@ func (m *MemStore) Get(ctx context.Context, botID string, tgID int64) (*botusers
 	}
 	// Return a copy to prevent mutation.
 	cp := *u
-	if cp.CustomAttrs == nil {
-		cp.CustomAttrs = make(map[string]any)
-	}
+
 	return &cp, nil
 }
 
@@ -327,6 +299,3 @@ func (m *MemStore) DeleteInactive(ctx context.Context, botID string, olderThan t
 // Ensure MemStore satisfies the Store interface at compile time.
 var _ botusers.Store = (*MemStore)(nil)
 
-// isErr is duplicated from contract.go to avoid cross-file issues in test-only pkg.
-// (unexported — only used internally if needed)
-var _ = errors.Is // ensure errors is used

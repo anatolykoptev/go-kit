@@ -100,9 +100,7 @@ type User struct {
 	// TotalObservations counts how many times Upsert has been called for
 	// this user. Monotonically increasing.
 	TotalObservations int64
-	// CustomAttrs holds arbitrary key-value data supplied by the caller.
-	// Stored as JSONB. Never nil after a successful Get.
-	CustomAttrs map[string]any
+
 }
 
 // Filter selects a subset of users for List.

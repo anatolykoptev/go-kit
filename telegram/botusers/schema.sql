@@ -21,8 +21,6 @@ CREATE TABLE IF NOT EXISTS bot_users (
     total_observations  BIGINT      NOT NULL DEFAULT 1,
     -- client_ip is only populated when WithStoreIP is enabled.
     client_ip           TEXT        NOT NULL DEFAULT '',
-    -- custom_attrs holds caller-supplied arbitrary data.
-    custom_attrs        JSONB       NOT NULL DEFAULT '{}'::jsonb,
     CONSTRAINT bot_users_pkey PRIMARY KEY (bot_id, tg_id)
 );
 

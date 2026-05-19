@@ -1,6 +1,7 @@
 package botusers_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/anatolykoptev/go-kit/telegram/botusers"
@@ -12,7 +13,7 @@ func TestEmitGauges_CallsEmitter(t *testing.T) {
 	emitter := &fakeEmitter{gauges: map[string]float64{}}
 
 	// EmitGauges should call Aggregate and emit 4 gauges.
-	if err := botusers.EmitGauges(nil, "bot1", store, emitter); err != nil {
+	if err := botusers.EmitGauges(context.Background(), "bot1", store, emitter); err != nil {
 		// Empty store — aggregate returns zeros; error unlikely.
 		t.Fatalf("EmitGauges: %v", err)
 	}

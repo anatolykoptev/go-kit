@@ -37,8 +37,9 @@
 //
 // # Events table
 //
-// Per-user event history is disabled by default. Enable via
-// WithEventsTable(true). When enabled, every Upsert also inserts a row
-// into bot_user_events with the observation data. This is append-only;
-// Forget deletes both the user row and all event rows.
+// The bot_user_events table is always created by Apply (schema is idempotent).
+// However, rows are only written when WithEventsTable(true) is set. When
+// enabled, every Upsert inserts a row into bot_user_events with observation
+// data. This is append-only; Forget deletes both the user row and all event
+// rows for that user.
 package botusers

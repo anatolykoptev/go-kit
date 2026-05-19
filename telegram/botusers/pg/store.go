@@ -75,14 +75,15 @@ func (s *Store) resolveBot(botID string) (string, error) {
 }
 
 // UpsertFromInitData implements botusers.Store.
-// When privacy is Off, the call is a no-op.
+// When privacy is Off, the call is a no-op — but ErrBotIDRequired still
+// fires before the no-op so callers notice misconfiguration.
 func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botusers.TelegramUser, obs botusers.Observation) error {
-	if s.cfg.Privacy == botusers.Off {
-		return nil
-	}
 	bid, err := s.resolveBot(botID)
 	if err != nil {
 		return err
+	}
+	if s.cfg.Privacy == botusers.Off {
+		return nil
 	}
 	at := obs.At
 	if at.IsZero() {
@@ -115,11 +116,11 @@ func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botus
 		INSERT INTO bot_users (
 			bot_id, tg_id, username, first_name, last_name, lang,
 			is_premium, is_bot, country, platform, client_ip,
-			first_seen_at, last_seen_at, total_observations, custom_attrs
+			first_seen_at, last_seen_at, total_observations
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11,
-			$12, $12, 1, '{}'::jsonb
+			$12, $12, 1
 		)
 		ON CONFLICT (bot_id, tg_id) DO UPDATE SET
 			username           = CASE WHEN EXCLUDED.username != '' THEN EXCLUDED.username ELSE bot_users.username END,
@@ -185,17 +186,16 @@ func (s *Store) Get(ctx context.Context, botID string, tgID int64) (*botusers.Us
 	row := s.pool.QueryRow(ctx, `
 		SELECT bot_id, tg_id, username, first_name, last_name, lang,
 		       is_premium, is_bot, country, platform,
-		       first_seen_at, last_seen_at, total_observations, custom_attrs
+		       first_seen_at, last_seen_at, total_observations
 		FROM bot_users
 		WHERE bot_id = $1 AND tg_id = $2
 	`, bid, tgID)
 
 	var u botusers.User
-	var customAttrsJSON []byte
 	err = row.Scan(
 		&u.BotID, &u.TgID, &u.Username, &u.FirstName, &u.LastName, &u.Lang,
 		&u.IsPremium, &u.IsBot, &u.Country, &u.Platform,
-		&u.FirstSeenAt, &u.LastSeenAt, &u.TotalObservations, &customAttrsJSON,
+		&u.FirstSeenAt, &u.LastSeenAt, &u.TotalObservations,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -204,12 +204,6 @@ func (s *Store) Get(ctx context.Context, botID string, tgID int64) (*botusers.Us
 		return nil, fmt.Errorf("pg: get user: %w", err)
 	}
 
-	u.CustomAttrs = make(map[string]any)
-	if len(customAttrsJSON) > 0 && string(customAttrsJSON) != "null" {
-		if err := unmarshalJSON(customAttrsJSON, &u.CustomAttrs); err != nil {
-			return nil, fmt.Errorf("pg: unmarshal custom_attrs: %w", err)
-		}
-	}
 	return &u, nil
 }
 
@@ -237,7 +231,7 @@ func (s *Store) List(ctx context.Context, filter botusers.Filter) ([]*botusers.U
 	q := `
 		SELECT bot_id, tg_id, username, first_name, last_name, lang,
 		       is_premium, is_bot, country, platform,
-		       first_seen_at, last_seen_at, total_observations, custom_attrs
+		       first_seen_at, last_seen_at, total_observations
 		FROM bot_users
 		WHERE bot_id = $1`
 
@@ -263,18 +257,14 @@ func (s *Store) List(ctx context.Context, filter botusers.Filter) ([]*botusers.U
 	var users []*botusers.User
 	for rows.Next() {
 		var u botusers.User
-		var customAttrsJSON []byte
 		if err := rows.Scan(
 			&u.BotID, &u.TgID, &u.Username, &u.FirstName, &u.LastName, &u.Lang,
 			&u.IsPremium, &u.IsBot, &u.Country, &u.Platform,
-			&u.FirstSeenAt, &u.LastSeenAt, &u.TotalObservations, &customAttrsJSON,
+			&u.FirstSeenAt, &u.LastSeenAt, &u.TotalObservations,
 		); err != nil {
 			return nil, botusers.Cursor{}, fmt.Errorf("pg: scan user: %w", err)
 		}
-		u.CustomAttrs = make(map[string]any)
-		if len(customAttrsJSON) > 0 {
-			_ = unmarshalJSON(customAttrsJSON, &u.CustomAttrs) // best-effort
-		}
+
 		users = append(users, &u)
 	}
 	if err := rows.Err(); err != nil {

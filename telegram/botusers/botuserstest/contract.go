@@ -59,9 +59,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) botusers.Store) {
 		if got.TotalObservations != 1 {
 			t.Errorf("TotalObservations: want 1 got %d", got.TotalObservations)
 		}
-		if got.CustomAttrs == nil {
-			t.Error("CustomAttrs must not be nil after Get")
-		}
+
 	})
 
 	t.Run("UpsertFromInitData_FirstSeenAtImmutable", func(t *testing.T) {
