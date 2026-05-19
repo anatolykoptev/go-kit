@@ -59,10 +59,10 @@ func TestValidate_ValidInitData_ReturnsUser(t *testing.T) {
 	authDate := time.Unix(1716825600, 0) // fixed timestamp
 	userJSON := `{"id":123456789,"first_name":"Alice","last_name":"Smith","username":"alice","language_code":"en","is_premium":true}`
 	params := map[string]string{
-		"user":         userJSON,
-		"query_id":     "AABBBCCC",
-		"start_param":  "launch",
-		"chat_type":    "sender",
+		"user":          userJSON,
+		"query_id":      "AABBBCCC",
+		"start_param":   "launch",
+		"chat_type":     "sender",
 		"chat_instance": "1234",
 	}
 	initData := signInitData(t, testToken, params, authDate)
@@ -94,6 +94,35 @@ func TestValidate_ValidInitData_ReturnsUser(t *testing.T) {
 	}
 	if got.AuthDate.Unix() != authDate.Unix() {
 		t.Errorf("AuthDate = %v, want %v", got.AuthDate, authDate)
+	}
+}
+
+// TestValidate_WithSignatureField_PassesHMAC is a regression for the Bot API
+// 7.x+ change where Telegram includes an ed25519 "signature" parameter in the
+// launch fragment. The HMAC's data_check_string MUST include this field
+// (only "hash" itself is excluded). Earlier versions of this validator
+// erroneously excluded "signature" too, which broke iOS Bot API 9.6+ clients
+// (incident 2026-05-18).
+func TestValidate_WithSignatureField_PassesHMAC(t *testing.T) {
+	t.Parallel()
+
+	authDate := time.Unix(1716825600, 0)
+	userJSON := `{"id":42,"first_name":"Bob","language_code":"ru"}`
+	params := map[string]string{
+		"user":      userJSON,
+		"query_id":  "QID-1",
+		"signature": "MOCK_ED25519_SIGNATURE_BASE64URL_xxxx", // present per Bot API 7.x+
+	}
+	initData := signInitData(t, testToken, params, authDate)
+
+	// Validation must succeed even though "signature" is present in the
+	// signed string (it must be included in data_check_string, NOT excluded).
+	got, err := miniapp.ValidateInitData(initData, testToken)
+	if err != nil {
+		t.Fatalf("validation must include signature in data_check_string; got: %v", err)
+	}
+	if got.User == nil || got.User.ID != 42 {
+		t.Fatalf("expected user.id=42, got %+v", got.User)
 	}
 }
 
@@ -232,9 +261,9 @@ func TestValidate_RealUserBlob(t *testing.T) {
 	// Realistic user blob as sent by Telegram (URL-encoded JSON).
 	userJSON := `{"id":987654321,"first_name":"Ivan","last_name":"Petrov","username":"ivanpetrov","language_code":"ru","allows_write_to_pm":true}`
 	params := map[string]string{
-		"user":         userJSON,
-		"query_id":     "AAEFGH123",
-		"chat_type":    "private",
+		"user":          userJSON,
+		"query_id":      "AAEFGH123",
+		"chat_type":     "private",
 		"chat_instance": "-1234567890123456789",
 	}
 	initData := signInitData(t, testToken, params, authDate)

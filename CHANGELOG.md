@@ -35,6 +35,12 @@
 
 * **rerank:** VoyageRerankClient — Voyage AI rerank-2.5 client mirroring embed/voyage.go (retries on 429/5xx, StatusSkipped on missing API key, WithTopN forwards to top_k).
 
+## [v0.61.2] — 2026-05-18
+
+### Fixed
+
+* **telegram/miniapp:** `ValidateInitData` was incorrectly excluding the `signature` field (Bot API 7.x+ ed25519) from the HMAC `data_check_string`. Telegram includes `signature` in the signed payload — only `hash` itself is excluded. Confirmed against the OvyFlash/telegram-bot-api reference impl (`ValidateWebAppData` in helper_methods.go). The bug surfaced as 100% `ErrInvalidSignature` failures on iOS Bot API 9.6+ Mini App share-flow (incident 2026-05-18, oxpulse-admin debug-trace branch). Regression test added: `TestValidate_WithSignatureField_PassesHMAC`.
+
 ## [v0.61.1] — 2026-05-18
 
 ### Fixed
