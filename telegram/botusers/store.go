@@ -16,6 +16,11 @@ var (
 	// ErrNotFound is returned by Get and Forget when the user record does
 	// not exist for the given (bot_id, tg_id) pair.
 	ErrNotFound = errors.New("botusers: user not found")
+
+	// ErrCursor is returned when a pagination cursor cannot be decoded
+	// (malformed, truncated, or tampered). Callers can distinguish cursor
+	// errors from other errors via errors.Is(err, ErrCursor).
+	ErrCursor = errors.New("botusers: invalid cursor")
 )
 
 // Store defines the read/write contract for the botusers package.

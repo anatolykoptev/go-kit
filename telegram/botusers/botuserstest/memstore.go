@@ -275,7 +275,7 @@ func (m *MemStore) Aggregate(ctx context.Context, botID string) (botusers.Aggreg
 	}
 	sort.Slice(ccs, func(i, j int) bool { return ccs[i].cnt > ccs[j].cnt })
 	for _, c := range ccs {
-		agg.TopCountries = append(agg.TopCountries, [2]any{c.code, c.cnt})
+		agg.TopCountries = append(agg.TopCountries, botusers.CountryCount{Code: c.code, Count: c.cnt})
 	}
 
 	return agg, nil

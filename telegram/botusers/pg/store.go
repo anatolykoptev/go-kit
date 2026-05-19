@@ -331,7 +331,7 @@ func (s *Store) Aggregate(ctx context.Context, botID string) (botusers.Aggregate
 		if err := rows.Scan(&code, &cnt); err != nil {
 			return botusers.Aggregates{}, fmt.Errorf("pg: scan country: %w", err)
 		}
-		agg.TopCountries = append(agg.TopCountries, [2]any{code, cnt})
+		agg.TopCountries = append(agg.TopCountries, botusers.CountryCount{Code: code, Count: cnt})
 	}
 	if err := rows.Err(); err != nil {
 		return botusers.Aggregates{}, fmt.Errorf("pg: country rows: %w", err)

@@ -3,6 +3,7 @@ package botusers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -152,15 +153,16 @@ func EncodeCursor(lastSeenAt time.Time, tgID int64) Cursor {
 }
 
 // DecodeCursor extracts the last_seen_at / tg_id pair from c. Used by
-// Store implementers.
+// Store implementers. Returns a wrapped ErrCursor on any decode failure
+// so callers can detect tampered cursors via errors.Is(err, ErrCursor).
 func DecodeCursor(c Cursor) (lastSeenAt time.Time, tgID int64, err error) {
 	raw, err := base64.RawURLEncoding.DecodeString(c.encoded)
 	if err != nil {
-		return time.Time{}, 0, err
+		return time.Time{}, 0, fmt.Errorf("%w: %s", ErrCursor, err.Error())
 	}
 	var p cursorPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return time.Time{}, 0, err
+		return time.Time{}, 0, fmt.Errorf("%w: %s", ErrCursor, err.Error())
 	}
 	return p.LastSeenAt, p.TgID, nil
 }
@@ -174,6 +176,14 @@ func CursorFromString(s string) Cursor { return Cursor{encoded: s} }
 // IsZero reports whether the cursor is empty (i.e. "start from beginning").
 func (c Cursor) IsZero() bool { return c.encoded == "" }
 
+// CountryCount holds a country code and the count of users from that country.
+type CountryCount struct {
+	// Code is the ISO 3166-1 alpha-2 country code (e.g. "US", "DE").
+	Code string
+	// Count is the number of stored users from this country.
+	Count int64
+}
+
 // Aggregates summarises the user base for a single bot.
 type Aggregates struct {
 	// Total is the total number of stored users.
@@ -186,7 +196,6 @@ type Aggregates struct {
 	Active30D int64
 	// PremiumCount is the count of premium users.
 	PremiumCount int64
-	// TopCountries is an ordered list of [country_code, count] pairs,
-	// most frequent first. Each element is a [2]any{string, int64}.
-	TopCountries [][2]any
+	// TopCountries is an ordered list of CountryCount values, most frequent first.
+	TopCountries []CountryCount
 }

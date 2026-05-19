@@ -406,6 +406,65 @@ func RunContract(t *testing.T, newStore func(t *testing.T) botusers.Store) {
 			t.Errorf("Lang: want %q got %q", "ru", got.Lang)
 		}
 	})
+
+	t.Run("Aggregate_TopCountries_Typed", func(t *testing.T) {
+		// M3: TopCountries must return typed CountryCount values, not [2]any.
+		s := newStore(t)
+		ctx := context.Background()
+		const botID = "botCC"
+
+		// Insert users with distinct countries.
+		for i, country := range []string{"US", "US", "DE"} {
+			user := botusers.TelegramUser{TgID: int64(9000 + i)}
+			obs := botusers.Observation{Country: country, At: time.Now()}
+			if err := s.UpsertFromInitData(ctx, botID, user, obs); err != nil {
+				t.Fatalf("upsert %d: %v", i, err)
+			}
+		}
+
+		agg, err := s.Aggregate(ctx, botID)
+		if err != nil {
+			t.Fatalf("Aggregate: %v", err)
+		}
+		if len(agg.TopCountries) == 0 {
+			t.Fatal("expected non-empty TopCountries")
+		}
+		// Access typed fields — compile error if type is still [2]any.
+		top := agg.TopCountries[0]
+		if top.Code == "" {
+			t.Error("TopCountries[0].Code must not be empty")
+		}
+		if top.Count <= 0 {
+			t.Errorf("TopCountries[0].Count must be > 0, got %d", top.Count)
+		}
+		// US appears twice — must be first.
+		if top.Code != "US" {
+			t.Errorf("TopCountries[0].Code: want US got %q", top.Code)
+		}
+		if top.Count != 2 {
+			t.Errorf("TopCountries[0].Count: want 2 got %d", top.Count)
+		}
+	})
+
+
+	t.Run("CursorTampered_ReturnsErrCursor", func(t *testing.T) {
+		// MED5: a tampered/invalid cursor string must return a wrapped ErrCursor,
+		// not a raw base64 or JSON error.
+		s := newStore(t)
+		ctx := context.Background()
+		badCursor := botusers.CursorFromString("!!!not-valid-base64!!!")
+		_, _, err := s.List(ctx, botusers.Filter{
+			BotID:  "bot1",
+			Cursor: &badCursor,
+		})
+		if err == nil {
+			t.Fatal("expected error for tampered cursor, got nil")
+		}
+		if !isCursorErr(err) {
+			t.Fatalf("expected ErrCursor-wrapped error, got: %v", err)
+		}
+	})
+
 }
 
 // isNotFound reports whether err is or wraps botusers.ErrNotFound.
@@ -416,6 +475,11 @@ func isNotFound(err error) bool {
 // isBotIDRequired reports whether err is or wraps botusers.ErrBotIDRequired.
 func isBotIDRequired(err error) bool {
 	return isErr(err, botusers.ErrBotIDRequired)
+}
+
+// isCursorErr reports whether err wraps ErrCursor.
+func isCursorErr(err error) bool {
+	return isErr(err, botusers.ErrCursor)
 }
 
 func isErr(err, target error) bool {
