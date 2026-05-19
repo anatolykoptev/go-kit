@@ -26,6 +26,7 @@ func WithInactivityWindow(d time.Duration) Option {
 	return func(c *Config) {
 		c.inactivityWindow = d
 		c.inactivityWindowSet = true
+		recordOption(c, "WithInactivityWindow")
 	}
 }
 
@@ -36,6 +37,7 @@ func WithInactivityWindow(d time.Duration) Option {
 // (default 90 days).
 func NewRetentionSweeper(store Store, opts ...Option) *RetentionSweeper {
 	cfg := defaultConfig(opts)
+	warnCrossDomainOptions(cfg, "sweeper")
 	inactivityWindow := cfg.inactivityWindow
 	// When WithInactivityWindow was not called, default to 90 days.
 	// When called explicitly with 0, use 0 (delete all users on each sweep).

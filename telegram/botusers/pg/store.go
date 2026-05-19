@@ -42,6 +42,8 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...botusers.Option) (*Sto
 		o(&cfg)
 	}
 
+	cfg.WarnCrossDomainOptions("store")
+
 	s := &Store{pool: pool, cfg: cfg}
 	if err := s.Apply(ctx, pool); err != nil {
 		return nil, err

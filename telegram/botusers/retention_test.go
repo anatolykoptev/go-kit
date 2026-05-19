@@ -3,6 +3,8 @@ package botusers_test
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -186,4 +188,26 @@ func (c *captureEmitter) Gauge(name string, value float64) {
 		c.gauges = make(map[string]float64)
 	}
 	c.gauges[name] = value
+}
+
+func TestNewRetentionSweeper_WarnsCrossDomainOptions(t *testing.T) {
+	// M6: NewRetentionSweeper must warn when store-only options (WithStoreIP,
+	// WithEventsTable, WithPrivacy) are passed by mistake.
+	store := botuserstest.NewMemStore()
+
+	var buf strings.Builder
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	_ = botusers.NewRetentionSweeper(store,
+		botusers.WithBotID("bot1"),
+		botusers.WithStoreIP(true), // wrong domain: belongs to Store
+	)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "WithStoreIP") {
+		t.Errorf("expected warning about WithStoreIP cross-domain misuse; got log: %q", logged)
+	}
 }
