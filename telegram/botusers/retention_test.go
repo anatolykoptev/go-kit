@@ -89,7 +89,7 @@ func isNotFoundErr(err error) bool {
 // errStore is a Store that always returns an error from DeleteInactive.
 // Used to test sweeper error handling.
 type errStore struct {
-	botuserstest.MemStore // embed to satisfy the full interface
+	*botuserstest.MemStore // embed as pointer to avoid copying sync.RWMutex
 	deleteErr error
 }
 
@@ -101,7 +101,7 @@ func TestRetentionSweeper_ErrorEmitsMetrics(t *testing.T) {
 	// M4: when DeleteInactive returns an error, the sweeper must call
 	// metrics.Incr("bot_users.sweep_error") and must NOT panic.
 	store := &errStore{
-		MemStore:  *botuserstest.NewMemStore(),
+		MemStore:  botuserstest.NewMemStore(),
 		deleteErr: errors.New("simulated db error"),
 	}
 
@@ -130,6 +130,38 @@ func TestRetentionSweeper_ErrorEmitsMetrics(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected Incr(%q) to be called on sweep error; got incrs: %v",
+			"bot_users.sweep_error", incrs)
+	}
+}
+
+func TestRetentionSweeper_MisconfiguredBotIDEmitsMetrics(t *testing.T) {
+	// N3: when resolveBot returns ErrBotIDRequired (no bot_id configured),
+	// the sweeper must call metrics.Incr("bot_users.sweep_error").
+	store := botuserstest.NewMemStore()
+	emitter := &captureEmitter{}
+	// Deliberately omit WithBotID so resolveBot returns ErrBotIDRequired.
+	sweeper := botusers.NewRetentionSweeper(store,
+		botusers.WithSweepInterval(5*time.Millisecond),
+		botusers.WithMetrics(emitter),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	sweeper.Run(ctx)
+
+	emitter.mu.Lock()
+	incrs := emitter.incrs
+	emitter.mu.Unlock()
+
+	found := false
+	for _, name := range incrs {
+		if name == "bot_users.sweep_error" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected Incr(%q) on resolveBot error (no bot_id); got incrs: %v",
 			"bot_users.sweep_error", incrs)
 	}
 }

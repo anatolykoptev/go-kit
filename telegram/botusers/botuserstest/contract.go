@@ -13,6 +13,7 @@ package botuserstest
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -481,21 +482,5 @@ func isCursorErr(err error) bool {
 }
 
 func isErr(err, target error) bool {
-	if err == nil {
-		return false
-	}
-	// errors.Is handles wrapping.
-	type iser interface{ Is(error) bool }
-	// Use errors package via loop — avoid import cycle.
-	for err != nil {
-		if err == target {
-			return true
-		}
-		if u, ok := err.(interface{ Unwrap() error }); ok {
-			err = u.Unwrap()
-		} else {
-			break
-		}
-	}
-	return false
+	return errors.Is(err, target)
 }

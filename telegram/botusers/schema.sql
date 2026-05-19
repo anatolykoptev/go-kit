@@ -37,8 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_users_country
     ON bot_users (bot_id, country)
     WHERE country != '';
 
--- Optional events table. Created by Apply only when WithEventsTable is true.
--- DDL is included here for completeness; pg.Store.Apply applies it conditionally.
+-- Optional events table. Always created by Apply; rows only written when WithEventsTable(true).
 CREATE TABLE IF NOT EXISTS bot_user_events (
     id          BIGSERIAL   PRIMARY KEY,
     bot_id      TEXT        NOT NULL,

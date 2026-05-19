@@ -12,7 +12,6 @@ package pg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -390,14 +389,6 @@ func (s *Store) DeleteInactive(ctx context.Context, botID string, olderThan time
 		return 0, fmt.Errorf("pg: delete inactive: %w", err)
 	}
 	return tag.RowsAffected(), nil
-}
-
-// unmarshalJSON is a thin wrapper that avoids importing encoding/json at the
-// call sites (keeps code DRY). The JSONB bytes from pgx are standard JSON.
-func unmarshalJSON(data []byte, v any) error {
-	// Using pgx's built-in JSON decoding via standard library.
-	// We import encoding/json indirectly; declare import at top of file.
-	return json.Unmarshal(data, v)
 }
 
 // Ensure *Store satisfies the Store interface at compile time.

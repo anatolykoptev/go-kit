@@ -85,7 +85,11 @@ func (s *RetentionSweeper) sweep(ctx context.Context) {
 	}
 	bid, err := resolveBot(s.cfg.BotID, s.cfg)
 	if err != nil {
-		return // ErrBotIDRequired — caller misconfigured; silent.
+		slog.Warn("bot_users sweep misconfigured", "err", err)
+		if s.cfg.Metrics != nil {
+			s.cfg.Metrics.Incr("bot_users.sweep_error")
+		}
+		return
 	}
 	n, err := s.store.DeleteInactive(ctx, bid, s.inactivityWindow)
 	if err != nil {
