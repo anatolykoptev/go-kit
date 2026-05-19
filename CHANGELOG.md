@@ -52,7 +52,7 @@
 
 * **rerank:** VoyageRerankClient — Voyage AI rerank-2.5 client mirroring embed/voyage.go (retries on 429/5xx, StatusSkipped on missing API key, WithTopN forwards to top_k).
 
-## [v0.62.0] — 2026-05-18
+## [v0.65.0] — 2026-05-19
 
 ### Added
 
