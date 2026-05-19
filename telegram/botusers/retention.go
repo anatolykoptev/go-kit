@@ -23,7 +23,10 @@ type RetentionSweeper struct {
 //
 // Pass 0 to delete all users on every sweep (useful in tests).
 func WithInactivityWindow(d time.Duration) Option {
-	return func(c *Config) { c.inactivityWindow = d }
+	return func(c *Config) {
+		c.inactivityWindow = d
+		c.inactivityWindowSet = true
+	}
 }
 
 // NewRetentionSweeper creates a RetentionSweeper. opts are the standard
@@ -34,7 +37,9 @@ func WithInactivityWindow(d time.Duration) Option {
 func NewRetentionSweeper(store Store, opts ...Option) *RetentionSweeper {
 	cfg := defaultConfig(opts)
 	inactivityWindow := cfg.inactivityWindow
-	if inactivityWindow == 0 && !hasInactivityWindowOption(opts) {
+	// When WithInactivityWindow was not called, default to 90 days.
+	// When called explicitly with 0, use 0 (delete all users on each sweep).
+	if !cfg.inactivityWindowSet {
 		inactivityWindow = 90 * 24 * time.Hour
 	}
 	return &RetentionSweeper{
@@ -44,37 +49,6 @@ func NewRetentionSweeper(store Store, opts ...Option) *RetentionSweeper {
 	}
 }
 
-// hasInactivityWindowOption detects whether WithInactivityWindow was explicitly
-// passed (to distinguish 0 as "delete all" vs "not set").
-func hasInactivityWindowOption(opts []Option) bool {
-	// We apply the option to a sentinel config and check if inactivityWindow changed.
-	var sentinel Config
-	for _, o := range opts {
-		o(&sentinel)
-	}
-	return sentinel.inactivityWindow != 0 || hasExplicitZeroWindow(opts)
-}
-
-// hasExplicitZeroWindow is a best-effort heuristic. Since Go closures don't
-// carry metadata, we use a secondary marker approach: apply to a sentinel and
-// check if any option set a non-default field that signals "0 was intended".
-// In practice, callers using WithInactivityWindow(0) get immediate deletion —
-// the default 90d is applied only when WithInactivityWindow is not called at all.
-//
-// Implementation note: we can't distinguish "WithInactivityWindow(0)" from
-// "not called" without a separate flag. We use the presence of inactivityWindow
-// field being 0 after applying all options as "use default" for safety.
-// Tests that want "delete all" should pass a very small positive duration instead.
-func hasExplicitZeroWindow(opts []Option) bool {
-	// marker config with a sentinel non-zero value
-	sentinel := Config{inactivityWindow: -1}
-	for _, o := range opts {
-		o(&sentinel)
-	}
-	// If it's still -1, WithInactivityWindow was not called.
-	// If it's 0, it was explicitly set to 0.
-	return sentinel.inactivityWindow == 0
-}
 
 // Run blocks and performs a sweep at every SweepInterval until ctx is
 // cancelled. Safe to call without go (synchronous), or as go sweeper.Run(ctx).

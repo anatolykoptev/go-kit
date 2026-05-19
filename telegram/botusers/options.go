@@ -17,8 +17,11 @@ type Config struct {
 	// SweepInterval is the period used by RetentionSweeper.Run.
 	SweepInterval time.Duration
 	// InactivityWindow is the duration used by RetentionSweeper to identify
-	// stale users. 0 means "not set" (NewRetentionSweeper uses 90d default).
+	// stale users. 0 means "delete all" when inactivityWindowSet is true.
 	inactivityWindow time.Duration
+	// inactivityWindowSet is true when WithInactivityWindow was called explicitly.
+	// Distinguishes WithInactivityWindow(0) from "not set" (defaults to 90d).
+	inactivityWindowSet bool
 	// Clock returns the current time. Defaults to time.Now.
 	Clock func() time.Time
 	// Metrics is an optional prometheus-compatible counter/gauge emitter.
