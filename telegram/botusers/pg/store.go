@@ -92,7 +92,17 @@ func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botus
 		ip = obs.IP
 	}
 
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("pg: begin upsert tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO bot_users (
 			bot_id, tg_id, username, first_name, last_name, lang,
 			is_premium, is_bot, country, platform, client_ip,
@@ -125,9 +135,13 @@ func (s *Store) UpsertFromInitData(ctx context.Context, botID string, user botus
 	}
 
 	if s.cfg.UseEventsTable {
-		if err := s.insertEvent(ctx, bid, user.TgID, obs, ip, at); err != nil {
+		if err = s.insertEventTx(ctx, tx, bid, user.TgID, obs, ip, at); err != nil {
 			return err
 		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pg: commit upsert tx: %w", err)
 	}
 	return nil
 }
@@ -138,9 +152,10 @@ func (s *Store) UpsertFromCommand(ctx context.Context, botID string, chatID int6
 	return s.UpsertFromInitData(ctx, botID, user, obs)
 }
 
-// insertEvent writes a row to bot_user_events. Called only when UseEventsTable is true.
-func (s *Store) insertEvent(ctx context.Context, botID string, tgID int64, obs botusers.Observation, ip string, at time.Time) error {
-	_, err := s.pool.Exec(ctx, `
+// insertEventTx writes a row to bot_user_events within an existing transaction.
+// Called only when UseEventsTable is true.
+func (s *Store) insertEventTx(ctx context.Context, tx pgx.Tx, botID string, tgID int64, obs botusers.Observation, ip string, at time.Time) error {
+	_, err := tx.Exec(ctx, `
 		INSERT INTO bot_user_events (bot_id, tg_id, source, platform, country, client_ip, lang, occurred_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, botID, tgID, obs.Source, obs.Platform, obs.Country, ip, obs.LangDetected, at)
@@ -318,27 +333,46 @@ func (s *Store) Aggregate(ctx context.Context, botID string) (botusers.Aggregate
 }
 
 // Forget implements botusers.Store. Returns ErrNotFound when no row matches.
+// MED1: delete user row first so ErrNotFound fires before touching event rows.
+// Both deletes are wrapped in a transaction for atomicity.
 func (s *Store) Forget(ctx context.Context, botID string, tgID int64) error {
 	bid, err := s.resolveBot(botID)
 	if err != nil {
 		return err
 	}
 
-	if s.cfg.UseEventsTable {
-		_, err := s.pool.Exec(ctx,
-			`DELETE FROM bot_user_events WHERE bot_id = $1 AND tg_id = $2`, bid, tgID)
-		if err != nil {
-			return fmt.Errorf("pg: forget events: %w", err)
-		}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("pg: begin forget tx: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 
-	tag, err := s.pool.Exec(ctx,
+	// Delete user row first; if no row exists, return ErrNotFound without
+	// touching the events table (avoids ghost-event orphan confusion).
+	var tag interface{ RowsAffected() int64 }
+	tag, err = tx.Exec(ctx,
 		`DELETE FROM bot_users WHERE bot_id = $1 AND tg_id = $2`, bid, tgID)
 	if err != nil {
 		return fmt.Errorf("pg: forget user: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return botusers.ErrNotFound
+	}
+
+	if s.cfg.UseEventsTable {
+		_, err = tx.Exec(ctx,
+			`DELETE FROM bot_user_events WHERE bot_id = $1 AND tg_id = $2`, bid, tgID)
+		if err != nil {
+			return fmt.Errorf("pg: forget events: %w", err)
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pg: commit forget tx: %w", err)
 	}
 	return nil
 }
