@@ -90,11 +90,20 @@ func validateWithTime(initData, botToken string, maxAge time.Duration, nowFn fun
 		return nil, ErrMissingHash
 	}
 
-	// Build data_check_string: sorted "key=value" pairs, excluding "hash" and
-	// "signature" (ed25519 field added in later Bot API versions — excluded per spec).
+	// Build data_check_string: sorted "key=value" pairs, excluding ONLY "hash".
+	//
+	// The "signature" field (ed25519, Bot API 7.x+) is INCLUDED in the
+	// data_check_string. Telegram signs over the entire payload minus "hash",
+	// and the OvyFlash/telegram-bot-api reference impl confirms this
+	// (helper_methods.go::ValidateWebAppData excludes only "hash").
+	//
+	// Earlier doc-string here said "exclude signature per spec" — that was
+	// based on a misreading; signatures from real iOS Bot API 9.6 clients
+	// fail HMAC validation when signature is excluded (incident 2026-05-18,
+	// debug-trace branch on oxpulse-admin).
 	pairs := make([]string, 0, len(q))
 	for k, vs := range q {
-		if k == "hash" || k == "signature" {
+		if k == "hash" {
 			continue
 		}
 		pairs = append(pairs, k+"="+vs[0])
