@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+* **metrics:** `Registry.Observe(name string, v float64)` — direct histogram write,
+  routes to the prom bridge (Prometheus-backed registry) or in-mem Reservoir
+  (in-memory registry). Matches the `StartTimer.Stop()` routing invariant.
+
+* **metrics:** `Registry.ObserveSeconds(name string, d time.Duration)` — duration
+  sugar over `Observe(name, d.Seconds())`; preferred for latency measurements where
+  `time.Duration` is already in hand. Closes the gap that forced go-code PR #121
+  to fall back to direct `prometheus.NewHistogramVec` for LLM-latency observability.
+
+  ```go
+  start := time.Now()
+  resp, err := llm.Complete(ctx, req)
+  reg.ObserveSeconds(metrics.Label("llm_request_seconds", "outcome", classify(err)), time.Since(start))
+  ```
+
 ### Breaking Changes
 
 * **httputil:** `SecurityHeaders` no longer sets `Cache-Control: no-store` by default.

@@ -110,6 +110,33 @@ s := h.Snapshot()
 log.Printf("p50=%.3f p95=%.3f p99=%.3f n=%d", s.P50, s.P95, s.P99, s.Count)
 ```
 
+## Histograms — Observe / ObserveSeconds
+
+For direct histogram writes (e.g. LLM call latency, upstream RPC duration) use
+`Observe` or its duration-aware sugar `ObserveSeconds`:
+
+```go
+// Plain float64 — useful when you already have a seconds value.
+reg.Observe("llm_request_seconds", elapsed.Seconds())
+
+// duration sugar — preferred when you have time.Duration in hand.
+start := time.Now()
+resp, err := llm.Complete(ctx, req)
+reg.ObserveSeconds(
+    metrics.Label("llm_request_seconds", "outcome", classify(err)),
+    time.Since(start),
+)
+```
+
+Both route through the Prometheus bridge when the registry is prom-backed
+(`NewPrometheusRegistry`), using the same `histogramNoLabels` / `histogramVec`
+path as `StartTimer`. On an in-memory registry (`NewRegistry`) they feed the
+`Reservoir` so `HistogramSnapshot()` reflects the values.
+
+> **Default buckets:** `ExponentialBuckets(0.001, 2, 16)` — 1ms to ~33s.
+> This covers most HTTP and gRPC workloads. LLM tail (>30s) lands in `+Inf`
+> which is fine for P95/P99. Custom bucket support is a follow-up task.
+
 ## TTL — auto-expire stale metrics
 
 Per-user / per-endpoint counters explode in cardinality if you keep them
@@ -195,4 +222,6 @@ mcpserver.Run(srv, mcpserver.Config{
 | `Reservoir` (histogram) | `Update`, `Percentile(p)`, `Snapshot` |
 | `Rate` | `Update`, `M1`, `M5`, `M15`, `Total`, `Snapshot` |
 | `TimerHandle` | returned by `StartTimer`, `Stop` records duration |
+| `Registry.Observe(name, v)` | write raw float64 to histogram; routes to prom bridge or Reservoir |
+| `Registry.ObserveSeconds(name, d)` | sugar for `Observe(name, d.Seconds())`; use for latency measurements |
 | `Sink` / `TextSink` / `JSONSink` | output formatters |
