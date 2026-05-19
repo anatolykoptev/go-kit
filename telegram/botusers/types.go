@@ -15,9 +15,8 @@ const (
 	// SoftOptIn is the default. Data is written for every user;
 	// users can remove their record via Forget.
 	SoftOptIn
-	// HardOptIn requires explicit opt-in before any data is stored.
-	// Upsert is a no-op until the user is marked opted-in by the caller.
-	HardOptIn
+	// Note: a future HardOptIn mode (opted_in BOOLEAN column + MarkOptedIn/IsOptedIn API)
+	// is planned for a later release.
 )
 
 // TelegramUser carries the fields available from Telegram InitData or a

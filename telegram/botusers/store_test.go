@@ -31,9 +31,9 @@ func TestSentinelErrors(t *testing.T) {
 	}
 }
 
-// TestPrivacyEnum verifies the three privacy values are distinct.
+// TestPrivacyEnum verifies the two privacy values are distinct.
 func TestPrivacyEnum(t *testing.T) {
-	vals := []botusers.Privacy{botusers.Off, botusers.SoftOptIn, botusers.HardOptIn}
+	vals := []botusers.Privacy{botusers.Off, botusers.SoftOptIn}
 	for i, a := range vals {
 		for j, b := range vals {
 			if i != j && a == b {

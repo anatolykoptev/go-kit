@@ -8,9 +8,9 @@
 //     or when the bot has no legitimate interest to store user data.
 //   - SoftOptIn (default) — data is written for every user that sends a
 //     message; users can call Forget to delete their record.
-//   - HardOptIn — data is written only after the caller explicitly marks
-//     the user as opted-in via a separate product flow. Upsert is a no-op
-//     until the user is opted-in.
+//
+// A future HardOptIn mode is planned; it will require an explicit opted_in
+// column, MarkOptedIn/IsOptedIn API, and a separate gate in Upsert.
 //
 // # Multi-tenancy
 //

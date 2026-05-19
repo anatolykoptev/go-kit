@@ -62,7 +62,7 @@
   Core interfaces and types:
   - `Store` interface: `UpsertFromInitData`, `UpsertFromCommand`, `Get`, `List`,
     `Aggregate`, `Forget`, `DeleteInactive` — all scoped by `(bot_id, tg_id)` PK
-  - `Privacy` enum: `Off` (no-op), `SoftOptIn` (default), `HardOptIn`
+  - `Privacy` enum: `Off` (no-op), `SoftOptIn` (default); `HardOptIn` planned for a future release
   - `Cursor` — opaque keyset pagination token (`last_seen_at DESC, tg_id ASC`)
   - `SchemaSQL()` — embedded DDL via `go:embed`; idempotent (`IF NOT EXISTS`)
 
