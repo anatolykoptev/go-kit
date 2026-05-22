@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -41,6 +42,25 @@ func parseLabeled(s string) (name string, keys, vals []string) {
 	return name, keys, vals
 }
 
+// histogramConfig holds per-metric histogram options set via RegisterHistogram.
+type histogramConfig struct {
+	buckets []float64
+}
+
+// HistogramOption is a functional option for RegisterHistogram.
+type HistogramOption func(*histogramConfig)
+
+// WithBuckets sets explicit histogram bucket boundaries for the named metric.
+// Buckets must be in strictly ascending order (the Prometheus client validates
+// this at registration time). Use this for non-time histograms such as bytes,
+// queue depth, or request counts — the seconds-shaped default is a poor fit.
+//
+//	reg.RegisterHistogram("gojob_oversize_bytes",
+//	    metrics.WithBuckets([]float64{1024, 4096, 16384, 65536, 262144, 1048576, 4194304}))
+func WithBuckets(buckets []float64) HistogramOption {
+	return func(c *histogramConfig) { c.buckets = buckets }
+}
+
 // promBridge отражает операции Registry в prometheus.DefaultRegisterer.
 //
 // Maps are split per-kind (no-label vs Vec) to avoid type-collision panics
@@ -49,13 +69,14 @@ func parseLabeled(s string) (name string, keys, vals []string) {
 // *prometheus.CounterVec under one key caused a forcetypeassert panic in
 // production (go-search, ~206 restarts over 52h).
 type promBridge struct {
-	namespace        string
-	countersNoLabel  sync.Map // base name → prometheus.Counter
-	countersVec      sync.Map // base name → *prometheus.CounterVec
-	gaugesNoLabel    sync.Map // base name → prometheus.Gauge
-	gaugesVec        sync.Map // base name → *prometheus.GaugeVec
+	namespace         string
+	countersNoLabel   sync.Map // base name → prometheus.Counter
+	countersVec       sync.Map // base name → *prometheus.CounterVec
+	gaugesNoLabel     sync.Map // base name → prometheus.Gauge
+	gaugesVec         sync.Map // base name → *prometheus.GaugeVec
 	histogramsNoLabel sync.Map // base name → prometheus.Histogram
-	histogramsVec    sync.Map // base name → *prometheus.HistogramVec
+	histogramsVec     sync.Map // base name → *prometheus.HistogramVec
+	histogramConfigs  sync.Map // base name → *histogramConfig (pre-registered custom buckets)
 }
 
 var nsRe = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
@@ -92,4 +113,37 @@ func FromEnv(defaultNamespace string) *Registry {
 		return NewPrometheusRegistry(defaultNamespace)
 	}
 	return NewRegistry()
+}
+
+// RegisterHistogram pre-configures bucket boundaries for the named histogram
+// before the first Observe call. Subsequent Observe calls for name will use
+// the configured buckets instead of the seconds-shaped default.
+//
+// Safe to call on a nil *Registry (no-op). Idempotent: a second call with the
+// same name is silently ignored — the first registration wins, matching the
+// semantics of the underlying prom collector (buckets are locked at first
+// Observe).
+//
+// name must be a plain metric name (no label syntax); labels are applied at
+// Observe time via metrics.Label().
+//
+// Example:
+//
+//	reg.RegisterHistogram("gojob_oversize_bytes",
+//	    metrics.WithBuckets([]float64{1024, 4096, 16384, 65536, 262144, 1048576, 4194304}))
+//	reg.Observe("gojob_oversize_bytes", float64(len(payload)))
+func (r *Registry) RegisterHistogram(name string, opts ...HistogramOption) {
+	if r == nil || r.promBridge == nil {
+		return
+	}
+	cfg := &histogramConfig{
+		buckets: prometheus.ExponentialBuckets(0.001, 2, 16), // seconds default
+	}
+	for _, o := range opts {
+		o(cfg)
+	}
+	// LoadOrStore: first registration wins; subsequent calls for the same name
+	// are no-ops. This prevents bucket mutation after the first Observe has
+	// already locked the prom histogram in place.
+	r.promBridge.histogramConfigs.LoadOrStore(name, cfg)
 }
