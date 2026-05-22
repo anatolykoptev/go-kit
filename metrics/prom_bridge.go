@@ -215,7 +215,7 @@ func (b *promBridge) bucketsFor(base string) []float64 {
 	if v, ok := b.histogramConfigs.Load(base); ok {
 		return v.(*histogramConfig).buckets //nolint:forcetypeassert // map holds only *histogramConfig
 	}
-	return prometheus.ExponentialBuckets(0.001, 2, 16)
+	return defaultSecondsBuckets
 }
 
 func (b *promBridge) histogramNoLabels(base string) prometheus.Histogram {
