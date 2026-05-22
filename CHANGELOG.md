@@ -4,6 +4,18 @@
 
 ### Added
 
+* **metrics:** `Registry.RegisterHistogram(name string, opts ...HistogramOption)` and
+  `metrics.WithBuckets([]float64)` — per-metric bucket configuration. Call
+  `RegisterHistogram` before the first `Observe` to opt into custom bucket boundaries
+  (e.g. byte ranges, queue depth). Unconfigured histograms keep the seconds-shaped
+  default (`ExponentialBuckets(0.001, 2, 16)`) — fully backwards compatible.
+
+  ```go
+  reg.RegisterHistogram("gojob_oversize_bytes",
+      metrics.WithBuckets([]float64{1024, 4096, 16384, 65536, 262144, 1048576, 4194304}))
+  reg.Observe("gojob_oversize_bytes", float64(len(payload)))
+  ```
+
 * **metrics:** `Registry.Observe(name string, v float64)` — direct histogram write,
   routes to the prom bridge (Prometheus-backed registry) or in-mem Reservoir
   (in-memory registry). Matches the `StartTimer.Stop()` routing invariant.
