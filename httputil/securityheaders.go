@@ -21,7 +21,13 @@ import "net/http"
 //   - pass WithCacheControl("no-store") to SecurityHeaders, or
 //   - call w.Header().Set("Cache-Control", "no-store") directly.
 const (
-	defaultCSP               = "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"
+	// defaultCSP includes 'self' in style-src so that <link rel="stylesheet">
+	// served from the same origin loads. The prior default
+	// (`style-src 'unsafe-inline'` without 'self') permitted inline <style>
+	// blocks but blocked every <link rel="stylesheet"> — including own assets.
+	// Confirmed via go-nerv admin pm7.css browser block (2026-05-22).
+	// Callers needing a stricter or different policy pass WithCSP explicitly.
+	defaultCSP               = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
 	defaultReferrerPolicy    = "strict-origin-when-cross-origin"
 	defaultPermissionsPolicy = "camera=(), microphone=(), geolocation=()"
 	defaultXSSProtection     = "0"

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* **httputil:** `SecurityHeaders` default CSP now includes `'self'` in
+  `style-src` (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'`).
+  The previous default omitted `'self'`, permitting only inline `<style>` blocks and
+  blocking every `<link rel="stylesheet">` regardless of origin — including the
+  service's own `/static/*.css`. Discovered on go-nerv admin (2026-05-22): pm7.css
+  served 200+text/css but the browser silently cancelled the stylesheet, leaving
+  every admin page unstyled. Pure RELAXATION (adds `'self'`); consumers that
+  override via `WithCSP(...)` are unaffected.
+
 ### Added
 
 * **metrics:** `Registry.RegisterHistogram(name string, opts ...HistogramOption)` and

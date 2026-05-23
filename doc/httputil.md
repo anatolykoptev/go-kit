@@ -47,7 +47,7 @@ Sets a conservative HTTP security header set on the `ResponseWriter`:
 
 | Header | Default |
 |--------|---------|
-| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'unsafe-inline'` |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` |
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |

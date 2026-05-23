@@ -8,11 +8,11 @@ import (
 	"github.com/anatolykoptev/go-kit/httputil"
 )
 
-// Default CSP is go-nerv's stricter policy: script-src 'self' (no 'unsafe-inline').
-// oxpulse-admin overrides via WithCSP to allow 'unsafe-inline'.
+// Default CSP includes 'self' in style-src so own /static/*.css loads.
+// oxpulse-admin overrides via WithCSP to also allow inline scripts.
 
 const (
-	defaultCSP               = "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"
+	defaultCSP               = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
 	adminCSP                 = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
 	defaultReferrerPolicy    = "strict-origin-when-cross-origin"
 	defaultPermissionsPolicy = "camera=(), microphone=(), geolocation=()"
