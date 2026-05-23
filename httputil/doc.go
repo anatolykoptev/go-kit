@@ -5,7 +5,7 @@
 // SecurityHeaders sets a conservative set of HTTP security headers on a
 // ResponseWriter. Defaults follow go-nerv stricter policy:
 //
-//   - Content-Security-Policy: default-src self; script-src self; style-src unsafe-inline
+//   - Content-Security-Policy: default-src self; script-src self; style-src self unsafe-inline
 //   - X-Content-Type-Options: nosniff
 //   - X-Frame-Options: DENY
 //   - Referrer-Policy: strict-origin-when-cross-origin
