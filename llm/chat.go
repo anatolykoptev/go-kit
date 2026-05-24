@@ -264,6 +264,27 @@ func WithJSONSchema(name string, schema any) ChatOption {
 	}
 }
 
+// WithJSONMode sets the response format to plain JSON object mode
+// ({"type":"json_object"}). Use when the caller will json.Unmarshal the
+// content без strict schema enforcement (e.g. dynamic shape, or provider
+// что не поддерживает json_schema like older Gemini Flash).
+//
+// Difference vs WithJSONSchema: no schema validation server-side, no
+// guaranteed shape — model may emit valid JSON in any shape. Caller is
+// responsible для unmarshal + validation.
+func WithJSONMode() ChatOption {
+	return func(c *chatConfig) {
+		c.responseFormat = map[string]any{"type": "json_object"}
+	}
+}
+
+// WithResponseFormat sets the raw response format payload — escape hatch
+// для providers с custom shapes не covered by WithJSONMode / WithJSONSchema.
+// Pass nil to clear an earlier-applied responseFormat в the same chain.
+func WithResponseFormat(format any) ChatOption {
+	return func(c *chatConfig) { c.responseFormat = format }
+}
+
 // Chat sends a chat completion request and returns the full response
 // including tool calls, finish reason, and token usage.
 func (c *Client) Chat(ctx context.Context, messages []Message, opts ...ChatOption) (*ChatResponse, error) {
