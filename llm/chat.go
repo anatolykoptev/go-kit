@@ -163,6 +163,7 @@ type chatConfig struct {
 	responseFormat    any
 	temperature       *float64
 	maxTokens         *int
+	model             string
 	timestampMessages bool
 }
 
@@ -182,6 +183,9 @@ func (cfg *chatConfig) apply(req *ChatRequest) {
 	}
 	if cfg.maxTokens != nil {
 		req.MaxTokens = *cfg.maxTokens
+	}
+	if cfg.model != "" {
+		req.Model = cfg.model
 	}
 	if cfg.timestampMessages {
 		applyMessageTimestamps(req.Messages)
@@ -206,6 +210,27 @@ func WithChatTemperature(t float64) ChatOption {
 // WithChatMaxTokens overrides the max tokens for a single call.
 func WithChatMaxTokens(n int) ChatOption {
 	return func(c *chatConfig) { c.maxTokens = &n }
+}
+
+// WithChatModel overrides the model id for a single call. Empty string —
+// no override (client's construction-time model wins).
+//
+// Use cases:
+//   - per-attempt timeout chain loop (go-search): single client, caller
+//     iterate'ит models с per-attempt ctx timeout, передаёт next model
+//     per attempt.
+//   - per-call model pool simplification (go-wowa): один client, передаёт
+//     workflow author's chosen model per call вместо cached per-model clients.
+//   - hedged dual-provider с shared endpoint (dozor): один client, hedge
+//     fast-vs-deep model picks без duplicate Provider abstraction.
+//
+// Interaction с WithEndpoints: per-call WithChatModel overrides Model в
+// request **до** endpoint cycling начинается. Каждый endpoint затем sees
+// этот overridden model в его epReq copy — но если Endpoint.Model != ""
+// сама перезаписывает (endpoint config wins back). Для bypass endpoint
+// cycling — use client без WithEndpoints + per-call model.
+func WithChatModel(model string) ChatOption {
+	return func(c *chatConfig) { c.model = model }
 }
 
 // WithMessageTimestamps prepends a bracketed UTC timestamp to each
