@@ -1,5 +1,104 @@
 # Changelog
 
+## [0.38.0](https://github.com/anatolykoptev/go-kit/compare/v0.37.0...v0.38.0) (2026-05-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **telegram/kb:** Cache-Control is no longer set by default. Any handler relying on SecurityHeaders for implicit no-store must add an explicit WithCacheControl("no-store") or equivalent w.Header().Set call.
+
+### Features
+
+* **embed,sparse:** WithBearerToken option ([ccf90ce](https://github.com/anatolykoptev/go-kit/commit/ccf90cee7b198996113f010af1140580f71dad40))
+* **embed,sparse:** WithBearerToken option for self-hosted endpoints ([feeb59c](https://github.com/anatolykoptev/go-kit/commit/feeb59ce846340c0e0514016c2a5c79d59e2478b))
+* **embed:** client-side chunking on shared Client (lift from memdb-go HTTPEmbedder) ([#48](https://github.com/anatolykoptev/go-kit/issues/48)) ([d3ebe14](https://github.com/anatolykoptev/go-kit/commit/d3ebe1413868e1b272702ad7f3e0a47e8ad6d940))
+* **embed:** v2 NewClient auto-resolves EMBED_TOKEN env ([15c01f7](https://github.com/anatolykoptev/go-kit/commit/15c01f79693b13e0958dbe9dda05badc7776d0ac))
+* **embed:** v2 NewClient auto-resolves EMBED_TOKEN env for bearer auth ([0d0e5d1](https://github.com/anatolykoptev/go-kit/commit/0d0e5d17c8155e6baabd0725328a46096e164816))
+* **hedge:** DoFallback for primary→fallback chains ([aa0a636](https://github.com/anatolykoptev/go-kit/commit/aa0a636831b54b3f18e1fbfe6d0754d396aea26c))
+* **httputil:** ClientIP with trusted-header validation ([b3bd98e](https://github.com/anatolykoptev/go-kit/commit/b3bd98e86fd1f95282aa6f3ff6af6192dde3ef8f))
+* **httputil:** SecurityHeaders with CSP option ([263edee](https://github.com/anatolykoptev/go-kit/commit/263edee14ff5aaa0a853c4195a2ea57177fb0a6a))
+* **llm/budget:** token usage tracker with warn/switch/hard-stop tiers ([a8b0919](https://github.com/anatolykoptev/go-kit/commit/a8b09198e96be490e96dbde6f7799a5017c434e7))
+* **llm/budget:** token usage tracker with warn/switch/hard-stop tiers ([c84187e](https://github.com/anatolykoptev/go-kit/commit/c84187ef872c7972226f1e7a823fd62f8ac5cab8))
+* **llm:** add ParseModelFallbackChain + BuildModelChainEndpoints helpers ([61c1a3f](https://github.com/anatolykoptev/go-kit/commit/61c1a3f6dd4505e1f675ca636df00557b56fc696))
+* **llm:** Completer + NoOp + NewOptional for opt-in consumers ([#83](https://github.com/anatolykoptev/go-kit/issues/83)) ([2811e06](https://github.com/anatolykoptev/go-kit/commit/2811e06e5a629bfcfc2adb644574bf8f3c98a80d))
+* **llm:** MemDB-aligned message metadata + WithMessageTimestamps option ([41e7cb8](https://github.com/anatolykoptev/go-kit/commit/41e7cb83343ef72e2c9972bf4855cf563460aff5))
+* **llm:** parse Retry-After header into APIError.RetryAfter ([#85](https://github.com/anatolykoptev/go-kit/issues/85)) ([fa2697c](https://github.com/anatolykoptev/go-kit/commit/fa2697c1e519ca8cab6b69e4f1673827196fc429))
+* **llm:** ParseModelFallbackChain + BuildModelChainEndpoints helpers ([d17261f](https://github.com/anatolykoptev/go-kit/commit/d17261f24b5d32cc423d90010bf59aeb4522d429))
+* **llm:** prompt caching support — Anthropic cache_control + universal cache token visibility ([f6a6b8a](https://github.com/anatolykoptev/go-kit/commit/f6a6b8aa7ea510242cf8321bdf25ddaf72234d96))
+* **llm:** WithChatModel ChatOption (per-call override) ([96d42b0](https://github.com/anatolykoptev/go-kit/commit/96d42b0933bce3f43b6bb3844a40fa183896d6fa))
+* **llm:** WithChatModel ChatOption for per-call model override ([514a64c](https://github.com/anatolykoptev/go-kit/commit/514a64c382e38b1d3d5c9c0bef01400df657215d))
+* **llm:** WithEndpointAttemptObserver Option ([fc96b7e](https://github.com/anatolykoptev/go-kit/commit/fc96b7e494bf98e55ed3c12ccc4b4c63a03ccf40))
+* **llm:** WithEndpointAttemptObserver Option for per-endpoint observability ([ff4a9d4](https://github.com/anatolykoptev/go-kit/commit/ff4a9d417da320f01f500409348ff8722ee548a2))
+* **llm:** WithJSONMode + WithResponseFormat ChatOptions ([b686a2d](https://github.com/anatolykoptev/go-kit/commit/b686a2d4b0039474a9e7ea85b533cb921c6686dc))
+* **llm:** WithJSONMode + WithResponseFormat ChatOptions ([53a2846](https://github.com/anatolykoptev/go-kit/commit/53a2846060b7a3f088270002897e6800a7dfde52))
+* **metrics/httpmw:** WithStdlibPattern convenience option ([#55](https://github.com/anatolykoptev/go-kit/issues/55)) ([64eb877](https://github.com/anatolykoptev/go-kit/commit/64eb877071cbe297ea54b1c26abf32a3ecb28194))
+* **metrics:** ObserveSeconds API + Registry.Observe ([#87](https://github.com/anatolykoptev/go-kit/issues/87)) ([518d7f9](https://github.com/anatolykoptev/go-kit/commit/518d7f9e1527ff3973f9ecbb1f930f061591a01c))
+* **metrics:** per-histogram custom buckets via RegisterHistogram + WithBuckets ([#89](https://github.com/anatolykoptev/go-kit/issues/89)) ([a0070e3](https://github.com/anatolykoptev/go-kit/commit/a0070e391dddb98821c24c6686aa0423308256b6))
+* **ratelimit:** Redis sliding-window limiter (login flows) ([dae4d84](https://github.com/anatolykoptev/go-kit/commit/dae4d84c8aff4fd549a765c51b27165092965a9b))
+* **rerank:** VoyageRerankClient + JinaRerankClient + llm.ExtractJSON fix ([#39](https://github.com/anatolykoptev/go-kit/issues/39)) ([9e6a4bb](https://github.com/anatolykoptev/go-kit/commit/9e6a4bbc90b21f12fb6900a1ca1c64221e67c7c8))
+* **rerank:** WithFallback now accepts any Reranker (not just *Client) ([#41](https://github.com/anatolykoptev/go-kit/issues/41)) ([98c6678](https://github.com/anatolykoptev/go-kit/commit/98c66781cb036253fbf8bd1dab6570791fc43185))
+* **score:** add 5-tier Severity vocabulary + helpers ([#46](https://github.com/anatolykoptev/go-kit/issues/46)) ([97cd9b5](https://github.com/anatolykoptev/go-kit/commit/97cd9b563fca5166d0a8221c4743e6a31f8ae601))
+* **score:** new package — ConfidenceFromScore + generic Bucket ([#45](https://github.com/anatolykoptev/go-kit/issues/45)) ([7ef7cca](https://github.com/anatolykoptev/go-kit/commit/7ef7ccad9a35a5b0e4bbca8ee1fb61063a634cae))
+* **session:** integrate go-session into go-kit ([01b9938](https://github.com/anatolykoptev/go-kit/commit/01b9938fa2f95bd06988475e95592ad25a599e6e))
+* **sparse,rerank:** v2 NewClient auto-resolves EMBED_TOKEN env ([9a45dca](https://github.com/anatolykoptev/go-kit/commit/9a45dcafa18f95f6fef572f13031d9c6bf8bc409))
+* **sparse,rerank:** v2 NewClient auto-resolves EMBED_TOKEN env ([ce65274](https://github.com/anatolykoptev/go-kit/commit/ce65274014028c4bddde74e90daf3c13df12284e))
+* **telegram/botusers:** reusable bot-user store package (v0.62.0) ([#88](https://github.com/anatolykoptev/go-kit/issues/88)) ([2cdb62a](https://github.com/anatolykoptev/go-kit/commit/2cdb62a8078fd6edc535ef1518e0ba4971ac08fd))
+* **telegram/callback:** HMAC-signed CallbackData codec ([#74](https://github.com/anatolykoptev/go-kit/issues/74)) ([9a6a735](https://github.com/anatolykoptev/go-kit/commit/9a6a73518e676877576def3e6342837769ce05d3))
+* **telegram/cmd:** predicate filters — chat-type, user, regex, custom (aiogram-style) ([#75](https://github.com/anatolykoptev/go-kit/issues/75)) ([90e9307](https://github.com/anatolykoptev/go-kit/commit/90e93071b05d529260428e172fb5f482e759995c))
+* **telegram/cmd:** Router — fluent text-command router with auto /help ([#63](https://github.com/anatolykoptev/go-kit/issues/63)) ([d8495b8](https://github.com/anatolykoptev/go-kit/commit/d8495b8cce02e453fbbbe2228b5262be1211e065))
+* **telegram/forum:** supergroup forum-topics manager + cmd predicates (v0.60.1) ([#78](https://github.com/anatolykoptev/go-kit/issues/78)) ([9c7ed4b](https://github.com/anatolykoptev/go-kit/commit/9c7ed4b36986b3701d2564742ae5f4659404b356))
+* **telegram/fsm:** conversation Machine + MemoryStore + PostgresStore ([#60](https://github.com/anatolykoptev/go-kit/issues/60)) ([03d056a](https://github.com/anatolykoptev/go-kit/commit/03d056ac2ee10233c0a87dc1adb5a98b9595508e))
+* **telegram/kb:** keyboard builder + Registry (vendored from go-telegram/ui MIT) ([#59](https://github.com/anatolykoptev/go-kit/issues/59)) ([64702a6](https://github.com/anatolykoptev/go-kit/commit/64702a6937ae85f6dc27dd51ed80d1e978edc8f2))
+* **telegram/kb:** ReplyBuilder — persistent reply keyboard with request_*+web_app buttons ([#73](https://github.com/anatolykoptev/go-kit/issues/73)) ([5dd9076](https://github.com/anatolykoptev/go-kit/commit/5dd90765fa81d506fcda8a62af5ebc5142cce663))
+* **telegram/middleware:** AutoRespond + DeletePrev + OperatorOnly + RateLimit + ShadowBan + Metrics + Recover ([#58](https://github.com/anatolykoptev/go-kit/issues/58)) ([888e58a](https://github.com/anatolykoptev/go-kit/commit/888e58ab46af462688c5374444dd516fbf4e0386))
+* **telegram/middleware:** NewChatQuota — anti-spam unique-chat counter ([#62](https://github.com/anatolykoptev/go-kit/issues/62)) ([eadbdeb](https://github.com/anatolykoptev/go-kit/commit/eadbdeb205938bfb69b1880d34e82ff77541fd72))
+* **telegram/middleware:** Tracing — span-per-update via OTel ([#71](https://github.com/anatolykoptev/go-kit/issues/71)) ([7a1ed2d](https://github.com/anatolykoptev/go-kit/commit/7a1ed2d913747028641d733b314549d6bc26893c))
+* **telegram/middleware:** WebhookSecretToken — timing-attack-safe header validation ([#69](https://github.com/anatolykoptev/go-kit/issues/69)) ([9d1fc4a](https://github.com/anatolykoptev/go-kit/commit/9d1fc4ac12682d67ab1073c9c7fc22545ae3a0a0))
+* **telegram/miniapp:** add SavePreparedInlineMessage helper + BotAPI adapter ([#81](https://github.com/anatolykoptev/go-kit/issues/81)) ([a2453b5](https://github.com/anatolykoptev/go-kit/commit/a2453b56710c58ffc521341e29894318f6250cb9))
+* **telegram/miniapp:** initData signature validator (per Telegram Bot API spec) ([#76](https://github.com/anatolykoptev/go-kit/issues/76)) ([d845318](https://github.com/anatolykoptev/go-kit/commit/d84531840b63266d1ef1d08eea5e01330fc2358f))
+* **telegram/miniapp:** server-side Reply + SendInvoice + CreateInvoiceLink (v0.60.0) ([#77](https://github.com/anatolykoptev/go-kit/issues/77)) ([266563c](https://github.com/anatolykoptev/go-kit/commit/266563c52d02ead5ab65670113c2a228d0b1f6d6))
+* **telegram/tgapi5:** default tgbotapi/v5 adapter impls ([#66](https://github.com/anatolykoptev/go-kit/issues/66)) ([cd45336](https://github.com/anatolykoptev/go-kit/commit/cd4533686714606b26a7adf9c4b777834e1e9dfe))
+* **telegram:** add Locale (YAML i18n) at root pkg ([#57](https://github.com/anatolykoptev/go-kit/issues/57)) ([0c54572](https://github.com/anatolykoptev/go-kit/commit/0c545723cca18062110133f1a52fa36cbad4a1bd))
+* **telegram:** batched copy/delete broadcast + setMessageReaction (v0.60.2) ([#79](https://github.com/anatolykoptev/go-kit/issues/79)) ([df1156c](https://github.com/anatolykoptev/go-kit/commit/df1156c5f851a27885b9eade8e1ab4de87d37993))
+* **telegram:** smart HTML sanitizer + format auto-detect + PrepareForTelegram ([#43](https://github.com/anatolykoptev/go-kit/issues/43)) ([96fac07](https://github.com/anatolykoptev/go-kit/commit/96fac07d8d092643b15149a2b586a520aec8e584))
+* **telegram:** transport swap tgbotapi/v5 (dead) → OvyFlash/telegram-bot-api (active) ([#70](https://github.com/anatolykoptev/go-kit/issues/70)) ([4893815](https://github.com/anatolykoptev/go-kit/commit/48938156cea18a12336f34eed06e31f7cbd5aad4))
+* **telegram:** v0.57.0 — polish (review residuals) ([#64](https://github.com/anatolykoptev/go-kit/issues/64)) ([5fe4c04](https://github.com/anatolykoptev/go-kit/commit/5fe4c04f5b1a906643f2cf26b4f10ef9ffe28bb8))
+* **telegram:** WithCancelCmds (fsm) + broadcast.Pacer + ops.Notifier ([#67](https://github.com/anatolykoptev/go-kit/issues/67)) ([b3e330f](https://github.com/anatolykoptev/go-kit/commit/b3e330ffacfa23d356c45e3914af134f70692aee))
+* **tracing/httpmw:** drop-in *Mux wrapper + chi.Walk auto-registration ([#51](https://github.com/anatolykoptev/go-kit/issues/51)) ([f9f60d4](https://github.com/anatolykoptev/go-kit/commit/f9f60d4a14888a083548c239587cd180820a2cf2))
+* **tracing/httpmw:** emit OTEL code.* attributes from handler reflection ([#49](https://github.com/anatolykoptev/go-kit/issues/49)) ([12d3ba3](https://github.com/anatolykoptev/go-kit/commit/12d3ba38314dad69ad0549837290e3eebbf59f7b))
+* **tracing/httpmw:** gin route adapter + multi-framework walk docstrings ([#52](https://github.com/anatolykoptev/go-kit/issues/52)) ([fc3ef08](https://github.com/anatolykoptev/go-kit/commit/fc3ef08a5d9a3c8515080d516fa6ebf20ae7b95f))
+* **tracing/httpmw:** startup-time route registry for OTEL code.* attrs ([1e6fe48](https://github.com/anatolykoptev/go-kit/commit/1e6fe4868e2dd5a0b2463a57ef59fd0aeb6de972))
+* **tracing/httpmw:** startup-time route registry for OTEL code.* attrs ([2e13509](https://github.com/anatolykoptev/go-kit/commit/2e13509c6a49a2e0eb280c5c16585978db204aaf))
+* **tracing:** correctness polish — Start scope, bad-endpoint graceful, typed mcp params, nil-ctx, shutdown doc ([#47](https://github.com/anatolykoptev/go-kit/issues/47)) ([7f17ada](https://github.com/anatolykoptev/go-kit/commit/7f17ada8522dfe61f86abd5d87a47a10ba268868))
+
+
+### Bug Fixes
+
+* **cache:** embed role + rerank truncation cap in cache keys (PR C — v0.39.0) ([#40](https://github.com/anatolykoptev/go-kit/issues/40)) ([c5fcc99](https://github.com/anatolykoptev/go-kit/commit/c5fcc990b33ae1df7b7c25915ebbd884e7e74501))
+* **httputil:** drop slog.Warn, document ClientIP trust model ([9daa6ab](https://github.com/anatolykoptev/go-kit/commit/9daa6ab59972b5d7c89855394841874799db71a5))
+* **httputil:** include 'self' in defaultCSP style-src ([#90](https://github.com/anatolykoptev/go-kit/issues/90)) ([012dcdd](https://github.com/anatolykoptev/go-kit/commit/012dcddb744f9b503c172a5fa93cbf960247cb4c))
+* **llm:** strip chat_time from the wire + clone request messages ([bcb9338](https://github.com/anatolykoptev/go-kit/commit/bcb933800cf50afb50d459670154123ea6fde61f))
+* **llm:** strip chat_time from wire + clone request messages ([5413f79](https://github.com/anatolykoptev/go-kit/commit/5413f7972ebb44118c7276b81363232ba07d69fe))
+* **metrics:** prevent panic on prom_bridge shape collisions ([#37](https://github.com/anatolykoptev/go-kit/issues/37)) ([c8a4f2e](https://github.com/anatolykoptev/go-kit/commit/c8a4f2e3f4f7819c410d07d63c84fd93ea60e80d))
+* **ratelimit:** SlidingWindow tidy, fail-closed test, clock injection, fail-fast constructor ([70fc367](https://github.com/anatolykoptev/go-kit/commit/70fc3679ecdbc25f03dbff9887b5cac38f90245a))
+* **telegram/cmd:** AutoHelp takes Handler arg (v0.57.0 API contradiction) ([#68](https://github.com/anatolykoptev/go-kit/issues/68)) ([b7bf40a](https://github.com/anatolykoptev/go-kit/commit/b7bf40a065fff78a009d70f3d8d3cdf8cb562ea4))
+* **telegram/miniapp:** include signature in HMAC data_check_string ([#84](https://github.com/anatolykoptev/go-kit/issues/84)) ([90c99b2](https://github.com/anatolykoptev/go-kit/commit/90c99b2f2dbe2a353e2c164c36ad8341c5b4fe64))
+* **telegram/tgapi5,miniapp:** nil-resp defence-in-depth + enumerate accepted result types ([#82](https://github.com/anatolykoptev/go-kit/issues/82)) ([b6e2a4f](https://github.com/anatolykoptev/go-kit/commit/b6e2a4fd0302b9ee8369f00b9e14228c846d4aab))
+* **telegram:** v0.56.1 concurrent-safety + error propagation followups ([#61](https://github.com/anatolykoptev/go-kit/issues/61)) ([601d467](https://github.com/anatolykoptev/go-kit/commit/601d467302e5842567bd5183f81e66c8225e6499))
+* **telegram:** v0.60.3 quality-review remediation (Reactor rename, broadcast Pacer, miniapp adapters) ([#80](https://github.com/anatolykoptev/go-kit/issues/80)) ([e7189cf](https://github.com/anatolykoptev/go-kit/commit/e7189cf24b553da8ea8ee25c3ae2f6fb85640c5f))
+* **tracing/httpmw:** stdlibFormatter must not duplicate the HTTP method ([5e37087](https://github.com/anatolykoptev/go-kit/commit/5e370871984f3aa0b6f9a3e6f21d3ddb3ed78a2f))
+
+
+### Performance
+
+* **telegram:** Locale cache compiled templates + zero-alloc hot path ([#72](https://github.com/anatolykoptev/go-kit/issues/72)) ([b106021](https://github.com/anatolykoptev/go-kit/commit/b1060216f3938287fe6a5ef8811795a462da8d65))
+
+
+### Documentation
+
+* **changelog:** retitle botusers entry to v0.65.0 (v0.62-v0.64 already taken) ([842d273](https://github.com/anatolykoptev/go-kit/commit/842d273d0ac963018fe6191ccf94a00947ce293c))
+* per-package specs for llm, retry, hedge, embed, rerank, score, metrics, ([#86](https://github.com/anatolykoptev/go-kit/issues/86)) ([6ac3e0c](https://github.com/anatolykoptev/go-kit/commit/6ac3e0c05035a2b26f21691988aee9c827159b20))
+
 ## [Unreleased]
 
 ### Fixed
