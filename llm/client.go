@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -248,8 +249,10 @@ func (c *Client) CompleteRaw(ctx context.Context, messages []Message, opts ...Ch
 
 func (c *Client) newRequest(messages []Message) *ChatRequest {
 	return &ChatRequest{
-		Model:       c.model,
-		Messages:    messages,
+		Model: c.model,
+		// Clone: per-request options (e.g. WithMessageTimestamps) mutate
+		// req.Messages in place; never mutate the caller's slice/structs.
+		Messages:    slices.Clone(messages),
 		Temperature: c.temperature,
 		MaxTokens:   c.maxTokens,
 	}

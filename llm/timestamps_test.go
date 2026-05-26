@@ -76,6 +76,42 @@ func TestApplyMessageTimestamps_BadChatTime(t *testing.T) {
 	}
 }
 
+// chat_time is not a standard OpenAI message field — strict gateways reject it
+// (HTTP 400 wrong_api_format). After materialization, ChatTime must be cleared
+// on EVERY message (string, multimodal, bad) so it never reaches the wire.
+func TestApplyMessageTimestamps_ClearsChatTimeFromWire(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "hello", ChatTime: "2026-05-04T06:30:00Z"},
+		{Role: "user", Content: []ContentPart{{Type: "text", Text: "mm"}}, ChatTime: "2026-05-04T06:31:00Z"},
+		{Role: "user", Content: "x", ChatTime: "garbage"},
+	}
+	applyMessageTimestamps(msgs)
+	for i, m := range msgs {
+		if m.ChatTime != "" {
+			t.Errorf("msg[%d] ChatTime not cleared (would leak chat_time to wire): %q", i, m.ChatTime)
+		}
+	}
+	if got, _ := msgs[0].Content.(string); !strings.HasPrefix(got, "[2026-05-04 06:30 UTC] ") {
+		t.Errorf("string content not materialized: %q", got)
+	}
+}
+
+// newRequest must clone the caller's messages — request-time options
+// (WithMessageTimestamps) mutate in place and must not corrupt the caller's
+// stored messages (e.g. dozor's session store round-trips ChatTime).
+func TestNewRequest_ClonesMessages(t *testing.T) {
+	c := &Client{model: "m"}
+	orig := []Message{{Role: "user", Content: "hi", ChatTime: "2026-05-04T06:30:00Z"}}
+	req := c.newRequest(orig)
+	applyMessageTimestamps(req.Messages)
+	if got, _ := orig[0].Content.(string); got != "hi" {
+		t.Errorf("caller Content mutated by request processing: %q", got)
+	}
+	if orig[0].ChatTime != "2026-05-04T06:30:00Z" {
+		t.Errorf("caller ChatTime mutated: %q", orig[0].ChatTime)
+	}
+}
+
 // Verify the WithMessageTimestamps ChatOption flips the chatConfig flag
 // and that apply() honors it on the request messages.
 func TestWithMessageTimestamps_End2End(t *testing.T) {
