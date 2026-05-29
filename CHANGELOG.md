@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.75.0](https://github.com/anatolykoptev/go-kit/compare/v0.74.1...v0.75.0) (2026-05-29)
+
+
+### Features
+
+* **embed:** add Cosine + semantic dedupe helpers (DedupeGroups, DedupeTexts) ([#102](https://github.com/anatolykoptev/go-kit/issues/102)) ([894cdf8](https://github.com/anatolykoptev/go-kit/commit/894cdf84e886784e3e55fd0c99f7e7606b1d58a2))
+* **pgutil:** version-tracked migration runner ([#100](https://github.com/anatolykoptev/go-kit/issues/100)) ([dfaad20](https://github.com/anatolykoptev/go-kit/commit/dfaad20eb0af0667a0f0795f6c4f2cb190e3e308))
+
 ## [Unreleased]
 
 ### Fixed
