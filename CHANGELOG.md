@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.77.0](https://github.com/anatolykoptev/go-kit/compare/v0.76.0...v0.77.0) (2026-05-30)
+
+
+### Features
+
+* **llm:** WithPerAttemptTimeout bounds each endpoint attempt in the chain ([#104](https://github.com/anatolykoptev/go-kit/issues/104)) ([3e5e80d](https://github.com/anatolykoptev/go-kit/commit/3e5e80d4f0fe2c6c8e4a2409f2b86e1338e0fa42))
+
 ## [Unreleased]
 
 ### Fixed
