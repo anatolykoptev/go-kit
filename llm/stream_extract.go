@@ -50,7 +50,7 @@ func (s *ExtractStream) Next() bool {
 
 // finalParse does the definitive unmarshal + optional validation.
 func (s *ExtractStream) finalParse() {
-	text := strings.TrimSpace(s.buf.String())
+	text, _ := splitReasoning(s.buf.String(), "")
 	if text == "" {
 		s.err = fmt.Errorf("streamextract: empty response")
 		return

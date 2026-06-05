@@ -191,3 +191,35 @@ func TestStreamExtract_Text(t *testing.T) {
 		t.Errorf("Text() = %q, want %q", text, "hello world")
 	}
 }
+
+func TestStreamExtract_StripsLeadingThink(t *testing.T) {
+	// Stream whose deltas accumulate to <think>r</think>{"ok":true}.
+	// finalParse must strip the think block before unmarshal.
+	chunks := []string{
+		`{"choices":[{"delta":{"content":"<think>reasoning here</think>"}}]}`,
+		`{"choices":[{"delta":{"content":"{\"ok\":true}"}}]}`,
+	}
+	srv := newTestServer(t, sseHandler(chunks))
+	c := llm.NewClient(srv.URL, "key", "model")
+
+	var result struct {
+		Ok bool `json:"ok"`
+	}
+	es, err := c.StreamExtract(t.Context(), []llm.Message{
+		{Role: "user", Content: "info"},
+	}, &result)
+	if err != nil {
+		t.Fatalf("StreamExtract: %v", err)
+	}
+	defer es.Close()
+
+	for es.Next() {
+		// Consume chunks.
+	}
+	if err := es.Err(); err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if !result.Ok {
+		t.Errorf("result.Ok = false, want true — <think> not stripped before unmarshal")
+	}
+}
