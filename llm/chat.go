@@ -152,6 +152,11 @@ type ChatResponse struct {
 	ToolCalls    []ToolCall
 	FinishReason string
 	Usage        *Usage
+	// Reasoning is the model chain-of-thought, separated from Content by
+	// splitReasoning. Populated for reasoning models (inline <think> or a
+	// reasoning_content field). Empty for normal models. Content is always
+	// the clean answer with any leading <think> block removed.
+	Reasoning string
 }
 
 // ChatOption configures a per-request Chat option.
