@@ -13,6 +13,10 @@ func TestSplitReasoning(t *testing.T) {
 		{"leading_ws", "  <think>r</think>answer", "", "answer", "r"},
 		{"think_not_leading", "answer text <think>not reasoning</think>", "", "answer text <think>not reasoning</think>", ""},
 		{"empty", "", "", "", ""},
+		{"uppercase_tag", "<THINK>r</THINK>{\"ok\":true}", "", "<THINK>r</THINK>{\"ok\":true}", ""},
+		{"spaced_open", "< think>r</think>x", "", "< think>r</think>x", ""},
+		{"orphan_close", "answer </think> more", "", "answer </think> more", ""},
+		{"empty_think", "<think></think>{\"ok\":true}", "", "{\"ok\":true}", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -80,6 +80,9 @@ type ImagePart struct {
 // Use this when you have raw bytes; pass the result as ImagePart.URL or directly
 // as an image_url.url value.
 func DataURI(mimeType string, data []byte) string {
+	if mimeType == "" {
+		mimeType = "image/png"
+	}
 	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 

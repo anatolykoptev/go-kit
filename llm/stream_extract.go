@@ -71,7 +71,9 @@ func (s *ExtractStream) finalParse() {
 	}
 }
 
-// Text returns the accumulated raw text so far.
+// Text returns the accumulated raw text so far. NOTE: pre-strip - a
+// reasoning model leading <think> block is still present here; the final
+// unmarshal in finalParse strips it. Use for debugging, not parsing.
 func (s *ExtractStream) Text() string { return s.buf.String() }
 
 // Err returns any error from streaming or parsing.
