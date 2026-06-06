@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.80.0](https://github.com/anatolykoptev/go-kit/compare/v0.79.0...v0.80.0) (2026-06-06)
+
+
+### Features
+
+* **admintable:** SQL-safe declarative filter-allowlist (FilterSpec) ([#109](https://github.com/anatolykoptev/go-kit/issues/109)) ([a3ffa5b](https://github.com/anatolykoptev/go-kit/commit/a3ffa5b93c396747d7bf7ba8aad1d3cc35e13157))
+
 ## [0.77.0](https://github.com/anatolykoptev/go-kit/compare/v0.76.0...v0.77.0) (2026-05-30)
 
 
