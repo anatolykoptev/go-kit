@@ -54,8 +54,8 @@
 //	        {Key: "plan",   SQLExpr: "plan_id",             Match: admintable.Eq,    Allowed: []string{"free", "pro"}},
 //	        {Key: "source", SQLExpr: "source",              Match: admintable.AnyOf},
 //	        // ILike: case-insensitive substring search across two columns, one bind.
-//	        // ?q=alice → (name ILIKE $5 ESCAPE '\' OR notes ILIKE $5 ESCAPE '\')
-//	        // with bound value "%alice%" — one arg, $5 referenced twice.
+//	        // ?q=alice → (name ILIKE $6 ESCAPE '\' OR notes ILIKE $6 ESCAPE '\')
+//	        // with bound value "%alice%" — one arg, $6 referenced twice.
 //	        {Key: "q",      SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
 //	    },
 //	}

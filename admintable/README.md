@@ -82,8 +82,8 @@ var filterSpec = admintable.FilterSpec{
         // AnyOf: ?source=organic&source=referral → col = ANY($N::text[])
         // pgx encodes []string as Postgres text[].
         {Key: "source", SQLExpr: "source",              Match: admintable.AnyOf},
-        // ILike: ?q=alice → (name ILIKE $5 ESCAPE '\' OR notes ILIKE $5 ESCAPE '\')
-        // One bind arg ("%alice%"), $5 referenced twice. Term is LIKE-escaped.
+        // ILike: ?q=alice → (name ILIKE $6 ESCAPE '\' OR notes ILIKE $6 ESCAPE '\')
+        // One bind arg ("%alice%"), $6 referenced twice. Term is LIKE-escaped.
         {Key: "q",      SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
     },
 }
