@@ -1,28 +1,41 @@
-// Package admintable provides a SQL-injection-safe declarative sortable-table
-// resolver for server-rendered admin pages.
+// Package admintable provides SQL-injection-safe declarative primitives for
+// server-rendered admin list pages: a sort resolver ([Spec]) and a WHERE-filter
+// builder ([FilterSpec]).
 //
 // # Security model
 //
-// Only [Column.SQLExpr] and [Column.TieBreakSQLExpr] values — author-declared
-// compile-time constants — ever reach an ORDER BY clause. URL sort and dir
-// parameters are equality-matched against a closed set of declared keys; they
-// are NEVER interpolated into SQL. Callers that pass [Spec.OrderBy] output to
-// fmt.Sprintf should annotate the call site with:
+// Both primitives share the same invariant: only author-declared compile-time
+// constants ever reach SQL — never raw URL parameter bytes.
+//
+//   - [Spec]: only [Column.SQLExpr] and [Column.TieBreakSQLExpr] reach ORDER BY.
+//     URL sort and dir parameters are equality-matched against a closed set of
+//     declared keys and are NEVER interpolated.
+//
+//   - [FilterSpec]: only [Filter.SQLExpr] values, the literal operators
+//     "= $N" / "= ANY($N::text[])", and the literal conjunctive " AND " ever
+//     appear in the returned WHERE conditions string. URL parameter values go
+//     exclusively into bind args — NEVER into the conditions string.
+//
+// Callers that pass [Spec.OrderBy] output to fmt.Sprintf should annotate:
 //
 //	//nolint:gosec // only Spec-owned SQLExpr + literal "ASC"/"DESC" + optional
 //	// literal " NULLS LAST" reach SQL; URL params are equality-matched against
 //	// a closed set, never interpolated.
 //
+// Callers that compose the [FilterSpec.Where] conds string should annotate:
+//
+//	//nolint:gosec // only FilterSpec-owned SQLExpr + literal operators + $N
+//	// placeholders reach SQL; URL values are bind args, never interpolated.
+//
 // # Startup validation
 //
-// Each [Spec] should call [Spec.Valid] at package-init or program startup to
-// catch misconfiguration early — it returns a non-nil error for zero sortable
-// columns, a [Spec.DefaultKey] that does not name a Sortable column, and
-// duplicate column keys.
+// Each [Spec] should call [Spec.Valid] and each [FilterSpec] should call
+// [FilterSpec.Valid] at package-init or program startup to catch
+// misconfiguration early rather than at query time.
 //
-// # Typical usage
+// # Typical usage (sort + filter together)
 //
-//	var mySpec = admintable.Spec{
+//	var tableSpec = admintable.Spec{
 //	    Columns: []admintable.Column{
 //	        {Key: "name",    Label: "Name",    Sortable: true,  SQLExpr: "u.name"},
 //	        {Key: "updated", Label: "Updated", Sortable: true,  SQLExpr: "u.updated_at", NullsLast: true},
@@ -32,19 +45,32 @@
 //	    DefaultDir: admintable.Desc,
 //	}
 //
+//	var filterSpec = admintable.FilterSpec{
+//	    Filters: []admintable.Filter{
+//	        {Key: "status", SQLExpr: "subscription_status", Match: admintable.Eq},
+//	        {Key: "plan",   SQLExpr: "plan_id",             Match: admintable.Eq,    Allowed: []string{"free", "pro"}},
+//	        {Key: "source", SQLExpr: "source",              Match: admintable.AnyOf},
+//	    },
+//	}
+//
 //	func init() {
-//	    if err := mySpec.Valid(); err != nil {
-//	        panic(err)
-//	    }
+//	    if err := tableSpec.Valid(); err != nil { panic(err) }
+//	    if err := filterSpec.Valid(); err != nil { panic(err) }
 //	}
 //
 //	func handleList(w http.ResponseWriter, r *http.Request) {
-//	    sort := r.URL.Query().Get("sort")
-//	    dir  := r.URL.Query().Get("dir")
-//	    st   := mySpec.Resolve(sort, dir) // always safe; falls back to defaults
+//	    q := r.URL.Query()
+//	    st := tableSpec.Resolve(q.Get("sort"), q.Get("dir"))
 //
+//	    conds, filterArgs := filterSpec.Where(q, 3) // $1/$2 = LIMIT/OFFSET
+//
+//	    baseQuery := "SELECT ... FROM subscriptions"
+//	    if conds != "" {
+//	        //nolint:gosec // only FilterSpec-owned SQLExpr + literal operators reach SQL
+//	        baseQuery += " WHERE " + conds
+//	    }
 //	    //nolint:gosec // only Spec-owned SQLExpr + literal "ASC"/"DESC" reach SQL
-//	    query := fmt.Sprintf("SELECT ... ORDER BY %s", mySpec.OrderBy(st))
+//	    baseQuery += fmt.Sprintf(" ORDER BY %s LIMIT $1 OFFSET $2", tableSpec.OrderBy(st))
 //	    // ...
 //	}
 package admintable
