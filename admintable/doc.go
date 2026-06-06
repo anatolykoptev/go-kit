@@ -71,6 +71,9 @@
 //	    }
 //	    //nolint:gosec // only Spec-owned SQLExpr + literal "ASC"/"DESC" reach SQL
 //	    baseQuery += fmt.Sprintf(" ORDER BY %s LIMIT $1 OFFSET $2", tableSpec.OrderBy(st))
+//
+//	    // args order matches the $N order: $1/$2 first, then the filter binds.
+//	    rows, err := db.Query(ctx, baseQuery, append([]any{limit, offset}, filterArgs...)...)
 //	    // ...
 //	}
 package admintable

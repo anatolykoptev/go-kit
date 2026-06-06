@@ -20,6 +20,11 @@ const (
 	// pgx encodes a Go []string as a Postgres text[], which is what the
 	// ::text[] cast expects.  Do not use AnyOf with drivers that do not
 	// handle []string → text[] encoding.
+	//
+	// Empty-string elements inside the slice are NOT stripped — they become
+	// bound array elements (harmless: they just won't match a row). Only an
+	// entirely-empty slice (or one where Allowed rejects every value) skips
+	// the filter.
 	AnyOf
 )
 
