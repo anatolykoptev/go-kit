@@ -26,14 +26,20 @@ declared column keys. The only bytes that ever reach an `ORDER BY` clause are:
 URL parameter values go exclusively into **bind args** (`$N`). The returned
 conditions string contains only:
 
-- `Filter.SQLExpr` — author-declared compile-time constant column expression
-- The literal operators `"= $N"` (Eq) or `"= ANY($N::text[])"` (AnyOf)
-- The literal conjunctive `" AND "`
+- `Filter.SQLExpr` / `Filter.SQLExprs` — author-declared compile-time constant column expressions
+- The literal operators `"= $N"` (Eq), `"= ANY($N::text[])"` (AnyOf),
+  or `"ILIKE $N ESCAPE '\'"` (ILike, per column, OR'd)
+- The literal conjunctives `" AND "` and `" OR "`
 
 A URL parameter whose key is **not declared** in the `FilterSpec` is silently
 ignored — it cannot inject a predicate.  When `Filter.Allowed` is set, a value
 not in the enum is treated as if the parameter were absent (safe degrade — no
 filter applied, no error).
+
+For `ILike`, the search term is LIKE-escaped (`\`→`\\`, `%`→`\%`, `_`→`\_`)
+and wrapped as `%term%` before binding.  The `ESCAPE '\'` clause in the emitted
+SQL tells Postgres to honor the escaping, so a user searching for `"50%"` matches
+the literal string `"50%"`, not every row.
 
 ## Usage
 
@@ -76,6 +82,9 @@ var filterSpec = admintable.FilterSpec{
         // AnyOf: ?source=organic&source=referral → col = ANY($N::text[])
         // pgx encodes []string as Postgres text[].
         {Key: "source", SQLExpr: "source",              Match: admintable.AnyOf},
+        // ILike: ?q=alice → (name ILIKE $6 ESCAPE '\' OR notes ILIKE $6 ESCAPE '\')
+        // One bind arg ("%alice%"), $6 referenced twice. Term is LIKE-escaped.
+        {Key: "q",      SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
     },
 }
 
@@ -120,10 +129,10 @@ func handleList(w http.ResponseWriter, r *http.Request) {
 
 | Type / Function | Purpose |
 |---|---|
-| `Match` (`Eq` / `AnyOf`) | Predicate shape: exact equality vs set membership |
-| `Filter` | One WHERE condition: Key (param name), SQLExpr (author constant), Match, optional Allowed enum |
+| `Match` (`Eq` / `AnyOf` / `ILike`) | Predicate shape: exact equality, set membership, or case-insensitive substring |
+| `Filter` | One WHERE condition: Key, SQLExpr (Eq/AnyOf) or SQLExprs (ILike), Match, optional Allowed |
 | `FilterSpec` | Collection of Filters for one list page |
-| `FilterSpec.Valid() error` | Startup validation: dup Keys / empty SQLExpr / unknown Match |
+| `FilterSpec.Valid() error` | Startup validation: dup Keys / empty SQLExpr / unknown Match / ILike misuse |
 | `FilterSpec.Where(vals url.Values, startArg int) (conds string, args []any)` | Build AND-joined WHERE conditions; URL values → bind args only |
 
 #### `Where` semantics
@@ -135,7 +144,20 @@ func handleList(w http.ResponseWriter, r *http.Request) {
 - **Eq**: uses `vals.Get(key)` (first value); empty string → filter skipped.
 - **AnyOf**: uses `vals[key]` (all values); empty slice → filter skipped; arg is
   `[]string` (pgx encodes this as Postgres `text[]`).
+- **ILike**: uses `vals.Get(key)` (first value); empty string → filter skipped.
+  Consumes **exactly one** `$N` index even when multiple columns are declared —
+  Postgres allows a placeholder to be referenced multiple times in one query.
+  The bound arg is the LIKE-escaped term wrapped as `%term%` (string, not `[]string`).
 - **Allowed**: value not in enum → filter skipped (safe degrade, not an error).
+  Must NOT be set on an `ILike` filter — `Valid()` returns an error.
+
+#### Field usage by Match
+
+| Match  | `SQLExpr`    | `SQLExprs`   | `Allowed`  |
+|--------|-------------|-------------|-----------|
+| `Eq`   | required    | must be nil | optional  |
+| `AnyOf`| required    | must be nil | optional  |
+| `ILike`| must be `""`| ≥1 required | must be nil|
 
 ## NullsLast
 

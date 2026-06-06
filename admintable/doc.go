@@ -11,10 +11,13 @@
 //     URL sort and dir parameters are equality-matched against a closed set of
 //     declared keys and are NEVER interpolated.
 //
-//   - [FilterSpec]: only [Filter.SQLExpr] values, the literal operators
-//     "= $N" / "= ANY($N::text[])", and the literal conjunctive " AND " ever
-//     appear in the returned WHERE conditions string. URL parameter values go
-//     exclusively into bind args — NEVER into the conditions string.
+//   - [FilterSpec]: only [Filter.SQLExpr] / [Filter.SQLExprs] values, the literal
+//     operators "= $N" / "= ANY($N::text[])" / "ILIKE $N ESCAPE '\'", and the
+//     literal conjunctives " AND " / " OR " ever appear in the returned WHERE
+//     conditions string. URL parameter values go exclusively into bind args —
+//     NEVER into the conditions string.  For [ILike] filters, metacharacters in
+//     the search term (%, _, \) are escaped before binding; the ESCAPE '\' clause
+//     in the emitted SQL tells Postgres to honor that escaping.
 //
 // Callers that pass [Spec.OrderBy] output to fmt.Sprintf should annotate:
 //
@@ -24,7 +27,7 @@
 //
 // Callers that compose the [FilterSpec.Where] conds string should annotate:
 //
-//	//nolint:gosec // only FilterSpec-owned SQLExpr + literal operators + $N
+//	//nolint:gosec // only FilterSpec-owned SQLExpr/SQLExprs + literal operators + $N
 //	// placeholders reach SQL; URL values are bind args, never interpolated.
 //
 // # Startup validation
@@ -50,6 +53,10 @@
 //	        {Key: "status", SQLExpr: "subscription_status", Match: admintable.Eq},
 //	        {Key: "plan",   SQLExpr: "plan_id",             Match: admintable.Eq,    Allowed: []string{"free", "pro"}},
 //	        {Key: "source", SQLExpr: "source",              Match: admintable.AnyOf},
+//	        // ILike: case-insensitive substring search across two columns, one bind.
+//	        // ?q=alice → (name ILIKE $6 ESCAPE '\' OR notes ILIKE $6 ESCAPE '\')
+//	        // with bound value "%alice%" — one arg, $6 referenced twice.
+//	        {Key: "q",      SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
 //	    },
 //	}
 //
