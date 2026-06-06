@@ -560,3 +560,421 @@ func TestWhere_ComposedWithSortArgs(t *testing.T) {
 		t.Fatalf("args length = %d; want 2", len(args))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FilterSpec.Valid — ILike-specific validation
+// ---------------------------------------------------------------------------
+
+// TestFilterSpecValid_ILike_OK verifies that a well-formed ILike filter passes Valid.
+func TestFilterSpecValid_ILike_OK(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
+		},
+	}
+	if err := fs.Valid(); err != nil {
+		t.Fatalf("Valid() = %v; want nil", err)
+	}
+}
+
+// TestFilterSpecValid_ILike_SingleColumn verifies that a single-column ILike filter passes Valid.
+func TestFilterSpecValid_ILike_SingleColumn(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	if err := fs.Valid(); err != nil {
+		t.Fatalf("Valid() = %v; want nil for single-column ILike", err)
+	}
+}
+
+// TestFilterSpecValid_ILike_ZeroColumns verifies that Valid rejects an ILike filter
+// with no columns declared.
+func TestFilterSpecValid_ILike_ZeroColumns(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: nil, Match: admintable.ILike},
+		},
+	}
+	err := fs.Valid()
+	if err == nil {
+		t.Fatal("Valid() = nil; want error for ILike with zero SQLExprs")
+	}
+	if !strings.Contains(err.Error(), "SQLExprs") {
+		t.Errorf("error %q should mention 'SQLExprs'", err.Error())
+	}
+}
+
+// TestFilterSpecValid_ILike_SQLExprSetIsError verifies that Valid rejects an ILike
+// filter that also sets SQLExpr (field reserved for Eq/AnyOf).
+func TestFilterSpecValid_ILike_SQLExprSetIsError(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExpr: "name", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	err := fs.Valid()
+	if err == nil {
+		t.Fatal("Valid() = nil; want error for ILike with SQLExpr set")
+	}
+}
+
+// TestFilterSpecValid_ILike_AllowedIsError verifies that Valid rejects an ILike
+// filter that sets Allowed (meaningless for free-text search; fail-fast at startup).
+func TestFilterSpecValid_ILike_AllowedIsError(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike, Allowed: []string{"foo"}},
+		},
+	}
+	err := fs.Valid()
+	if err == nil {
+		t.Fatal("Valid() = nil; want error for ILike with Allowed set")
+	}
+	if !strings.Contains(err.Error(), "Allowed") {
+		t.Errorf("error %q should mention 'Allowed'", err.Error())
+	}
+}
+
+// TestFilterSpecValid_EqWithSQLExprsIsError verifies that Valid rejects an Eq
+// filter that sets SQLExprs (field reserved for ILike).
+func TestFilterSpecValid_EqWithSQLExprsIsError(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "status", SQLExpr: "subscription_status", SQLExprs: []string{"extra"}, Match: admintable.Eq},
+		},
+	}
+	err := fs.Valid()
+	if err == nil {
+		t.Fatal("Valid() = nil; want error for Eq with SQLExprs set")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FilterSpec.Where — ILike: predicate shape
+// ---------------------------------------------------------------------------
+
+// TestWhere_ILike_MultiColumn verifies the core case: two columns, one bind.
+// The placeholder $N must appear twice in conds (once per column) but only one
+// arg is appended. The wrapped value must be the escaped term with % prefix/suffix.
+func TestWhere_ILike_MultiColumn(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{"q": {"alice"}}
+	conds, args := fs.Where(vals, 3) // $1/$2 already used
+
+	wantConds := `(name ILIKE $3 ESCAPE '\' OR notes ILIKE $3 ESCAPE '\')`
+	if conds != wantConds {
+		t.Errorf("conds = %q; want %q", conds, wantConds)
+	}
+	// Exactly one arg despite two columns: $3 is reused, not doubled.
+	if len(args) != 1 {
+		t.Fatalf("args length = %d; want 1 (single bind for multi-column ILike)", len(args))
+	}
+	if args[0] != "%alice%" {
+		t.Errorf("args[0] = %q; want %q (term wrapped as %%term%%)", args[0], "%alice%")
+	}
+}
+
+// TestWhere_ILike_SingleColumn verifies that a single-column ILike emits the
+// predicate WITHOUT outer parentheses (no OR needed).
+func TestWhere_ILike_SingleColumn(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{"q": {"bob"}}
+	conds, args := fs.Where(vals, 1)
+
+	wantConds := `name ILIKE $1 ESCAPE '\'`
+	if conds != wantConds {
+		t.Errorf("conds = %q; want %q", conds, wantConds)
+	}
+	if len(args) != 1 || args[0] != "%bob%" {
+		t.Errorf("args = %v; want [%%bob%%]", args)
+	}
+}
+
+// TestWhere_ILike_EmptyTermSkipped verifies that an empty search term skips the
+// filter — no predicate emitted, no arg index consumed.
+func TestWhere_ILike_EmptyTermSkipped(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{"q": {""}}
+	conds, args := fs.Where(vals, 1)
+
+	if conds != "" {
+		t.Errorf("conds = %q; want empty (empty term skips ILike filter)", conds)
+	}
+	if len(args) != 0 {
+		t.Errorf("args = %v; want nil", args)
+	}
+}
+
+// TestWhere_ILike_AbsentKeySkipped verifies that an absent key skips the filter.
+func TestWhere_ILike_AbsentKeySkipped(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{} // "q" not present
+	conds, args := fs.Where(vals, 1)
+
+	if conds != "" {
+		t.Errorf("conds = %q; want empty (absent key skips ILike filter)", conds)
+	}
+	if len(args) != 0 {
+		t.Errorf("args = %v; want nil", args)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FilterSpec.Where — ILike: metacharacter escaping
+// ---------------------------------------------------------------------------
+
+// TestWhere_ILike_EscapePercent verifies that a % in the search term is escaped
+// to \% in the bound value, so it matches the literal "%" not every character.
+// The probe: searching "50%" must bind "%50\%%" not "%50%%".
+func TestWhere_ILike_EscapePercent(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{"q": {"50%"}}
+	_, args := fs.Where(vals, 1)
+
+	if len(args) != 1 {
+		t.Fatalf("args length = %d; want 1", len(args))
+	}
+	// Expected: \ escapes %, then wrapped as %...%
+	want := `%50\%%`
+	if args[0] != want {
+		t.Errorf("args[0] = %q; want %q (percent must be escaped to prevent wildcard match)", args[0], want)
+	}
+}
+
+// TestWhere_ILike_EscapeUnderscore verifies that _ in the search term is escaped
+// to \_ in the bound value, so it matches the literal "_" not any single character.
+func TestWhere_ILike_EscapeUnderscore(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{"q": {"user_name"}}
+	_, args := fs.Where(vals, 1)
+
+	if len(args) != 1 {
+		t.Fatalf("args length = %d; want 1", len(args))
+	}
+	want := `%user\_name%`
+	if args[0] != want {
+		t.Errorf("args[0] = %q; want %q (underscore must be escaped)", args[0], want)
+	}
+}
+
+// TestWhere_ILike_EscapeBackslash verifies that a backslash in the search term
+// is escaped to \\ so that it matches the literal "\" and doesn't interfere with
+// the escaping of subsequent % or _ characters.
+func TestWhere_ILike_EscapeBackslash(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	vals := url.Values{"q": {`path\file`}}
+	_, args := fs.Where(vals, 1)
+
+	if len(args) != 1 {
+		t.Fatalf("args length = %d; want 1", len(args))
+	}
+	want := `%path\\file%`
+	if args[0] != want {
+		t.Errorf("args[0] = %q; want %q (backslash must be escaped first)", args[0], want)
+	}
+}
+
+// TestWhere_ILike_EscapeAllMetachars verifies that a term containing all three
+// metacharacters is correctly escaped. The backslash must be escaped BEFORE % and _
+// to avoid double-escaping.
+func TestWhere_ILike_EscapeAllMetachars(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name"}, Match: admintable.ILike},
+		},
+	}
+	// term: 50%_\end
+	vals := url.Values{"q": {`50%_\end`}}
+	_, args := fs.Where(vals, 1)
+
+	if len(args) != 1 {
+		t.Fatalf("args length = %d; want 1", len(args))
+	}
+	// Expected escaping order: \ → \\, % → \%, _ → \_
+	// "50%_\end" → "50\%\_\\end" → wrapped → "%50\%\_\\end%"
+	want := `%50\%\_\\end%`
+	if args[0] != want {
+		t.Errorf("args[0] = %q; want %q", args[0], want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FilterSpec.Where — ILike: $N sequencing
+// ---------------------------------------------------------------------------
+
+// TestWhere_ILike_ConsumesOneIndex verifies the core sequencing invariant:
+// an ILike filter with N columns advances the arg index by exactly 1, even
+// though $N appears N times in conds.
+func TestWhere_ILike_ConsumesOneIndex(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			// ILike with 3 columns: $2 appears 3 times but only one arg consumed.
+			{Key: "q", SQLExprs: []string{"name", "notes", "tags"}, Match: admintable.ILike},
+			// Next filter must get $3, not $5.
+			{Key: "status", SQLExpr: "subscription_status", Match: admintable.Eq},
+		},
+	}
+	vals := url.Values{
+		"q":      {"alice"},
+		"status": {"active"},
+	}
+	conds, args := fs.Where(vals, 2) // $1 already used
+
+	wantConds := `(name ILIKE $2 ESCAPE '\' OR notes ILIKE $2 ESCAPE '\' OR tags ILIKE $2 ESCAPE '\') AND subscription_status = $3`
+	if conds != wantConds {
+		t.Errorf("conds = %q; want %q", conds, wantConds)
+	}
+	// Two args: one for ILike (the bound term), one for Eq.
+	if len(args) != 2 {
+		t.Fatalf("args length = %d; want 2 (ILike consumes one index)", len(args))
+	}
+	if args[0] != "%alice%" {
+		t.Errorf("args[0] = %q; want %%alice%%", args[0])
+	}
+	if args[1] != "active" {
+		t.Errorf("args[1] = %q; want active", args[1])
+	}
+}
+
+// TestWhere_ILike_SkippedConsumesNoIndex verifies that a skipped ILike filter
+// (empty term) does NOT advance the arg index — the next active filter gets the
+// same $N the ILike would have consumed.
+func TestWhere_ILike_SkippedConsumesNoIndex(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name", "notes"}, Match: admintable.ILike}, // SKIPPED
+			{Key: "status", SQLExpr: "subscription_status", Match: admintable.Eq},    // active → $1
+		},
+	}
+	vals := url.Values{
+		// "q" absent → ILike skipped
+		"status": {"active"},
+	}
+	conds, args := fs.Where(vals, 1)
+
+	if conds != "subscription_status = $1" {
+		t.Errorf("conds = %q; want %q (skipped ILike must not consume $N)", conds, "subscription_status = $1")
+	}
+	if len(args) != 1 || args[0] != "active" {
+		t.Errorf("args = %v; want [active]", args)
+	}
+}
+
+// TestWhere_ILike_MixedSequencing is the full off-by-one matrix:
+// Eq(active) → ILike(skipped) → AnyOf(active) → ILike(active) → Eq(active).
+// Verifies each placeholder is exactly correct.
+func TestWhere_ILike_MixedSequencing(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "plan", SQLExpr: "plan_id", Match: admintable.Eq},                       // $3
+			{Key: "q", SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},      // SKIPPED
+			{Key: "source", SQLExpr: "source", Match: admintable.AnyOf},                   // $4
+			{Key: "search", SQLExprs: []string{"title", "body"}, Match: admintable.ILike}, // $5 (one index)
+			{Key: "event", SQLExpr: "event_type", Match: admintable.Eq},                   // $6
+		},
+	}
+	vals := url.Values{
+		"plan": {"pro"},
+		// "q" absent → ILike skipped
+		"source": {"organic", "referral"},
+		"search": {"hello"},
+		"event":  {"created"},
+	}
+	conds, args := fs.Where(vals, 3) // $1/$2 already used
+
+	wantConds := `plan_id = $3 AND source = ANY($4::text[]) AND (title ILIKE $5 ESCAPE '\' OR body ILIKE $5 ESCAPE '\') AND event_type = $6`
+	if conds != wantConds {
+		t.Errorf("conds =\n  %q\nwant\n  %q", conds, wantConds)
+	}
+	if len(args) != 4 {
+		t.Fatalf("args length = %d; want 4", len(args))
+	}
+	if args[0] != "pro" {
+		t.Errorf("args[0] = %q; want pro", args[0])
+	}
+	sourceSlice, ok := args[1].([]string)
+	if !ok || len(sourceSlice) != 2 {
+		t.Errorf("args[1] = %v; want []string{organic, referral}", args[1])
+	}
+	if args[2] != "%hello%" {
+		t.Errorf("args[2] = %q; want %%hello%%", args[2])
+	}
+	if args[3] != "created" {
+		t.Errorf("args[3] = %q; want created", args[3])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FilterSpec.Where — ILike: security invariants
+// ---------------------------------------------------------------------------
+
+// TestWhere_ILike_InjectionValueGoesToArgs verifies the core security invariant
+// for ILike: an SQL injection attempt in the search term goes to args as a bind
+// param, never appears in conds. The conds must contain only author-declared
+// column names, literal ILIKE operators, and $N placeholders.
+func TestWhere_ILike_InjectionValueGoesToArgs(t *testing.T) {
+	fs := admintable.FilterSpec{
+		Filters: []admintable.Filter{
+			{Key: "q", SQLExprs: []string{"name", "notes"}, Match: admintable.ILike},
+		},
+	}
+	injected := "'; DROP TABLE accounts;--"
+	vals := url.Values{"q": {injected}}
+	conds, args := fs.Where(vals, 1)
+
+	// The raw injected string must NOT appear in conds.
+	if strings.Contains(conds, injected) {
+		t.Errorf("SECURITY: injection value %q appeared in conds %q; must only be in args", injected, conds)
+	}
+	// conds must be exactly the author-declared predicate with $1.
+	wantConds := `(name ILIKE $1 ESCAPE '\' OR notes ILIKE $1 ESCAPE '\')`
+	if conds != wantConds {
+		t.Errorf("conds = %q; want exactly %q (only author-declared bytes)", conds, wantConds)
+	}
+	// The escaped-and-wrapped term must appear in args, not conds.
+	if len(args) != 1 {
+		t.Fatalf("args length = %d; want 1", len(args))
+	}
+	// Verify the bound value starts and ends with % (wrapped), and does not
+	// appear verbatim in conds.
+	bound, ok := args[0].(string)
+	if !ok {
+		t.Fatalf("args[0] type = %T; want string", args[0])
+	}
+	if !strings.HasPrefix(bound, "%") || !strings.HasSuffix(bound, "%") {
+		t.Errorf("bound value %q is not wrapped as %%...%%", bound)
+	}
+	if strings.Contains(conds, bound) {
+		t.Errorf("SECURITY: bound value %q appeared in conds %q", bound, conds)
+	}
+}
