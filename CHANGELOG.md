@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.78.0](https://github.com/anatolykoptev/go-kit/compare/v0.77.0...v0.78.0) (2026-06-06)
+
+
+### Features
+
+* **admintable:** SQL-safe declarative sortable-table resolver ([#108](https://github.com/anatolykoptev/go-kit/issues/108)) ([50c28ba](https://github.com/anatolykoptev/go-kit/commit/50c28ba7efd2d89f793baaf3e2c42d4689d2a5c0))
+* **llm:** reasoning model hardening + vision detail/base64 ([#106](https://github.com/anatolykoptev/go-kit/issues/106)) ([711bd59](https://github.com/anatolykoptev/go-kit/commit/711bd59b46f373c9192467082a4e86026c8e2046))
+
 ## [0.77.0](https://github.com/anatolykoptev/go-kit/compare/v0.76.0...v0.77.0) (2026-05-30)
 
 
