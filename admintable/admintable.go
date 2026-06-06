@@ -66,6 +66,7 @@ type State struct {
 // Valid reports whether the Spec is correctly configured. It returns an error if:
 //   - there are zero Sortable columns,
 //   - DefaultKey does not name a Sortable column,
+//   - a Sortable column has an empty SQLExpr (OrderBy would emit a bare " ASC"),
 //   - any two columns share the same Key (duplicate keys cause ambiguous resolution).
 //
 // Intended to be called once at startup (e.g. in an init() function or a
@@ -85,6 +86,9 @@ func (sp Spec) Valid() error {
 	defaultKeyIsSortable := false
 	for _, col := range sp.Columns {
 		if col.Sortable {
+			if col.SQLExpr == "" {
+				return fmt.Errorf("admintable.Spec: Sortable column %q has empty SQLExpr", col.Key)
+			}
 			hasSortable = true
 			if col.Key == sp.DefaultKey {
 				defaultKeyIsSortable = true
@@ -133,7 +137,7 @@ func (sp Spec) Resolve(sortKey, dir string) State {
 		st.Dir = Asc
 	case "desc":
 		st.Dir = Desc
-	// any other value: st.Dir stays at defaultDir (already set above)
+		// any other value: st.Dir stays at defaultDir (already set above)
 	}
 
 	return st

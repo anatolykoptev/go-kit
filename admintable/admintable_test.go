@@ -555,6 +555,18 @@ func TestSpecValid(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "sortable_empty_sqlexpr",
+			spec: admintable.Spec{
+				Columns: []admintable.Column{
+					// Sortable but no SQLExpr → OrderBy would emit a bare " ASC".
+					{Key: "name", Sortable: true, SQLExpr: ""},
+				},
+				DefaultKey: "name",
+				DefaultDir: admintable.Asc,
+			},
+			wantErr: true,
+		},
+		{
 			name:    "empty_spec",
 			spec:    admintable.Spec{},
 			wantErr: true,
