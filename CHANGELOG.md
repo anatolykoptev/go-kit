@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.81.0](https://github.com/anatolykoptev/go-kit/compare/v0.80.0...v0.81.0) (2026-06-06)
+
+
+### Features
+
+* **admintable:** ILike Match for case-insensitive multi-column search ([#114](https://github.com/anatolykoptev/go-kit/issues/114)) ([fd76e51](https://github.com/anatolykoptev/go-kit/commit/fd76e510fc1126bd045da9ac055c292548421820))
+
+
+### Documentation
+
+* **admintable:** complete the Where godoc example + note AnyOf empty-element behavior ([#112](https://github.com/anatolykoptev/go-kit/issues/112)) ([6b68828](https://github.com/anatolykoptev/go-kit/commit/6b68828481cc6a481b7e7a752589c37baf8e8934))
+
 ## [0.80.0](https://github.com/anatolykoptev/go-kit/compare/v0.79.0...v0.80.0) (2026-06-06)
 
 
