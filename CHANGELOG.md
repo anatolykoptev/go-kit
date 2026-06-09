@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.81.1](https://github.com/anatolykoptev/go-kit/compare/v0.81.0...v0.81.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* **llm:** advance model-fallback chain on 413 / context-length errors ([#115](https://github.com/anatolykoptev/go-kit/issues/115)) ([95c814e](https://github.com/anatolykoptev/go-kit/commit/95c814ea69305b66617e4b6ca4d540d2dadbb429))
+
 ## [0.81.0](https://github.com/anatolykoptev/go-kit/compare/v0.80.0...v0.81.0) (2026-06-06)
 
 
