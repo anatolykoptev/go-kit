@@ -199,3 +199,84 @@ func TestAPIError_CodeParsedFromJSON(t *testing.T) {
 		t.Errorf("Type = %q, want invalid_request_error", ae.Type)
 	}
 }
+
+// TestChain_StreamAdvancesOn413 pins the same fix for the streaming endpoint
+// chain (Stream/StreamExtract): a 413 on the first model must advance to the
+// next, and the observer must fire per endpoint.
+func TestChain_StreamAdvancesOn413(t *testing.T) {
+	tooLarge := httptest.NewServer(statusBodyHandler(http.StatusRequestEntityTooLarge, groq413Body))
+	defer tooLarge.Close()
+	okStream := httptest.NewServer(sseHandler([]string{`{"choices":[{"delta":{"content":"hello"}}]}`}))
+	defer okStream.Close()
+
+	_, calls, obs := newObserver()
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: tooLarge.URL, Key: "k", Model: "small-tpm-model"},
+			{URL: okStream.URL, Key: "k", Model: "big-context-model"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	sr, err := c.Stream(context.Background(), []llm.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("expected stream chain to advance past 413, got: %v", err)
+	}
+	defer sr.Close()
+	var got string
+	for {
+		chunk, ok := sr.Next()
+		if !ok {
+			break
+		}
+		got += chunk.Delta
+	}
+	if err := sr.Err(); err != nil {
+		t.Fatalf("stream err: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("delta = %q, want hello", got)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 observer calls (413 then ok), got %d: %+v", len(*calls), *calls)
+	}
+	if (*calls)[0].model != "small-tpm-model" || (*calls)[0].err == nil {
+		t.Errorf("call[0] = %+v, want {small-tpm-model, err}", (*calls)[0])
+	}
+	if (*calls)[1].model != "big-context-model" || (*calls)[1].err != nil {
+		t.Errorf("call[1] = %+v, want {big-context-model, nil}", (*calls)[1])
+	}
+}
+
+// TestAPIError_EmptyTypeCodeForJSONWithoutErrorObject guards the newAPIError
+// parse change: valid JSON without an "error" object yields empty Type/Code.
+func TestAPIError_EmptyTypeCodeForJSONWithoutErrorObject(t *testing.T) {
+	srv := httptest.NewServer(statusBodyHandler(http.StatusBadRequest, `{}`))
+	defer srv.Close()
+	c := llm.NewClient(srv.URL, "k", "m", llm.WithMaxRetries(1))
+	_, err := c.Complete(context.Background(), "", "test")
+	var ae *llm.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("want APIError, got %T: %v", err, err)
+	}
+	if ae.Type != "" || ae.Code != "" {
+		t.Errorf("Type=%q Code=%q, want both empty for body without error object", ae.Type, ae.Code)
+	}
+}
+
+// TestAPIError_EmptyTypeCodeForNonJSON guards the parse change for non-JSON
+// bodies: json.Unmarshal fails, so Type/Code stay empty.
+func TestAPIError_EmptyTypeCodeForNonJSON(t *testing.T) {
+	srv := httptest.NewServer(statusBodyHandler(http.StatusBadRequest, "plain text error"))
+	defer srv.Close()
+	c := llm.NewClient(srv.URL, "k", "m", llm.WithMaxRetries(1))
+	_, err := c.Complete(context.Background(), "", "test")
+	var ae *llm.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("want APIError, got %T: %v", err, err)
+	}
+	if ae.Type != "" || ae.Code != "" {
+		t.Errorf("Type=%q Code=%q, want both empty for non-JSON body", ae.Type, ae.Code)
+	}
+}

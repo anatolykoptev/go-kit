@@ -87,6 +87,11 @@ func asRetryable(err error) bool {
 //
 // A plain 400 (malformed request) is deliberately NOT a failover: it recurs
 // identically on every model, so the chain must abort, not burn every endpoint.
+//
+// Note: 413 is matched on status alone (any body) — treated as model-specific.
+// A non-model 413 shared by every endpoint (e.g. a gateway payload-size limit)
+// would still advance and burn the chain, surfacing the same error as before
+// just after N attempts. Acceptable for the same-proxy chains this targets.
 func asFailover(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
