@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.82.0](https://github.com/anatolykoptev/go-kit/compare/v0.81.1...v0.82.0) (2026-06-11)
+
+
+### Features
+
+* **llm:** per-model quota-aware cooldown for fallback chain (P1) ([#117](https://github.com/anatolykoptev/go-kit/issues/117)) ([23dfc4f](https://github.com/anatolykoptev/go-kit/commit/23dfc4fcff5ee86a0b23d566421b4724bb80e29f))
+* **llm:** served-model observability for fallback chain (P2) ([#119](https://github.com/anatolykoptev/go-kit/issues/119)) ([23769c5](https://github.com/anatolykoptev/go-kit/commit/23769c5ca3237187ddf04bc1793127e0b511f31f))
+
 ## [0.81.1](https://github.com/anatolykoptev/go-kit/compare/v0.81.0...v0.81.1) (2026-06-09)
 
 
