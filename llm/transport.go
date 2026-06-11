@@ -98,10 +98,69 @@ func (c *Client) doRequest(ctx context.Context, baseURL, apiKey string, req *Cha
 	}, nil
 }
 
+// hasNonCooledEndpoint reports whether at least one chain endpoint's model is
+// NOT currently in cooldown. Used to gate skipping so the loop never fail-closed
+// (when every model is cooled, no skip happens and the primary is still tried).
+func (c *Client) hasNonCooledEndpoint() bool {
+	for _, ep := range c.endpoints {
+		if !c.cooldown.cooling(ep.Model) {
+			return true
+		}
+	}
+	return false
+}
+
+// cooldownCandidates returns the endpoints to iterate and whether cooled models
+// should be skipped, applying quota-aware cooldown selection:
+//   - cooldown disabled → the full chain, no skipping (unchanged behaviour).
+//   - cooldown enabled, ≥1 healthy → the full chain, skip cooled models
+//     (degraded > dead).
+//   - cooldown enabled, ALL cooled → never fail-closed: only the PRIMARY (one
+//     last-resort upstream probe) so its real error surfaces, instead of burning
+//     the whole known-dead chain.
+func (c *Client) cooldownCandidates() (endpoints []Endpoint, skipCooled bool) {
+	if c.cooldown == nil {
+		return c.endpoints, false
+	}
+	if c.hasNonCooledEndpoint() {
+		return c.endpoints, true
+	}
+	return c.endpoints[:1], false
+}
+
+// recordCooldownOutcome feeds an attempt result to the cooldown bookkeeping: a
+// success clears the model's cooldown; a quota-class failure drives it. No-op
+// when cooldown is disabled.
+func (c *Client) recordCooldownOutcome(ep Endpoint, err error) {
+	if c.cooldown == nil {
+		return
+	}
+	if err == nil {
+		c.cooldown.recordSuccess(ep.Model)
+		return
+	}
+	if isQuotaError(err) {
+		var apiErr *APIError
+		_ = errors.As(err, &apiErr)
+		var retryAfter time.Duration
+		if apiErr != nil {
+			retryAfter = apiErr.RetryAfter
+		}
+		c.cooldown.recordFailure(ep.Model, retryAfter)
+	}
+}
+
 func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if len(c.endpoints) > 0 {
 		var lastErr error
-		for _, ep := range c.endpoints {
+		endpoints, skipCooled := c.cooldownCandidates()
+		for _, ep := range endpoints {
+			// Skip a model in quota cooldown, but only while a healthier
+			// candidate remains — degraded > dead.
+			if skipCooled && c.cooldown.cooling(ep.Model) {
+				continue
+			}
+
 			epReq := *req
 			if ep.Model != "" {
 				epReq.Model = ep.Model
@@ -124,6 +183,8 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 			if c.endpointObserver != nil {
 				c.endpointObserver(ep, err)
 			}
+			// Feed the cooldown bookkeeping: success clears, quota-fail drives.
+			c.recordCooldownOutcome(ep, err)
 			if err == nil {
 				return result, nil
 			}
