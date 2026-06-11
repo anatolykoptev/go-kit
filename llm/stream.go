@@ -97,6 +97,12 @@ func (s *StreamResponse) Usage() *Usage { return s.usage }
 // success, llm_chain_served_total{model,position}. Only the per-response
 // ServedBy field is absent on the stream path (mirrors the cooldown Stream
 // exclusion documented on WithModelCooldown).
+//
+// The cooldown gauge (llm_model_cooldown_active) is NOT driven on the stream
+// path: this loop deliberately neither reads cooling() nor records cooldown
+// outcomes (the stream path is not wired into cooldown, same as WithModelCooldown
+// documents), so no stream attempt ever enters or clears a model's cooldown and
+// the gauge reflects only non-stream (Complete/CompleteRaw) traffic.
 func (c *Client) Stream(ctx context.Context, messages []Message, opts ...ChatOption) (*StreamResponse, error) {
 	var cfg chatConfig
 	for _, opt := range opts {

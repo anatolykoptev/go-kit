@@ -14,9 +14,13 @@
 // style in go-kit (Decision 2 trade-off).
 //
 // Metric names follow the convention (~/docs/metrics-convention.md) and the
-// rerank precedent: library-namespaced (llm_*), low-cardinality labels. Model
-// names are Prometheus-label-safe by construction (chain.go isSafeModelName gates
-// the CSV chain), and position is bounded by chain length (≤~8).
+// rerank precedent: library-namespaced (llm_*), low-cardinality labels. For a
+// chain derived from a CSV via ParseModelFallbackChain the model label is
+// Prometheus-label-safe by construction (chain.go isSafeModelName drops unsafe
+// tokens); a chain built directly with WithEndpoints carries whatever model
+// strings the caller supplies, so that caller owns label hygiene. Cardinality is
+// bounded either way — position is bounded by chain length (≤~8) and the model
+// set is the fixed, small chain (not user input).
 package llm
 
 import (
@@ -84,6 +88,11 @@ const unknownPosition = "unknown"
 // (Endpoint, err), so the chain order must be supplied at wire time. Pass the
 // SAME []Endpoint you gave WithEndpoints. A model absent from that slice records
 // under position="unknown" rather than being dropped.
+//
+// Call this ONCE at wire time (build the observer, hand it to
+// WithEndpointAttemptObserver), not per request: each call allocates a fresh
+// position map. The returned observer is what fires per attempt; the builder is
+// setup-only.
 func (m *ChainMetrics) EndpointObserver(endpoints []Endpoint) EndpointAttemptObserver {
 	pos := make(map[string]string, len(endpoints))
 	for i, ep := range endpoints {
