@@ -101,17 +101,62 @@ func (m *modelCooldown) now() time.Time {
 
 // cooling reports whether model is currently in cooldown. nil-safe (returns
 // false) so a missing cooldown is never a reason to skip.
+//
+// TTL-driven recovery: a model is SKIPPED while cooled (executeInner never
+// attempts it), so it never sees a 200 and recordSuccess never fires for it.
+// Without this, an expired-but-uncleared until entry would (a) leak in the map
+// and (b) leave the recovery observer edge (cooling=false) un-fired, so the
+// llm_model_cooldown_active gauge would stay stuck at 1 for hours after the
+// quota actually recovered. So when cooling() observes an expired window it
+// CLEANS the state (delete until, reset fails) and fires the recovery edge —
+// making cooling() the recovery authority for the skipped-model path, the
+// mirror of recordSuccess for the attempted-model path.
+//
+// Lock upgrade: the active-window common case stays on the RLock fast path
+// (no write). Only the expired case upgrades to a write Lock, re-checks under
+// it (a concurrent recordFailure may have re-cooled with a fresh window, or a
+// concurrent cooling() may have already cleaned the entry — either way we must
+// not clobber fresh state or double-fire), deletes, then fires the observer
+// OUTSIDE the lock. Mirrors recordFailure/recordSuccess discipline.
 func (m *modelCooldown) cooling(model string) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	until, ok := m.until[model]
 	if !ok {
+		m.mu.RUnlock()
 		return false
 	}
-	return m.now().Before(until)
+	if m.now().Before(until) {
+		m.mu.RUnlock()
+		return true // active window — fast path, no write
+	}
+	m.mu.RUnlock()
+
+	// Expired window: upgrade to a write lock and clean up the lapsed state.
+	m.mu.Lock()
+	// Re-check under the write lock: between RUnlock and Lock another goroutine
+	// may have re-cooled this model (fresh window) or already cleaned it.
+	until, ok = m.until[model]
+	if !ok {
+		m.mu.Unlock()
+		return false // already cleaned by a concurrent cooling()
+	}
+	if m.now().Before(until) {
+		m.mu.Unlock()
+		return true // re-cooled with a fresh window by a concurrent recordFailure
+	}
+	// Still our expired entry — clean it and fire the recovery edge.
+	delete(m.until, model)
+	delete(m.fails, model)
+	onChange := m.onChange
+	m.mu.Unlock()
+
+	if onChange != nil {
+		fireCooldownObserver(onChange, model, false, 0)
+	}
+	return false
 }
 
 // recordFailure is called from executeInner ONLY for quota-class errors. It
@@ -134,13 +179,15 @@ func (m *modelCooldown) recordFailure(model string, retryAfter time.Duration) {
 	m.fails[model]++
 	reached := m.fails[model] >= m.cfg.FailThreshold
 	// wasActivelyCooling = an unexpired window is open RIGHT NOW. Keyed on live
-	// state, not mere map presence: a model's until entry persists after its TTL
-	// lapses (only recordSuccess deletes it), so a model can ride its window out
-	// silently — it never sees a 200 because it's being skipped — then re-cool on
-	// a fresh burst. Keying dedup on presence would swallow that re-entry event;
-	// keying on active-window emits one entry event PER cooldown window (Decision
-	// 3, per-window re-event). Spam is naturally bounded: at most one event per
-	// window, and a window is ≥ FailThreshold fresh fails long.
+	// state, not mere map presence: an until entry can outlive its TTL until the
+	// next cooling() read or recordSuccess deletes it, so a model can ride its
+	// window out silently — it never sees a 200 because it's being skipped — then
+	// re-cool on a fresh burst. Keying dedup on presence would swallow that
+	// re-entry event; keying on active-window emits one entry event PER cooldown
+	// window (Decision 3, per-window re-event) regardless of WHEN the lapsed entry
+	// was swept (eager via cooling(), or still present here). Spam is naturally
+	// bounded: at most one event per window, and a window is ≥ FailThreshold fresh
+	// fails long.
 	until, present := m.until[model]
 	wasActivelyCooling := present && m.now().Before(until)
 	if reached {

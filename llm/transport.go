@@ -177,6 +177,14 @@ func (c *Client) attemptEndpoint(ctx context.Context, ep Endpoint, req *ChatRequ
 	if cancelAttempt != nil {
 		cancelAttempt()
 	}
+	// Served-model attribution: the model that returned the 200 is this
+	// endpoint's effective model. Set here (the single "try one endpoint"
+	// authority) so BOTH the chain loop and the never-fail-closed race guard
+	// attribute identically. epReq.Model carries the per-endpoint override when
+	// set; fall back to req.Model otherwise.
+	if err == nil && result != nil {
+		result.ServedBy = epReq.Model
+	}
 	if c.endpointObserver != nil {
 		c.endpointObserver(ep, err)
 	}
