@@ -137,7 +137,21 @@ func WithEndpointAttemptObserver(obs EndpointAttemptObserver) Option {
 // failures on a model (429, or a 503 marking quota/auth-unavailable), that model
 // is put in cooldown for the upstream's Retry-After (clamped to cfg.Max, default
 // 10m) or cfg.Default (60s) and subsequent calls SKIP it — going straight to the
-// next healthy model. A 200 clears the cooldown instantly (quota recovered).
+// next healthy model. The cooldown lifts when its window expires; a 200 from the
+// model clears it early (quota recovered). A cooled model receives no traffic
+// until then, so the "clear early" path only applies to a model still in the
+// rotation, not the one being skipped.
+//
+// Scope: this applies to the NON-STREAMING completion chain (Complete /
+// CompleteRaw / chat completions through executeInner). Stream is NOT
+// cooldown-aware yet — it neither consults nor records cooldown state; a chain
+// used for streaming sees no skipping (tracked as a P2 follow-up).
+//
+// Cooldown is MODEL-KEYED. BuildModelChainEndpoints dedups by model id, so a
+// helper-built chain has model-distinct endpoints. If you hand-build a []Endpoint
+// with the SAME Model on multiple entries (e.g. same model id behind different
+// keys/URLs), they SHARE one cooldown entry — cooling one cools all of them.
+// Give such entries distinct Model strings if you want independent cooldown.
 //
 // Opt-in: without this option there is zero cooldown state and behaviour is
 // byte-identical to before it existed. No effect on the single-endpoint (no

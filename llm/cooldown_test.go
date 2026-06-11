@@ -297,8 +297,11 @@ func TestCooldown_Observer_FiresOnEntryAndRecovery(t *testing.T) {
 		cooling bool
 		d       time.Duration
 	}
-	var evMu sync.Mutex
-	var events []ev
+	// The observer is dispatched async with panic recovery (MAJOR 2), so the test
+	// must synchronise on event delivery rather than read shared state right after
+	// the call returns. evCh carries every delivered event; the test drains the
+	// first. Buffered so the observer goroutine never blocks if the test is slow.
+	evCh := make(chan ev, 8)
 
 	c := llm.NewClient("", "", "",
 		llm.WithEndpoints([]llm.Endpoint{
@@ -308,9 +311,7 @@ func TestCooldown_Observer_FiresOnEntryAndRecovery(t *testing.T) {
 		llm.WithMaxRetries(1),
 		llm.WithModelCooldown(llm.CooldownConfig{FailThreshold: 1}),
 		llm.WithModelCooldownObserver(func(model string, cooling bool, d time.Duration) {
-			evMu.Lock()
-			events = append(events, ev{model: model, cooling: cooling, d: d})
-			evMu.Unlock()
+			evCh <- ev{model: model, cooling: cooling, d: d}
 		}),
 	)
 
@@ -330,12 +331,14 @@ func TestCooldown_Observer_FiresOnEntryAndRecovery(t *testing.T) {
 		t.Fatalf("call 2: %v", err)
 	}
 
-	evMu.Lock()
-	defer evMu.Unlock()
-	if len(events) == 0 {
-		t.Fatal("expected at least one cooldown observer event (entry)")
+	// Wait for the async ENTRY event (deterministic, bounded — never a bare sleep).
+	var first ev
+	select {
+	case first = <-evCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cooldown observer entry event")
 	}
-	if events[0].model != "primary" || !events[0].cooling {
-		t.Errorf("first event = %+v, want {primary, cooling=true}", events[0])
+	if first.model != "primary" || !first.cooling {
+		t.Errorf("first event = %+v, want {primary, cooling=true}", first)
 	}
 }

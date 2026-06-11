@@ -75,8 +75,11 @@ type modelCooldown struct {
 	fails map[string]int       // model -> consecutive quota-fails
 	cfg   CooldownConfig
 	clock func() time.Time // injectable for tests; default time.Now
-	// onChange fires once on cooldown entry (cooling=true) and once on recovery
-	// (cooling=false). Optional, non-blocking — the caller must not block/panic.
+	// onChange fires on cooldown entry (cooling=true) and on recovery
+	// (cooling=false). Optional. Dispatched async with panic recovery (see
+	// fireCooldownObserver), so a panicking or blocking observer cannot crash or
+	// stall the request path — but it must still be cheap, and ordering across
+	// events is not guaranteed (goroutine scheduling).
 	onChange func(model string, cooling bool, d time.Duration)
 }
 
@@ -130,17 +133,27 @@ func (m *modelCooldown) recordFailure(model string, retryAfter time.Duration) {
 	m.mu.Lock()
 	m.fails[model]++
 	reached := m.fails[model] >= m.cfg.FailThreshold
-	_, wasCooling := m.until[model]
+	// wasActivelyCooling = an unexpired window is open RIGHT NOW. Keyed on live
+	// state, not mere map presence: a model's until entry persists after its TTL
+	// lapses (only recordSuccess deletes it), so a model can ride its window out
+	// silently — it never sees a 200 because it's being skipped — then re-cool on
+	// a fresh burst. Keying dedup on presence would swallow that re-entry event;
+	// keying on active-window emits one entry event PER cooldown window (Decision
+	// 3, per-window re-event). Spam is naturally bounded: at most one event per
+	// window, and a window is ≥ FailThreshold fresh fails long.
+	until, present := m.until[model]
+	wasActivelyCooling := present && m.now().Before(until)
 	if reached {
 		m.until[model] = m.now().Add(d)
 	}
 	onChange := m.onChange
 	m.mu.Unlock()
 
-	// Fire onChange only on the transition INTO cooldown (entry), de-duped:
-	// once per cooldown window, not once per fail.
-	if reached && !wasCooling && onChange != nil {
-		onChange(model, true, d)
+	// Fire onChange on the transition INTO an active cooldown window (entry).
+	// Run async + recover so a misbehaving observer (panic/block) cannot stall or
+	// crash the request path. Mirrors CircuitBreaker.doTransition (circuit.go).
+	if reached && !wasActivelyCooling && onChange != nil {
+		fireCooldownObserver(onChange, model, true, d)
 	}
 }
 
@@ -158,8 +171,21 @@ func (m *modelCooldown) recordSuccess(model string) {
 	m.mu.Unlock()
 
 	if wasCooling && onChange != nil {
-		onChange(model, false, 0)
+		fireCooldownObserver(onChange, model, false, 0)
 	}
+}
+
+// fireCooldownObserver runs the optional onChange callback in its own goroutine
+// with panic recovery, so a misbehaving observer (panic or block) cannot stall
+// or crash the request path that triggered the cooldown transition. Mirrors the
+// CircuitBreaker.doTransition discipline (circuit.go). The transition has already
+// been committed to the map under lock before this fires, so the observer sees
+// consistent state.
+func fireCooldownObserver(fn func(model string, cooling bool, d time.Duration), model string, cooling bool, d time.Duration) {
+	go func() {
+		defer func() { _ = recover() }()
+		fn(model, cooling, d)
+	}()
 }
 
 // quotaBodyMarkers are substrings (lowercased) that mark a 503 as quota/auth
