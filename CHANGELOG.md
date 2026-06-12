@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.83.0](https://github.com/anatolykoptev/go-kit/compare/v0.82.0...v0.83.0) (2026-06-12)
+
+
+### Features
+
+* **llm:** health-aware model-chain filtering against live /v1/models ([#120](https://github.com/anatolykoptev/go-kit/issues/120)) ([0c58419](https://github.com/anatolykoptev/go-kit/commit/0c58419ecf1d82a046071db48129e3e97d72c2a8))
+
 ## [0.82.0](https://github.com/anatolykoptev/go-kit/compare/v0.81.1...v0.82.0) (2026-06-11)
 
 
