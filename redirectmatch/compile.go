@@ -26,9 +26,14 @@ func isGone(code int) bool {
 	return code == 410 || code == 451
 }
 
-// hasCaptureRefs reports whether target contains at least one $n capture reference.
+// captureRefRE matches a capture-expansion reference in Regexp.ExpandString syntax
+// ($1, ${name}, $name). A bare literal "$" (e.g. a target like "/cost$") is NOT a
+// capture reference, so such targets remain subject to the static self-loop check.
+var captureRefRE = regexp.MustCompile(`\$(\d|\{|[A-Za-z_])`)
+
+// hasCaptureRefs reports whether target contains at least one capture-expansion reference.
 func hasCaptureRefs(target string) bool {
-	return strings.Contains(target, "$")
+	return captureRefRE.MatchString(target)
 }
 
 // Compile turns a [RuleSpec] into an immutable [Rule].
@@ -60,6 +65,13 @@ func Compile(spec RuleSpec) (Rule, error) {
 	// embedded-query matching semantics.
 	if spec.QueryHandling == QExact && spec.MatchType != Exact {
 		return Rule{}, fmt.Errorf("redirectmatch: QueryHandling %q is only supported for MatchType %q, got %q", QExact, Exact, spec.MatchType)
+	}
+
+	// A QExact rule must embed a query in its SourcePath ("path?query"); without a
+	// "?" it can never match, since Resolve only probes the QExact map when a query
+	// is present (key = path + "?" + query).
+	if spec.QueryHandling == QExact && !strings.Contains(spec.SourcePath, "?") {
+		return Rule{}, fmt.Errorf("redirectmatch: QueryHandling %q requires an embedded query in SourcePath (e.g. %q), got %q", QExact, "/path?key=val", spec.SourcePath)
 	}
 
 	// Reject empty SourcePath for all match types.

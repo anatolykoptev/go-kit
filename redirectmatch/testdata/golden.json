@@ -211,6 +211,24 @@
       "status_code": 302,
       "query_handling": "ignore",
       "priority": 0
+    },
+    {
+      "id": 24,
+      "source_path": "/collide?k=1",
+      "match_type": "exact",
+      "target": "/collide-qexact",
+      "status_code": 301,
+      "query_handling": "exact",
+      "priority": 0
+    },
+    {
+      "id": 25,
+      "source_path": "/collide?k=1",
+      "match_type": "exact",
+      "target": "/collide-qignore",
+      "status_code": 302,
+      "query_handling": "ignore",
+      "priority": 0
     }
   ],
   "cases": [
@@ -421,6 +439,14 @@
       "matched": true,
       "status": 302,
       "location": "/home"
+    },
+    {
+      "name": "golden: QExact/QIgnore SAME old-map key collision — QExact rule still reachable (CRITICAL regression)",
+      "path": "/collide",
+      "query": "k=1",
+      "matched": true,
+      "status": 301,
+      "location": "/collide-qexact"
     }
   ]
 }
