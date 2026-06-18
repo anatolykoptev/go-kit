@@ -9,14 +9,14 @@ import (
 // Resolution steps:
 //  1. Normalize rawPath with the set's policy → np.
 //  2. Exact tier (O(1)):
-//     a. If rawQuery != "" → probe "np?rawQuery" for a QExact rule.
-//     b. Probe "np" for a non-QExact rule.
+//     a. If rawQuery != "" → probe exactQ[np+"?"+rawQuery] for a QExact rule.
+//     b. Probe exact[np] for a non-QExact rule.
 //  3. Ordered tier: iterate prefix and regex rules (Priority ASC, ID ASC);
 //     first match wins.
 //  4. Miss → Decision{Matched: false}.
 //  5. Location construction (3xx only):
 //     - Regex: expand $1, $2… from submatches into Target.
-//     - QPass: append rawQuery to Location.
+//     - QPass: append rawQuery to Location (see doc.go for exact semantics).
 //     - 410/451: Location is always "".
 //
 // Resolve is safe for concurrent use; it never mutates set.
@@ -24,14 +24,17 @@ func Resolve(set *RuleSet, rawPath, rawQuery string) Decision {
 	np := Normalize(rawPath, set.policy)
 
 	// --- Exact tier ---
+	// Step a: QExact lookup — only when rawQuery is non-empty.
+	// exactQ is keyed by Normalize(pathPart,policy)+"?"+rawQueryPart (verbatim).
 	if rawQuery != "" {
 		key := np + "?" + rawQuery
-		if rule, ok := set.exact[key]; ok && rule.QueryHandling == QExact {
+		if rule, ok := set.exactQ[key]; ok {
 			return buildDecision(rule, np, rawQuery, nil)
 		}
 	}
 
-	if rule, ok := set.exact[np]; ok && rule.QueryHandling != QExact {
+	// Step b: non-QExact exact lookup.
+	if rule, ok := set.exact[np]; ok {
 		return buildDecision(rule, np, rawQuery, nil)
 	}
 
@@ -71,6 +74,9 @@ func buildDecision(rule Rule, np, rawQuery string, submatch []int) Decision {
 	}
 
 	// Apply query propagation.
+	// Contract (see doc.go): if rawQuery == "" append nothing;
+	// else append "?" + rawQuery when target has no "?", or "&" + rawQuery when it does.
+	// rawQuery is assumed URL-clean (no fragment).
 	if rule.QueryHandling == QPass && rawQuery != "" {
 		if strings.Contains(location, "?") {
 			location = location + "&" + rawQuery

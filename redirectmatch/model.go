@@ -89,8 +89,16 @@ type CompileError struct {
 
 // RuleSet is the compiled, immutable resolver input. Built once per ruleset
 // version; shared read-only across goroutines.
+//
+// Two separate maps eliminate key-space collisions between non-QExact Exact
+// rules and QExact Exact rules:
+//   - exact:  non-QExact Exact rules, keyed by Normalize(SourcePath, policy).
+//   - exactQ: QExact Exact rules, keyed by Normalize(pathPart, policy) + "?" + rawQueryPart,
+//     where pathPart and rawQueryPart are obtained by splitting SourcePath on the first "?".
+//     The rawQueryPart is kept verbatim (NOT normalized); see [doc.go] for the contract.
 type RuleSet struct {
 	policy  Policy
-	exact   map[string]Rule // keyed by SourcePath (or "path?query" for QExact)
+	exact   map[string]Rule // non-QExact Exact rules, keyed by Normalize(SourcePath, policy)
+	exactQ  map[string]Rule // QExact Exact rules, keyed by Normalize(pathPart,policy)+"?"+rawQuery
 	ordered []Rule          // prefix + regex rules, sorted (Priority ASC, ID ASC)
 }

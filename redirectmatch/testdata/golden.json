@@ -184,6 +184,33 @@
       "status_code": 301,
       "query_handling": "ignore",
       "priority": 0
+    },
+    {
+      "id": 21,
+      "source_path": "/",
+      "match_type": "exact",
+      "target": "/home",
+      "status_code": 302,
+      "query_handling": "ignore",
+      "priority": 0
+    },
+    {
+      "id": 22,
+      "source_path": "/?a=1&b=2",
+      "match_type": "exact",
+      "target": "/ordered",
+      "status_code": 301,
+      "query_handling": "exact",
+      "priority": 0
+    },
+    {
+      "id": 23,
+      "source_path": "/independence-foo",
+      "match_type": "exact",
+      "target": "/independence-bar",
+      "status_code": 302,
+      "query_handling": "ignore",
+      "priority": 0
     }
   ],
   "cases": [
@@ -300,20 +327,20 @@
       "location": "/post/123"
     },
     {
-      "name": "query QExact: does not match wrong query",
+      "name": "query QExact: does not match wrong query — falls through to QIgnore /",
       "path": "/",
       "query": "p=999",
-      "matched": false,
-      "status": 0,
-      "location": ""
+      "matched": true,
+      "status": 302,
+      "location": "/home"
     },
     {
-      "name": "query QExact: does not match empty query",
+      "name": "query QExact: empty query matches QIgnore /",
       "path": "/",
       "query": "",
-      "matched": false,
-      "status": 0,
-      "location": ""
+      "matched": true,
+      "status": 302,
+      "location": "/home"
     },
     {
       "name": "normalization: /NORM-TEST/ matches stored /norm-test",
@@ -346,6 +373,54 @@
       "matched": false,
       "status": 0,
       "location": ""
+    },
+    {
+      "name": "golden: QExact /?p=123 and QIgnore / coexist — matching query hits QExact",
+      "path": "/",
+      "query": "p=123",
+      "matched": true,
+      "status": 301,
+      "location": "/post/123"
+    },
+    {
+      "name": "golden: QExact /?p=123 and QIgnore / coexist — no query hits QIgnore",
+      "path": "/",
+      "query": "",
+      "matched": true,
+      "status": 302,
+      "location": "/home"
+    },
+    {
+      "name": "golden: QExact /?p=123 and QIgnore / coexist — wrong query falls through to QIgnore",
+      "path": "/",
+      "query": "p=999",
+      "matched": true,
+      "status": 302,
+      "location": "/home"
+    },
+    {
+      "name": "golden: two-map independence — /independence-foo resolves independently from QExact rules",
+      "path": "/independence-foo",
+      "query": "",
+      "matched": true,
+      "status": 302,
+      "location": "/independence-bar"
+    },
+    {
+      "name": "golden: QExact order-sensitive — correct order a=1&b=2 matches",
+      "path": "/",
+      "query": "a=1&b=2",
+      "matched": true,
+      "status": 301,
+      "location": "/ordered"
+    },
+    {
+      "name": "golden: QExact order-sensitive — reversed b=2&a=1 is a MISS falls to QIgnore /",
+      "path": "/",
+      "query": "b=2&a=1",
+      "matched": true,
+      "status": 302,
+      "location": "/home"
     }
   ]
 }
