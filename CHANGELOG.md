@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.84.0](https://github.com/anatolykoptev/go-kit/compare/v0.83.0...v0.84.0) (2026-06-18)
+
+
+### Features
+
+* **redirectmatch:** storage-free redirect matching primitive ([#123](https://github.com/anatolykoptev/go-kit/issues/123)) ([85f86e9](https://github.com/anatolykoptev/go-kit/commit/85f86e9f8344592f5d4a9cef2730516daadc4aff))
+
 ## [0.83.0](https://github.com/anatolykoptev/go-kit/compare/v0.82.0...v0.83.0) (2026-06-12)
 
 
