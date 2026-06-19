@@ -306,3 +306,120 @@ func TestModelRegistry_ConcurrentColdStart_SingleFetch(t *testing.T) {
 		t.Fatalf("/v1/models hit %d times under 32 concurrent cold callers, want 1", got)
 	}
 }
+
+
+// ---------------------------------------------------------------------------
+// Auth header tests (TDD: written RED before the fix).
+// ---------------------------------------------------------------------------
+
+// TestModelRegistry_AuthHeader_Sent verifies that fetch sends Authorization: Bearer <apiKey>
+// when apiKey is non-empty. Without the fix, available() does not accept apiKey
+// and the request goes out without auth -> the server 401s -> ok=false.
+func TestModelRegistry_AuthHeader_Sent(t *testing.T) {
+	const wantKey = "test-key"
+	var gotAuthHeader string
+	var headerMu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		headerMu.Lock()
+		gotAuthHeader = auth
+		headerMu.Unlock()
+		if auth != "Bearer "+wantKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(modelsJSON([]string{"gpt-4o"})))
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := llm.NewModelRegistry()
+	var ev llm.ModelFilterEvent
+	got := llm.BuildModelChainEndpointsFiltered(
+		context.Background(), reg, srv.URL, wantKey,
+		"gpt-4o", []string{}, func(e llm.ModelFilterEvent) { ev = e },
+	)
+
+	// Model must survive (auth -> 200 -> "gpt-4o" in live set).
+	if g := models(got); len(g) == 0 || g[0] != "gpt-4o" {
+		t.Fatalf("models = %v, want [gpt-4o] -- auth header not sent", g)
+	}
+	if ev.Degraded {
+		t.Errorf("event must not be degraded when auth succeeds: %+v", ev)
+	}
+
+	headerMu.Lock()
+	h := gotAuthHeader
+	headerMu.Unlock()
+	if h != "Bearer "+wantKey {
+		t.Errorf("server received Authorization = %q, want %q", h, "Bearer "+wantKey)
+	}
+}
+
+// TestModelRegistry_NoAuth_Degraded verifies that an empty apiKey -> 401 -> graceful
+// degradation (full chain returned, no panic).
+func TestModelRegistry_NoAuth_Degraded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(modelsJSON([]string{"gpt-4o"})))
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := llm.NewModelRegistry()
+	var ev llm.ModelFilterEvent
+	got := llm.BuildModelChainEndpointsFiltered(
+		context.Background(), reg, srv.URL, "", // empty apiKey
+		"gpt-4o", []string{"gpt-4"}, func(e llm.ModelFilterEvent) { ev = e },
+	)
+
+	// Graceful: full chain returned, degraded.
+	wantModels := []string{"gpt-4o", "gpt-4"}
+	if g := models(got); !reflect.DeepEqual(g, wantModels) {
+		t.Fatalf("models = %v, want full chain %v (graceful degradation)", g, wantModels)
+	}
+	if !ev.Degraded {
+		t.Errorf("event must be degraded on 401: %+v", ev)
+	}
+	if ev.Reason != "fetch_failed" {
+		t.Errorf("Reason = %q, want fetch_failed", ev.Reason)
+	}
+}
+
+// TestBuildModelChainEndpointsFiltered_DropsAbsentModel is an end-to-end auth+filter
+// test: auth reaches the wire AND absent model is dropped from the chain.
+func TestBuildModelChainEndpointsFiltered_DropsAbsentModel(t *testing.T) {
+	const wantKey = "test-key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+wantKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// Only gpt-4o is live; gpt-4 is absent.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(modelsJSON([]string{"gpt-4o"})))
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := llm.NewModelRegistry()
+	var ev llm.ModelFilterEvent
+	got := llm.BuildModelChainEndpointsFiltered(
+		context.Background(), reg, srv.URL, wantKey,
+		"gpt-4o", []string{"gpt-4"}, func(e llm.ModelFilterEvent) { ev = e },
+	)
+
+	// gpt-4o present -> kept; gpt-4 absent -> dropped.
+	if g := models(got); len(g) != 1 || g[0] != "gpt-4o" {
+		t.Fatalf("models = %v, want [gpt-4o] only -- gpt-4 must be dropped", g)
+	}
+	if ev.Degraded {
+		t.Errorf("must not degrade when filter works: %+v", ev)
+	}
+	if !reflect.DeepEqual(ev.Dropped, []string{"gpt-4"}) {
+		t.Errorf("Dropped = %v, want [gpt-4]", ev.Dropped)
+	}
+}
