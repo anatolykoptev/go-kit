@@ -6,7 +6,9 @@ package llm
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -35,7 +37,9 @@ type Client struct {
 	middleware        []Middleware
 	endpointObserver  EndpointAttemptObserver
 	perAttemptTimeout time.Duration  // 0 = disabled; per-attempt wrapping skipped, behavior byte-identical to pre-feature
-	cooldown          *modelCooldown // nil = disabled; no per-model cooldown, behavior byte-identical to pre-feature
+	cooldown           *modelCooldown   // nil = disabled; no per-model cooldown, behavior byte-identical to pre-feature
+	selectionStrategy  SelectionStrategy // default SelectionPriority
+	rander            *rand.Rand        // nil = global source; injectable for deterministic tests
 }
 
 // Option configures the Client.
@@ -191,6 +195,26 @@ func WithModelCooldownObserver(fn func(model string, cooling bool, d time.Durati
 	}
 }
 
+// WithSelectionStrategy sets the endpoint selection strategy for WithEndpoints chains.
+// SelectionPriority (default) tries endpoints in configured order (primary first).
+// SelectionRandom shuffles eligible (non-cooled) endpoints on each request,
+// distributing load across the pool so no single provider is always tried first.
+//
+// NewClient reads LLM_SELECTION_STRATEGY from the environment automatically; this
+// option lets callers override or test-inject the strategy programmatically.
+func WithSelectionStrategy(s SelectionStrategy) Option {
+	return func(c *Client) { c.selectionStrategy = s }
+}
+
+// WithRander sets the random source used for SelectionRandom strategy.
+// The injected *rand.Rand is intended for deterministic testing only and
+// MUST NOT be shared across concurrent requests: *rand.Rand is not safe
+// for concurrent use. Leave nil in production to use the locked global
+// rand.Shuffle.
+func WithRander(r *rand.Rand) Option {
+	return func(c *Client) { c.rander = r }
+}
+
 // Middleware wraps chat completion calls. Use for logging, metrics, caching.
 // The next function sends the request to the API (or the next middleware).
 // First added middleware is the outermost wrapper.
@@ -264,16 +288,22 @@ func isCircuitTrippingError(err error) bool {
 
 // NewClient creates a new LLM client.
 // For callers that want to gracefully disable LLM when apiKey is empty, see NewOptional.
+//
+// LLM_SELECTION_STRATEGY env var is read on construction: "random" → SelectionRandom;
+// empty/missing → SelectionPriority (default, no log); any other non-empty value →
+// SelectionPriority + slog.Warn. An explicit WithSelectionStrategy option always wins
+// over the env var (options are applied after the env default is set).
 func NewClient(baseURL, apiKey, model string, opts ...Option) *Client {
 	// Temperature is intentionally nil — see ChatRequest.Temperature comment.
 	// Callers who want non-default sampling pass WithTemperature(t).
 	c := &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		apiKey:     apiKey,
-		model:      model,
-		maxTokens:  defaultMaxTokens,
-		maxRetries: defaultMaxRetries,
-		httpClient: &http.Client{Timeout: defaultTimeout},
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		apiKey:            apiKey,
+		model:             model,
+		maxTokens:         defaultMaxTokens,
+		maxRetries:        defaultMaxRetries,
+		httpClient:        &http.Client{Timeout: defaultTimeout},
+		selectionStrategy: parseSelectionStrategy(os.Getenv("LLM_SELECTION_STRATEGY")),
 	}
 	for _, opt := range opts {
 		opt(c)

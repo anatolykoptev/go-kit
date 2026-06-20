@@ -198,6 +198,30 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 		var lastErr error
 		attempted := false
 		endpoints, skipCooled := c.cooldownCandidates()
+		// Under random strategy, shuffle the eligible (non-cooled) endpoints so no
+		// single provider is always hammered first. Only when skipCooled=true (≥1
+		// healthy candidate exists); the never-fail-closed path (skipCooled=false,
+		// all-cooled, endpoints[:1]) keeps priority order.
+		if c.selectionStrategy == SelectionRandom {
+			// When skipCooled=true (≥1 healthy candidate exists), build the
+			// eligible (non-cooled) subset and shuffle it. When skipCooled=false
+			// (cooldown disabled OR all-cooled last-resort path), endpoints is
+			// either the full chain (no cooldown) or endpoints[:1] (all-cooled);
+			// shuffle the full list in the no-cooldown case, preserve order in
+			// the last-resort case.
+			if skipCooled {
+				// eligibleEndpoints is Guard A: filter to non-cooled subset before
+				// shuffling so a cooled model is never placed in the try-order.
+				// Guard B (the per-ep cooling() check in the loop below) is the
+				// race-safety backstop for the concurrent-cooldown window where a
+				// model may be cooled between this snapshot and the loop iteration.
+				endpoints = shuffleEndpoints(eligibleEndpoints(endpoints, c.cooldown), c.rander)
+			} else if c.cooldown == nil {
+				// No cooldown configured: all endpoints are eligible; shuffle all.
+				endpoints = shuffleEndpoints(endpoints, c.rander)
+			}
+			// else: all-cooled last-resort (endpoints[:1]): keep primary, no shuffle.
+		}
 		for _, ep := range endpoints {
 			// Skip a model in quota cooldown, but only while a healthier
 			// candidate remains — degraded > dead.
