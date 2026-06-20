@@ -217,8 +217,12 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 					}
 				}
 				endpoints = shuffleEndpoints(eligible, c.rander)
-				// skipCooled remains true; per-ep cooling() check in loop is
-				// now a no-op since eligible contains only non-cooled models.
+				// skipCooled remains true. The per-ep cooling() check in the
+				// loop below is a race-safety backstop: eligible was built
+				// under a point-in-time snapshot, but a concurrent goroutine
+				// may cool a model between this build and the loop iteration.
+				// The loop guard catches that window so a concurrently-cooled
+				// model is never attempted.
 			} else if c.cooldown == nil {
 				// No cooldown configured: all endpoints are eligible; shuffle all.
 				endpoints = shuffleEndpoints(endpoints, c.rander)
