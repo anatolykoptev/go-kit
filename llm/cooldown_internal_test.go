@@ -250,6 +250,8 @@ func TestIsQuotaError(t *testing.T) {
 			&APIError{StatusCode: http.StatusServiceUnavailable, Body: "upstream connect error"},
 			false,
 		},
+		{"403 quota marker", &APIError{StatusCode: http.StatusForbidden, Type: "auth_unavailable"}, true},
+		{"403 bare", &APIError{StatusCode: http.StatusForbidden}, false},
 		{"500 not quota", &APIError{StatusCode: http.StatusInternalServerError}, false},
 		{"413 not quota", &APIError{StatusCode: http.StatusRequestEntityTooLarge}, false},
 		{"nil not quota", nil, false},

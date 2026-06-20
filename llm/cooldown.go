@@ -252,6 +252,8 @@ var quotaBodyMarkers = []string{
 //   - HTTP 429 is ALWAYS quota-class (any body).
 //   - HTTP 503 is quota-class ONLY when its parsed Type or body marks
 //     quota/auth-unavailable. A bare 503 (transient gateway blip) is NOT cooled.
+//   - HTTP 403 is quota-class ONLY when its parsed Type or body marks a quota
+//     marker (e.g. provider pool exhausted). A plain 403 (expired key) is NOT.
 //
 // All other statuses (500/413/4xx) are not quota-class.
 func isQuotaError(err error) bool {
@@ -259,17 +261,20 @@ func isQuotaError(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	switch apiErr.StatusCode {
-	case http.StatusTooManyRequests:
-		return true
-	case http.StatusServiceUnavailable:
-		hay := strings.ToLower(apiErr.Type + " " + apiErr.Code + " " + apiErr.Body)
+	checkMarkers := func(a *APIError) bool {
+		hay := strings.ToLower(a.Type + " " + a.Code + " " + a.Body)
 		for _, marker := range quotaBodyMarkers {
 			if strings.Contains(hay, marker) {
 				return true
 			}
 		}
 		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden, http.StatusServiceUnavailable:
+		return checkMarkers(apiErr)
 	default:
 		return false
 	}

@@ -116,8 +116,8 @@ const errTypeUnknown = "unknown"
 // classifiers in this package — no new detection logic is introduced here.
 //
 // Values (align with the fleet failure-class taxonomy shared names):
-//   - auth_expiry       — 401 or 403
-//   - dependency_block  — 429 or quota-class 503 (provider-side rate/auth denial)
+//   - auth_expiry       — 401; or 403 without a quota marker
+//   - dependency_block  — 429; quota-class 503; or 403 with a quota marker
 //   - context_overflow  — 413 (TPM/payload too large) or 400 context_length_exceeded
 //   - transient         — retryable 5xx / network (not quota-class)
 //   - client            — non-auth, non-overflow 4xx (bad request, etc.)
@@ -132,8 +132,14 @@ func ClassifyErrorType(err error) string {
 	if !errors.As(err, &apiErr) {
 		return errTypeUnknown
 	}
-	// auth_expiry: explicit auth rejection
-	if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
+	// auth_expiry: explicit auth rejection (401 always; 403 unless it carries a quota marker)
+	if apiErr.StatusCode == http.StatusUnauthorized {
+		return "auth_expiry"
+	}
+	if apiErr.StatusCode == http.StatusForbidden {
+		if isQuotaError(err) {
+			return "dependency_block"
+		}
 		return "auth_expiry"
 	}
 	// dependency_block: provider-side quota / rate-limit denial

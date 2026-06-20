@@ -122,6 +122,11 @@ func TestClassifyErrorType(t *testing.T) {
 			want: "auth_expiry",
 		},
 		{
+			name: "403 with quota marker returns dependency_block (not auth_expiry)",
+			err:  &llm.APIError{StatusCode: 403, Type: "auth_unavailable"},
+			want: "dependency_block",
+		},
+		{
 			name: "429 returns dependency_block (not transient despite Retryable)",
 			err:  &llm.APIError{StatusCode: 429, Retryable: true},
 			want: "dependency_block",
