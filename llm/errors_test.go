@@ -83,3 +83,115 @@ func TestAPIError_ErrorsAs_NotPresent(t *testing.T) {
 		t.Fatal("errors.As should not find APIError in unrelated error")
 	}
 }
+
+func TestClassifyErrorType(t *testing.T) {
+	// wrappedAPIErr wraps an APIError in a fmt.Errorf layer to verify errors.As
+	// unwrapping works correctly in ClassifyErrorType.
+	wrappedAPIErr := func(e *llm.APIError) error {
+		return fmt.Errorf("wrapped: %w", e)
+	}
+
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "nil returns empty",
+			err:  nil,
+			want: "",
+		},
+		{
+			name: "non-APIError returns unknown",
+			err:  wrappedAPIErr(&llm.APIError{StatusCode: 500, Retryable: true}), // control — uses APIError
+			want: "transient",
+		},
+		{
+			name: "plain fmt.Errorf returns unknown",
+			err:  errors.New("oops"),
+			want: "unknown",
+		},
+		{
+			name: "401 returns auth_expiry",
+			err:  &llm.APIError{StatusCode: 401},
+			want: "auth_expiry",
+		},
+		{
+			name: "403 returns auth_expiry (not client)",
+			err:  &llm.APIError{StatusCode: 403},
+			want: "auth_expiry",
+		},
+		{
+			name: "403 with quota marker returns dependency_block (not auth_expiry)",
+			err:  &llm.APIError{StatusCode: 403, Type: "auth_unavailable"},
+			want: "dependency_block",
+		},
+		{
+			name: "429 returns dependency_block (not transient despite Retryable)",
+			err:  &llm.APIError{StatusCode: 429, Retryable: true},
+			want: "dependency_block",
+		},
+		{
+			name: "503 with quota marker returns dependency_block",
+			err:  &llm.APIError{StatusCode: 503, Type: "auth_unavailable", Retryable: true},
+			want: "dependency_block",
+		},
+		{
+			name: "bare 503 without quota marker returns transient (not dependency_block)",
+			err:  &llm.APIError{StatusCode: 503, Retryable: true},
+			want: "transient",
+		},
+		{
+			name: "413 returns context_overflow (not client)",
+			err:  &llm.APIError{StatusCode: 413},
+			want: "context_overflow",
+		},
+		{
+			// Pins ordering: asFailover (context_overflow) must be checked BEFORE
+			// apiErr.Retryable (transient). A hypothetical Retryable 413 must still
+			// classify as context_overflow, not transient.
+			name: "413 with Retryable=true returns context_overflow (not transient)",
+			err:  &llm.APIError{StatusCode: 413, Retryable: true},
+			want: "context_overflow",
+		},
+		{
+			name: "400 with context_length_exceeded returns context_overflow (not client)",
+			err:  &llm.APIError{StatusCode: 400, Code: "context_length_exceeded"},
+			want: "context_overflow",
+		},
+		{
+			name: "400 plain returns client",
+			err:  &llm.APIError{StatusCode: 400, Retryable: false},
+			want: "client",
+		},
+		{
+			name: "422 returns client",
+			err:  &llm.APIError{StatusCode: 422, Retryable: false},
+			want: "client",
+		},
+		{
+			name: "500 retryable returns transient",
+			err:  &llm.APIError{StatusCode: 500, Retryable: true},
+			want: "transient",
+		},
+		{
+			name: "502 retryable returns transient",
+			err:  &llm.APIError{StatusCode: 502, Retryable: true},
+			want: "transient",
+		},
+		{
+			name: "wrapped APIError 401 unwraps correctly",
+			err:  fmt.Errorf("call failed: %w", &llm.APIError{StatusCode: 401}),
+			want: "auth_expiry",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := llm.ClassifyErrorType(tc.err)
+			if got != tc.want {
+				t.Errorf("ClassifyErrorType(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}

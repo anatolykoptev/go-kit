@@ -44,8 +44,8 @@ func TestChainMetrics_ServedCounter_PrimarySuccess(t *testing.T) {
 	if other := testutil.ToFloat64(m.ServedTotal().WithLabelValues("fallback", "1")); other != 0 {
 		t.Errorf("served{fallback,1} = %v, want 0 (primary served)", other)
 	}
-	if att := testutil.ToFloat64(m.AttemptTotal().WithLabelValues("primary", "ok")); att != 1 {
-		t.Errorf("attempt{primary,ok} = %v, want 1", att)
+	if att := testutil.ToFloat64(m.AttemptTotal().WithLabelValues("primary", "ok", "")); att != 1 {
+		t.Errorf("attempt{primary,ok,} = %v, want 1", att)
 	}
 }
 
@@ -82,11 +82,12 @@ func TestChainMetrics_ServedCounter_Fallback(t *testing.T) {
 	if served := testutil.ToFloat64(m.ServedTotal().WithLabelValues("primary", "0")); served != 0 {
 		t.Errorf("served{primary,0} = %v, want 0 (primary failed)", served)
 	}
-	if att := testutil.ToFloat64(m.AttemptTotal().WithLabelValues("primary", "error")); att != 1 {
-		t.Errorf("attempt{primary,error} = %v, want 1", att)
+	// dead server returns 503 with no quota marker → ClassifyErrorType → "transient"
+	if att := testutil.ToFloat64(m.AttemptTotal().WithLabelValues("primary", "error", "transient")); att != 1 {
+		t.Errorf("attempt{primary,error,transient} = %v, want 1", att)
 	}
-	if att := testutil.ToFloat64(m.AttemptTotal().WithLabelValues("fallback", "ok")); att != 1 {
-		t.Errorf("attempt{fallback,ok} = %v, want 1", att)
+	if att := testutil.ToFloat64(m.AttemptTotal().WithLabelValues("fallback", "ok", "")); att != 1 {
+		t.Errorf("attempt{fallback,ok,} = %v, want 1", att)
 	}
 }
 
