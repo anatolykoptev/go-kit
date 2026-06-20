@@ -42,6 +42,7 @@ type Client struct {
 	selectionStrategy  SelectionStrategy // default SelectionPriority
 	rander            *rand.Rand        // nil = global source; injectable for deterministic tests
 	modelWeights       map[string]int    // nil = all models default weight 1 (SelectionWeighted)
+	reasoningEffortModels []string          // nil = pass-through; non-empty = per-endpoint allowlist gating in attemptEndpoint
 }
 
 // Option configures the Client.
@@ -244,6 +245,21 @@ func WithModelWeights(weights map[string]int) Option {
 	}
 }
 
+// WithReasoningEffortModels sets the allowlist of exact model IDs that receive
+// reasoning_effort in a WithEndpoints chain. When the allowlist is non-empty,
+// attemptEndpoint strips reasoning_effort from any endpoint whose model is NOT
+// in the list — preventing HTTP 400 from providers that reject the parameter.
+//
+// Empty (default) = pass-through for all endpoints (existing behavior preserved
+// for callers not using this option).
+//
+// NewClient also reads LLM_REASONING_EFFORT_MODELS env (comma-separated model
+// IDs) on construction; an explicit WithReasoningEffortModels option applied
+// after NewClient wins over the env var.
+func WithReasoningEffortModels(models []string) Option {
+	return func(c *Client) { c.reasoningEffortModels = models }
+}
+
 // Middleware wraps chat completion calls. Use for logging, metrics, caching.
 // The next function sends the request to the API (or the next middleware).
 // First added middleware is the outermost wrapper.
@@ -336,6 +352,9 @@ func NewClient(baseURL, apiKey, model string, opts ...Option) *Client {
 	}
 	if raw := os.Getenv("LLM_MODEL_WEIGHTS"); raw != "" {
 		c.modelWeights = parseModelWeights(raw)
+	}
+	if raw := os.Getenv("LLM_REASONING_EFFORT_MODELS"); raw != "" {
+		c.reasoningEffortModels = parseCSV(raw)
 	}
 	for _, opt := range opts {
 		opt(c)
