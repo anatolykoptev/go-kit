@@ -123,13 +123,13 @@ func asFailover(err error) bool {
 const emptyCompletionCode = "empty_completion"
 
 // newEmptyCompletionError builds the structured error for an empty completion.
-// StatusCode is 200 (the HTTP call succeeded; the failure is semantic), Retryable
+// StatusCode is 0 (the HTTP call succeeded; the failure is semantic — 200 would look like success in logs), Retryable
 // is false (re-issuing the identical request recurs the same empty output on a
 // deterministic endpoint — so this is a chain-failover signal, not a
 // same-endpoint retry). finishReason is carried in the body for observability.
 func newEmptyCompletionError(finishReason string) *APIError {
 	return &APIError{
-		StatusCode: http.StatusOK,
+		StatusCode: 0,
 		Body:       "llm: empty completion (no content, no tool calls; finish_reason=" + finishReason + ")",
 		Code:       emptyCompletionCode,
 		Retryable:  false,

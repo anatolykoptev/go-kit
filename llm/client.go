@@ -344,6 +344,10 @@ func NewClient(baseURL, apiKey, model string, opts ...Option) *Client {
 }
 
 // Complete sends a text completion request with optional system prompt.
+// When using WithEndpoints, a model response with empty content and no tool calls
+// is treated as a non-retryable failure on that endpoint; the chain advances to
+// the next model. If all models return empty content, the call returns a terminal
+// empty_completion APIError.
 // If system is empty, only the user message is sent.
 // Optional ChatOptions (e.g. WithChatTemperature, WithChatMaxTokens) override client defaults for this call.
 func (c *Client) Complete(ctx context.Context, system, user string, opts ...ChatOption) (string, error) {
@@ -381,6 +385,10 @@ func (c *Client) CompleteMultimodal(ctx context.Context, prompt string, images [
 }
 
 // CompleteRaw sends a chat completion with explicit messages.
+// When using WithEndpoints, a model response with empty content and no tool calls
+// is treated as a non-retryable failure on that endpoint; the chain advances to
+// the next model. If all models return empty content, the call returns a terminal
+// empty_completion APIError.
 // Retries on 429/5xx, cycles through fallback keys.
 // Optional ChatOptions (e.g. WithChatTemperature, WithChatMaxTokens) override client defaults for this call.
 func (c *Client) CompleteRaw(ctx context.Context, messages []Message, opts ...ChatOption) (string, error) {

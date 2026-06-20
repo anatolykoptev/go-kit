@@ -108,7 +108,10 @@ func TestSingleEndpoint_EmptyContentNotRetried(t *testing.T) {
 	defer srv.Close()
 
 	c := llm.NewClient(srv.URL, "k", "m", llm.WithMaxRetries(3))
-	_, _ = c.Complete(context.Background(), "", "test")
+	_, err := c.Complete(context.Background(), "", "test")
+	if err == nil {
+		t.Error("empty completion must surface an error on single endpoint")
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if hits != 1 {
@@ -134,5 +137,81 @@ func TestEmptyContent_ErrorIsClassifiable(t *testing.T) {
 	}
 	if got := llm.ClassifyErrorType(err); got == "" || got == "unknown" {
 		t.Errorf("ClassifyErrorType = %q, want a specific non-unknown class", got)
+	}
+}
+
+// TestChain_AllEmptyTerminatesWithError: when every endpoint in the chain returns
+// empty content, the chain must terminate with a typed APIError (never (nil, nil),
+// never panic). Each endpoint must be attempted exactly once.
+func TestChain_AllEmptyTerminatesWithError(t *testing.T) {
+	var mu0, mu1 sync.Mutex
+	hits0, hits1 := 0, 0
+
+	srv0 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu0.Lock()
+		hits0++
+		mu0.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"finish_reason": "length",
+				"message": map[string]any{"content": ""},
+			}},
+		})
+	}))
+	defer srv0.Close()
+
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu1.Lock()
+		hits1++
+		mu1.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"finish_reason": "length",
+				"message": map[string]any{"content": ""},
+			}},
+		})
+	}))
+	defer srv1.Close()
+
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: srv0.URL, Key: "k", Model: "model-a"},
+			{URL: srv1.URL, Key: "k", Model: "model-b"},
+		}),
+		llm.WithMaxRetries(1),
+	)
+
+	_, err := c.Complete(context.Background(), "", "test")
+
+	// Must terminate with an error — never (nil, nil), never panic.
+	if err == nil {
+		t.Fatal("chain with all empty endpoints must return a non-nil error")
+	}
+
+	// Error must be a typed *APIError so metrics can classify it.
+	var ae *llm.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("want *llm.APIError, got %T: %v", err, err)
+	}
+
+	// The terminal error must be the empty-completion sentinel.
+	if got := llm.ClassifyErrorType(err); got != "empty_completion" {
+		t.Errorf("ClassifyErrorType = %q, want \"empty_completion\"", got)
+	}
+
+	// Each server must have been hit exactly once (no extra retries on the same endpoint).
+	mu0.Lock()
+	n0 := hits0
+	mu0.Unlock()
+	mu1.Lock()
+	n1 := hits1
+	mu1.Unlock()
+	if n0 != 1 {
+		t.Errorf("srv0 hit %d times, want 1", n0)
+	}
+	if n1 != 1 {
+		t.Errorf("srv1 hit %d times, want 1", n1)
 	}
 }
