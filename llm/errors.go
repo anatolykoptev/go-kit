@@ -103,7 +103,43 @@ func asFailover(err error) bool {
 	if apiErr.StatusCode == http.StatusBadRequest && apiErr.Code == "context_length_exceeded" {
 		return true
 	}
+	// An empty-completion response (HTTP 200, no usable content) is non-retryable
+	// on THIS model — a deterministic reasoning model truncated by the output-token
+	// budget recurs the same truncation — but the NEXT model in the chain may have
+	// a different reasoning/output profile and answer. Advance, don't abort.
+	if isEmptyCompletion(err) {
+		return true
+	}
 	return false
+}
+
+// emptyCompletionCode is the APIError.Code sentinel for a 200-OK response whose
+// assistant message carried no usable content (no text, no tool calls). Observed
+// in production when a reasoning model exhausts its max_tokens budget on
+// reasoning tokens before emitting any answer (finish_reason=length, content="").
+// A non-empty body that merely fails to JSON-parse is NOT this case — that
+// surfaces as decode/parse handling upstream; this sentinel is specifically the
+// "model produced nothing" semantic failure.
+const emptyCompletionCode = "empty_completion"
+
+// newEmptyCompletionError builds the structured error for an empty completion.
+// StatusCode is 0 (the HTTP call succeeded; the failure is semantic — 200 would look like success in logs), Retryable
+// is false (re-issuing the identical request recurs the same empty output on a
+// deterministic endpoint — so this is a chain-failover signal, not a
+// same-endpoint retry). finishReason is carried in the body for observability.
+func newEmptyCompletionError(finishReason string) *APIError {
+	return &APIError{
+		StatusCode: 0,
+		Body:       "llm: empty completion (no content, no tool calls; finish_reason=" + finishReason + ")",
+		Code:       emptyCompletionCode,
+		Retryable:  false,
+	}
+}
+
+// isEmptyCompletion reports whether err is the empty-completion sentinel.
+func isEmptyCompletion(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Code == emptyCompletionCode
 }
 
 // errTypeUnknown is the error_type label value for errors that do not match
@@ -119,6 +155,7 @@ const errTypeUnknown = "unknown"
 //   - auth_expiry       — 401; or 403 without a quota marker
 //   - dependency_block  — 429; quota-class 503; or 403 with a quota marker
 //   - context_overflow  — 413 (TPM/payload too large) or 400 context_length_exceeded
+//   - empty_completion  — 200 with no usable content (reasoning truncated by max_tokens)
 //   - transient         — retryable 5xx / network (not quota-class)
 //   - client            — non-auth, non-overflow 4xx (bad request, etc.)
 //   - unknown           — non-APIError errors or anything unclassified
@@ -147,6 +184,13 @@ func ClassifyErrorType(err error) string {
 	// reuses isQuotaError logic (429 + quota-class 503)
 	if isQuotaError(err) {
 		return "dependency_block"
+	}
+	// empty_completion: model returned a 200 with no usable content (reasoning
+	// model truncated by max_tokens before emitting any answer). Checked BEFORE
+	// asFailover because asFailover also matches this class for chain-advance,
+	// but the metric label must distinguish it from context_overflow.
+	if isEmptyCompletion(err) {
+		return "empty_completion"
 	}
 	// context_overflow: request too large for this model
 	// reuses asFailover logic (413 + 400 context_length_exceeded)

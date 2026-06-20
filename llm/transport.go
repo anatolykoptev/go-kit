@@ -89,6 +89,18 @@ func (c *Client) doRequest(ctx context.Context, baseURL, apiKey string, req *Cha
 
 	msg := chatResp.Choices[0].Message
 	clean, reasoning := splitReasoning(msg.Content, msg.ReasoningContent)
+	// Empty-completion guard: a 200-OK whose assistant message carries no usable
+	// content (no text AND no tool calls) is a semantic failure, not a success.
+	// Observed in production when a reasoning model exhausts its max_tokens budget
+	// on reasoning tokens and emits finish_reason=length with empty content. Pre-
+	// guard this short-circuited the model-fallback chain on the first such model
+	// and propagated an empty answer with no error (silent downgrade). Surface it
+	// as the empty-completion sentinel so the chain advances to a model that can
+	// answer (and a single endpoint reports a real error instead of "").
+	// Tool-call responses legitimately have empty content, so they are exempt.
+	if clean == "" && len(msg.ToolCalls) == 0 {
+		return nil, newEmptyCompletionError(chatResp.Choices[0].FinishReason)
+	}
 	return &ChatResponse{
 		Content:      clean,
 		Reasoning:    reasoning,
