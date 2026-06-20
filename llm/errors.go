@@ -106,6 +106,52 @@ func asFailover(err error) bool {
 	return false
 }
 
+// ClassifyErrorType returns a low-cardinality error_type label value for
+// Prometheus / OTel instrumentation. The mapping derives from the existing
+// classifiers in this package — no new detection logic is introduced here.
+//
+// Values (align with the fleet failure-class taxonomy shared names):
+//   - auth_expiry       — 401 or 403
+//   - dependency_block  — 429 or quota-class 503 (provider-side rate/auth denial)
+//   - context_overflow  — 413 (TPM/payload too large) or 400 context_length_exceeded
+//   - transient         — retryable 5xx / network (not quota-class)
+//   - client            — non-auth, non-overflow 4xx (bad request, etc.)
+//   - unknown           — non-APIError errors or anything unclassified
+//
+// Returns "" when err is nil (success path label).
+func ClassifyErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return "unknown"
+	}
+	// auth_expiry: explicit auth rejection
+	if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
+		return "auth_expiry"
+	}
+	// dependency_block: provider-side quota / rate-limit denial
+	// reuses isQuotaError logic (429 + quota-class 503)
+	if isQuotaError(err) {
+		return "dependency_block"
+	}
+	// context_overflow: request too large for this model
+	// reuses asFailover logic (413 + 400 context_length_exceeded)
+	if asFailover(err) {
+		return "context_overflow"
+	}
+	// transient: retryable 5xx / network errors (remaining ones — 500,502,504 etc.)
+	if apiErr.Retryable {
+		return "transient"
+	}
+	// client: 4xx that aren't auth/quota/overflow (bad request, not-found, etc.)
+	if apiErr.StatusCode >= http.StatusBadRequest && apiErr.StatusCode < http.StatusInternalServerError {
+		return "client"
+	}
+	return "unknown"
+}
+
 // parseRetryAfter parses the HTTP Retry-After header per RFC 7231. The
 // value can be either a non-negative integer number of seconds or an
 // HTTP-date. Returns 0 on empty or unparseable input.
