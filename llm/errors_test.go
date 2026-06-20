@@ -108,7 +108,7 @@ func TestClassifyErrorType(t *testing.T) {
 		},
 		{
 			name: "plain fmt.Errorf returns unknown",
-			err:  fmt.Errorf("oops"),
+			err:  errors.New("oops"),
 			want: "unknown",
 		},
 		{
