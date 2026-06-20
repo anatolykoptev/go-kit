@@ -6,6 +6,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"net/http"
 	"slices"
 	"strings"
@@ -35,7 +36,9 @@ type Client struct {
 	middleware        []Middleware
 	endpointObserver  EndpointAttemptObserver
 	perAttemptTimeout time.Duration  // 0 = disabled; per-attempt wrapping skipped, behavior byte-identical to pre-feature
-	cooldown          *modelCooldown // nil = disabled; no per-model cooldown, behavior byte-identical to pre-feature
+	cooldown           *modelCooldown   // nil = disabled; no per-model cooldown, behavior byte-identical to pre-feature
+	selectionStrategy  SelectionStrategy // default SelectionPriority
+	rander            *rand.Rand        // nil = global source; injectable for deterministic tests
 }
 
 // Option configures the Client.
@@ -189,6 +192,24 @@ func WithModelCooldownObserver(fn func(model string, cooling bool, d time.Durati
 		}
 		c.cooldown.onChange = fn
 	}
+}
+
+// WithSelectionStrategy sets the endpoint selection strategy for WithEndpoints chains.
+// SelectionPriority (default) tries endpoints in configured order (primary first).
+// SelectionRandom shuffles eligible (non-cooled) endpoints on each request,
+// distributing load across the pool so no single provider is always tried first.
+//
+// Configure via LLM_SELECTION_STRATEGY env var ("priority"|"random") when constructing
+// with NewFromEnv-style helpers by calling WithSelectionStrategy(parseSelectionStrategy(...)).
+func WithSelectionStrategy(s SelectionStrategy) Option {
+	return func(c *Client) { c.selectionStrategy = s }
+}
+
+// WithRander injects a seeded *rand.Rand for deterministic tests when using
+// SelectionRandom. Pass rand.New(rand.NewSource(seed)) to get reproducible shuffle order.
+// nil (default) uses the global rand source.
+func WithRander(r *rand.Rand) Option {
+	return func(c *Client) { c.rander = r }
 }
 
 // Middleware wraps chat completion calls. Use for logging, metrics, caching.
