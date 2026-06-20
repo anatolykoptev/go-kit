@@ -198,11 +198,14 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 		var lastErr error
 		attempted := false
 		endpoints, skipCooled := c.cooldownCandidates()
-		// Under random strategy, shuffle the eligible (non-cooled) endpoints so no
-		// single provider is always hammered first. Only when skipCooled=true (≥1
-		// healthy candidate exists); the never-fail-closed path (skipCooled=false,
-		// all-cooled, endpoints[:1]) keeps priority order.
-		if c.selectionStrategy == SelectionRandom {
+		// tryOrder is the iteration slice for the loop. It may be a reordered or
+		// filtered subset of endpoints (never a superset). The original endpoints
+		// slice from cooldownCandidates is always preserved as the source of the
+		// never-fail-closed race guard at the bottom (endpoints[0]), because tryOrder
+		// can be empty (e.g. all models weight-0 under SelectionWeighted).
+		tryOrder := endpoints
+		switch c.selectionStrategy {
+		case SelectionRandom:
 			// When skipCooled=true (≥1 healthy candidate exists), build the
 			// eligible (non-cooled) subset and shuffle it. When skipCooled=false
 			// (cooldown disabled OR all-cooled last-resort path), endpoints is
@@ -215,14 +218,24 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 				// Guard B (the per-ep cooling() check in the loop below) is the
 				// race-safety backstop for the concurrent-cooldown window where a
 				// model may be cooled between this snapshot and the loop iteration.
-				endpoints = shuffleEndpoints(eligibleEndpoints(endpoints, c.cooldown), c.rander)
+				tryOrder = shuffleEndpoints(eligibleEndpoints(endpoints, c.cooldown), c.rander)
 			} else if c.cooldown == nil {
 				// No cooldown configured: all endpoints are eligible; shuffle all.
-				endpoints = shuffleEndpoints(endpoints, c.rander)
+				tryOrder = shuffleEndpoints(endpoints, c.rander)
 			}
-			// else: all-cooled last-resort (endpoints[:1]): keep primary, no shuffle.
+			// else: all-cooled last-resort (endpoints[:1]): keep priority order.
+		case SelectionWeighted:
+			if skipCooled {
+				// eligibleEndpoints is Guard A for weighted path: filter non-cooled
+				// subset first, then apply weighted exclusion + ordering.
+				tryOrder = weightedShuffleEndpoints(eligibleEndpoints(endpoints, c.cooldown), c.modelWeights, c.rander)
+			} else if c.cooldown == nil {
+				// No cooldown: all endpoints eligible for weighted shuffle.
+				tryOrder = weightedShuffleEndpoints(endpoints, c.modelWeights, c.rander)
+			}
+			// else: all-cooled last-resort (endpoints[:1]): keep priority order.
 		}
-		for _, ep := range endpoints {
+		for _, ep := range tryOrder {
 			// Skip a model in quota cooldown, but only while a healthier
 			// candidate remains — degraded > dead.
 			if skipCooled && c.cooldown.cooling(ep.Model) {

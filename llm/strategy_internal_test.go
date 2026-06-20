@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -73,5 +74,59 @@ func TestEligibleEndpoints_NoCooled(t *testing.T) {
 	got := eligibleEndpoints(all, cd)
 	if len(got) != 3 {
 		t.Errorf("eligibleEndpoints none-cooled: want 3, got %d: %v", len(got), got)
+	}
+}
+
+// TestWeightedShuffleEndpoints_Unit is an internal unit test for
+// weightedShuffleEndpoints covering: exclusion of weight-0 models,
+// correct output length, proportional ordering (m1 at pos 0 more than m2),
+// and no mutation of the input slice.
+func TestWeightedShuffleEndpoints_Unit(t *testing.T) {
+	eps := []Endpoint{
+		{Model: "m1"},
+		{Model: "m2"},
+		{Model: "m3-zero"},
+	}
+	weights := map[string]int{
+		"m1":      4,
+		"m2":      1,
+		"m3-zero": 0,
+	}
+	rng := rand.New(rand.NewSource(42))
+
+	firstPos := make(map[string]int)
+	for range 200 {
+		out := weightedShuffleEndpoints(eps, weights, rng)
+
+		// m3-zero must never appear.
+		for _, ep := range out {
+			if ep.Model == "m3-zero" {
+				t.Errorf("weight-0 model m3-zero appeared in output: %v", out)
+				return
+			}
+		}
+
+		// Output must have exactly 2 elements (m1 + m2).
+		if len(out) != 2 {
+			t.Errorf("expected len=2 (m1+m2), got len=%d: %v", len(out), out)
+			return
+		}
+
+		if len(out) > 0 {
+			firstPos[out[0].Model]++
+		}
+	}
+
+	// m1 (weight=4) should appear at position 0 more often than m2 (weight=1).
+	if firstPos["m1"] < firstPos["m2"]*2 {
+		t.Errorf("m1 (weight=4) should appear at pos 0 at least 2x more than m2 (weight=1): m1=%d m2=%d", firstPos["m1"], firstPos["m2"])
+	}
+
+	// Input slice must NOT be mutated.
+	if len(eps) != 3 {
+		t.Errorf("input slice was mutated: len=%d, want 3", len(eps))
+	}
+	if eps[0].Model != "m1" || eps[1].Model != "m2" || eps[2].Model != "m3-zero" {
+		t.Errorf("input slice order was mutated: %v", eps)
 	}
 }
