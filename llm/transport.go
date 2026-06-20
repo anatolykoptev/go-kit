@@ -210,19 +210,12 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 			// shuffle the full list in the no-cooldown case, preserve order in
 			// the last-resort case.
 			if skipCooled {
-				eligible := make([]Endpoint, 0, len(endpoints))
-				for _, ep := range endpoints {
-					if !c.cooldown.cooling(ep.Model) {
-						eligible = append(eligible, ep)
-					}
-				}
-				endpoints = shuffleEndpoints(eligible, c.rander)
-				// skipCooled remains true. The per-ep cooling() check in the
-				// loop below is a race-safety backstop: eligible was built
-				// under a point-in-time snapshot, but a concurrent goroutine
-				// may cool a model between this build and the loop iteration.
-				// The loop guard catches that window so a concurrently-cooled
-				// model is never attempted.
+				// eligibleEndpoints is Guard A: filter to non-cooled subset before
+				// shuffling so a cooled model is never placed in the try-order.
+				// Guard B (the per-ep cooling() check in the loop below) is the
+				// race-safety backstop for the concurrent-cooldown window where a
+				// model may be cooled between this snapshot and the loop iteration.
+				endpoints = shuffleEndpoints(eligibleEndpoints(endpoints, c.cooldown), c.rander)
 			} else if c.cooldown == nil {
 				// No cooldown configured: all endpoints are eligible; shuffle all.
 				endpoints = shuffleEndpoints(endpoints, c.rander)

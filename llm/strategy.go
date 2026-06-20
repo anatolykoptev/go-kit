@@ -44,3 +44,21 @@ func shuffleEndpoints(eps []Endpoint, r *rand.Rand) []Endpoint {
 	}
 	return out
 }
+
+// eligibleEndpoints filters eps to those not currently in cooldown.
+// This is Guard A of the cooled-model exclusion invariant: it builds the
+// non-cooled subset before shuffling, so a cooled model is never placed into
+// the try-order at all. Guard B (the per-ep cooling() check in the loop body
+// of executeInner) is a race-safety backstop for the concurrent-cooldown
+// window; it does not cover this point-in-time filtering.
+// Called only when skipCooled=true (≥1 healthy endpoint exists) and strategy
+// is SelectionRandom.
+func eligibleEndpoints(all []Endpoint, cd *modelCooldown) []Endpoint {
+	out := make([]Endpoint, 0, len(all))
+	for _, ep := range all {
+		if !cd.cooling(ep.Model) {
+			out = append(out, ep)
+		}
+	}
+	return out
+}
