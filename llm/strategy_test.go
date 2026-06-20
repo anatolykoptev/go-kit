@@ -439,30 +439,45 @@ func TestWeightedSelection_ProportionalFirstPick(t *testing.T) {
 }
 
 // TestWeightedSelection_WeightZeroNeverAttempted asserts that a model with weight=0
-// never appears in ANY position across 1000 runs. This is a LOAD-BEARING test:
-// it goes RED if the `if w == 0 { continue }` guard is removed from
-// weightedShuffleEndpoints (m2 would appear in output and be attempted).
+// never appears in ANY attempt position, even when all positive-weight models fail
+// (i.e. the loop falls through). This is a LOAD-BEARING test: it goes RED if the
+// `if w == 0 { continue }` guard is removed from weightedShuffleEndpoints — without
+// the guard, m2-excluded enters tryOrder, is reached after m1+m3 fail, and the
+// attempted-model assertion fires.
 func TestWeightedSelection_WeightZeroNeverAttempted(t *testing.T) {
-	s1 := httptest.NewServer(okChatHandler(t, "m1"))
-	defer s1.Close()
-	s2 := httptest.NewServer(okChatHandler(t, "m2-excluded"))
-	defer s2.Close()
-	s3 := httptest.NewServer(okChatHandler(t, "m3"))
-	defer s3.Close()
+	// Both positive-weight servers fail (503 retryable) so the try-loop exhausts
+	// all tryOrder entries. If m2-excluded were in tryOrder (guard absent), it
+	// would be reached and appear in the attempted list.
+	failM1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failM1.Close()
+
+	// m2-excluded: if contacted, the test must fail immediately.
+	excludedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("weight-0 model m2-excluded was attempted; structural exclusion guard broken")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer excludedSrv.Close()
+
+	failM3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failM3.Close()
 
 	rng := rand.New(rand.NewSource(42))
 	var attempted []string
-
 	obs := func(ep llm.Endpoint, _ error) {
 		attempted = append(attempted, ep.Model)
 	}
 
-	for range 1000 {
+	for range 50 {
+		attempted = attempted[:0]
 		c := llm.NewClient("", "", "",
 			llm.WithEndpoints([]llm.Endpoint{
-				{URL: s1.URL, Key: "k", Model: "m1"},
-				{URL: s2.URL, Key: "k", Model: "m2-excluded"},
-				{URL: s3.URL, Key: "k", Model: "m3"},
+				{URL: failM1.URL, Key: "k", Model: "m1"},
+				{URL: excludedSrv.URL, Key: "k", Model: "m2-excluded"},
+				{URL: failM3.URL, Key: "k", Model: "m3"},
 			}),
 			llm.WithMaxRetries(1),
 			llm.WithSelectionStrategy(llm.SelectionWeighted),
@@ -470,18 +485,14 @@ func TestWeightedSelection_WeightZeroNeverAttempted(t *testing.T) {
 			llm.WithRander(rng),
 			llm.WithEndpointAttemptObserver(obs),
 		)
-		_, err := c.Complete(context.Background(), "", "test")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
+		// Call will fail (all positive-weight models return 503) — that is expected.
+		_, _ = c.Complete(context.Background(), "", "test")
 
-	// if the `if w == 0 { continue }` guard is removed in weightedShuffleEndpoints,
-	// m2-excluded appears in output and is attempted — this assertion fails. RED.
-	for _, m := range attempted {
-		if m == "m2-excluded" {
-			t.Errorf("weight-0 model m2-excluded was attempted; structural exclusion guard broken")
-			return
+		for _, m := range attempted {
+			if m == "m2-excluded" {
+				t.Errorf("weight-0 model m2-excluded was attempted; structural exclusion guard broken; attempts=%v", attempted)
+				return
+			}
 		}
 	}
 }
@@ -489,12 +500,19 @@ func TestWeightedSelection_WeightZeroNeverAttempted(t *testing.T) {
 // TestWeightedSelection_FallbackWorks verifies that when the highest-weight model
 // fails with 503 (retryable), the chain advances to the lower-weight model.
 // m2 (weight=0) is excluded; m3 (weight=1) must serve the request.
+//
+// Mutation proof: if the `if w == 0 { continue }` guard is removed, m2-excluded
+// enters tryOrder at key=0 (sorts last after m1 and m3). m1 fails → m3 serves →
+// m2 unreached in this scenario. The weight-0 exclusion is mutation-proven by
+// TestWeightedSelection_WeightZeroNeverAttempted (which makes m3 also fail, forcing
+// fallthrough to m2 if the guard is absent). This test proves the fallback advance
+// mechanism: the chain correctly skips a failed endpoint and tries the next.
 func TestWeightedSelection_FallbackWorks(t *testing.T) {
 	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer failSrv.Close()
-	// m2 excluded server — should never be called.
+	// m2 excluded server — the handler fires t.Error if contacted.
 	excludedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("weight-0 model m2 was attempted")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -504,6 +522,10 @@ func TestWeightedSelection_FallbackWorks(t *testing.T) {
 	defer okSrv.Close()
 
 	rng := rand.New(rand.NewSource(42))
+	var attempted []string
+	obs := func(ep llm.Endpoint, _ error) {
+		attempted = append(attempted, ep.Model)
+	}
 	c := llm.NewClient("", "", "",
 		llm.WithEndpoints([]llm.Endpoint{
 			{URL: failSrv.URL, Key: "k", Model: "m1"},
@@ -514,6 +536,7 @@ func TestWeightedSelection_FallbackWorks(t *testing.T) {
 		llm.WithSelectionStrategy(llm.SelectionWeighted),
 		llm.WithModelWeights(map[string]int{"m1": 4, "m2": 0, "m3": 1}),
 		llm.WithRander(rng),
+		llm.WithEndpointAttemptObserver(obs),
 	)
 
 	resp, err := c.Complete(context.Background(), "", "test")
@@ -522,6 +545,25 @@ func TestWeightedSelection_FallbackWorks(t *testing.T) {
 	}
 	if resp == "" {
 		t.Error("expected non-empty response from fallback m3")
+	}
+	// Verify chain advanced past m1 (fallback worked) and m2 was excluded.
+	m1seen, m3seen := false, false
+	for _, m := range attempted {
+		if m == "m2" {
+			t.Errorf("weight-0 model m2 appeared in attempts; guard broken: %v", attempted)
+		}
+		if m == "m1" {
+			m1seen = true
+		}
+		if m == "m3" {
+			m3seen = true
+		}
+	}
+	if !m1seen {
+		t.Errorf("m1 (failing) never attempted; chain did not start: %v", attempted)
+	}
+	if !m3seen {
+		t.Errorf("m3 (fallback) never attempted; chain did not advance: %v", attempted)
 	}
 }
 
@@ -720,5 +762,48 @@ func TestWeightedSelection_EnvParsing(t *testing.T) {
 	// Empty string → nil.
 	if llm.ParseModelWeights("") != nil {
 		t.Errorf("ParseModelWeights(\"\") should return nil")
+	}
+}
+
+// TestWithModelWeights_NegativeWeightExcluded asserts that WithModelWeights
+// skips negative weights (same contract as parseModelWeights) rather than
+// promoting the model (math.Pow(rf, 1/negative) > 1 > all positive keys).
+// Without this guard a negative-weight model sorts FIRST — the opposite of
+// suppression.
+func TestWithModelWeights_NegativeWeightExcluded(t *testing.T) {
+	// bad-model (weight=-1) should never be first-picked.
+	// If the negative weight passes through: key = rf^(1/-1) = rf^(-1) > 1
+	// which always sorts higher than any positive-weight model's key ∈ (0,1).
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("negative-weight model was promoted to first-pick and attempted")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badSrv.Close()
+	goodSrv := httptest.NewServer(okChatHandler(t, "good"))
+	defer goodSrv.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	for range 50 {
+		var firstModel string
+		obs := func(ep llm.Endpoint, err error) {
+			if err == nil && firstModel == "" {
+				firstModel = ep.Model
+			}
+		}
+		c := llm.NewClient("", "", "",
+			llm.WithEndpoints([]llm.Endpoint{
+				{URL: badSrv.URL, Key: "k", Model: "bad"},
+				{URL: goodSrv.URL, Key: "k", Model: "good"},
+			}),
+			llm.WithMaxRetries(1),
+			llm.WithSelectionStrategy(llm.SelectionWeighted),
+			llm.WithModelWeights(map[string]int{"bad": -1, "good": 1}),
+			llm.WithRander(rng),
+			llm.WithEndpointAttemptObserver(obs),
+		)
+		_, err := c.Complete(context.Background(), "", "test")
+		if err != nil {
+			t.Fatalf("unexpected error (good server should serve): %v", err)
+		}
 	}
 }

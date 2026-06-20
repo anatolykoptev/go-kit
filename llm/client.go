@@ -6,6 +6,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
@@ -218,12 +219,25 @@ func WithRander(r *rand.Rand) Option {
 
 // WithModelWeights sets per-model weights for SelectionWeighted strategy.
 // Models with weight 0 are structurally excluded from the try-order.
-// Models absent from the map default to weight 1. The map is copied defensively.
-// Has no effect unless SelectionWeighted is used.
+// Models absent from the map default to weight 1. Negative weights are
+// skipped (same contract as the env parser) with a warning — a negative
+// weight inverts the Efraimidis-Spirakis key, promoting rather than
+// suppressing a model, which is never the caller's intent. The map is
+// copied defensively. Has no effect unless SelectionWeighted is used.
+//
+// If EVERY eligible model is weight 0 (after filtering), the last-resort
+// guard in weightedShuffleEndpoints attempts the priority-primary endpoint
+// rather than failing closed — so "weight-0 never attempted" holds only
+// while ≥1 positive-weight eligible model exists.
 func WithModelWeights(weights map[string]int) Option {
 	return func(c *Client) {
 		m := make(map[string]int, len(weights))
 		for k, v := range weights {
+			if v < 0 {
+				slog.Warn("llm: WithModelWeights: negative weight treated as 0 (excluded); use 0 explicitly to suppress a model", "model", k, "weight", v)
+				m[k] = 0
+				continue
+			}
 			m[k] = v
 		}
 		c.modelWeights = m

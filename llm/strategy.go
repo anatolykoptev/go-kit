@@ -108,7 +108,9 @@ func weightedShuffleEndpoints(eps []Endpoint, weights map[string]int, r *rand.Ra
 		} else {
 			rf = rand.Float64() //nolint:gosec // math/rand intentional; not security-critical
 		}
-		// Avoid log(0) from Float64() returning exactly 0 (extremely rare).
+		// Guard against Float64() returning exactly 0 (extremely rare): math.Pow(0, 1/w)
+		// returns 0 for any positive w, which would sort this endpoint last rather
+		// than at a random position. Replace with a tiny non-zero value instead.
 		if rf == 0 {
 			rf = 1e-15
 		}
