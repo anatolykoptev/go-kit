@@ -106,6 +106,11 @@ func asFailover(err error) bool {
 	return false
 }
 
+// errTypeUnknown is the error_type label value for errors that do not match
+// any known class. Centralised to avoid the string literal appearing 3+ times
+// (goconst min-occurrences: 3 in .golangci.yml).
+const errTypeUnknown = "unknown"
+
 // ClassifyErrorType returns a low-cardinality error_type label value for
 // Prometheus / OTel instrumentation. The mapping derives from the existing
 // classifiers in this package — no new detection logic is introduced here.
@@ -125,7 +130,7 @@ func ClassifyErrorType(err error) string {
 	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
-		return "unknown"
+		return errTypeUnknown
 	}
 	// auth_expiry: explicit auth rejection
 	if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
@@ -149,7 +154,7 @@ func ClassifyErrorType(err error) string {
 	if apiErr.StatusCode >= http.StatusBadRequest && apiErr.StatusCode < http.StatusInternalServerError {
 		return "client"
 	}
-	return "unknown"
+	return errTypeUnknown
 }
 
 // parseRetryAfter parses the HTTP Retry-After header per RFC 7231. The

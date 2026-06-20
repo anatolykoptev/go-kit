@@ -142,6 +142,14 @@ func TestClassifyErrorType(t *testing.T) {
 			want: "context_overflow",
 		},
 		{
+			// Pins ordering: asFailover (context_overflow) must be checked BEFORE
+			// apiErr.Retryable (transient). A hypothetical Retryable 413 must still
+			// classify as context_overflow, not transient.
+			name: "413 with Retryable=true returns context_overflow (not transient)",
+			err:  &llm.APIError{StatusCode: 413, Retryable: true},
+			want: "context_overflow",
+		},
+		{
 			name: "400 with context_length_exceeded returns context_overflow (not client)",
 			err:  &llm.APIError{StatusCode: 400, Code: "context_length_exceeded"},
 			want: "context_overflow",
