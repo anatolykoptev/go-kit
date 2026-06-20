@@ -377,3 +377,433 @@ func TestSelectionStrategy_EnvWiring(t *testing.T) {
 		}
 	})
 }
+
+// --- SelectionWeighted tests below ---
+
+// TestWeightedSelection_ProportionalFirstPick asserts that over 1000 iterations,
+// the first-pick frequency is proportional to weight. m1=4, m2=4, m3=1 means
+// m1+m2 combined should dominate m3 by roughly 8:1.
+func TestWeightedSelection_ProportionalFirstPick(t *testing.T) {
+	s1 := httptest.NewServer(okChatHandler(t, "m1"))
+	defer s1.Close()
+	s2 := httptest.NewServer(okChatHandler(t, "m2"))
+	defer s2.Close()
+	s3 := httptest.NewServer(okChatHandler(t, "m3"))
+	defer s3.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	firstPicks := make(map[string]int)
+
+	for range 1000 {
+		var firstModel string
+		obs := func(ep llm.Endpoint, err error) {
+			if err == nil && firstModel == "" {
+				firstModel = ep.Model
+			}
+		}
+		c := llm.NewClient("", "", "",
+			llm.WithEndpoints([]llm.Endpoint{
+				{URL: s1.URL, Key: "k", Model: "m1"},
+				{URL: s2.URL, Key: "k", Model: "m2"},
+				{URL: s3.URL, Key: "k", Model: "m3"},
+			}),
+			llm.WithMaxRetries(1),
+			llm.WithSelectionStrategy(llm.SelectionWeighted),
+			llm.WithModelWeights(map[string]int{"m1": 4, "m2": 4, "m3": 1}),
+			llm.WithRander(rng),
+			llm.WithEndpointAttemptObserver(obs),
+		)
+		_, err := c.Complete(context.Background(), "", "test")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if firstModel != "" {
+			firstPicks[firstModel]++
+		}
+	}
+
+	combined := firstPicks["m1"] + firstPicks["m2"]
+	m3picks := firstPicks["m3"]
+	if combined == 0 || m3picks == 0 {
+		t.Fatalf("proportional test broken: m1+m2=%d, m3=%d (dist=%v)", combined, m3picks, firstPicks)
+	}
+	// 8:1 theoretical; allow generous margin — at least 4:1 expected at N=1000.
+	ratio := float64(combined) / float64(m3picks)
+	if ratio < 4.0 {
+		t.Errorf("expected m1+m2 >> m3 (ratio ~8:1), got %.2f:1 (dist=%v)", ratio, firstPicks)
+	}
+	// m3 must appear at least once (not excluded, weight > 0).
+	if m3picks == 0 {
+		t.Errorf("m3 (weight=1) never picked first; should appear occasionally: dist=%v", firstPicks)
+	}
+}
+
+// TestWeightedSelection_WeightZeroNeverAttempted asserts that a model with weight=0
+// never appears in ANY attempt position, even when all positive-weight models fail
+// (i.e. the loop falls through). This is a LOAD-BEARING test: it goes RED if the
+// `if w == 0 { continue }` guard is removed from weightedShuffleEndpoints — without
+// the guard, m2-excluded enters tryOrder, is reached after m1+m3 fail, and the
+// attempted-model assertion fires.
+func TestWeightedSelection_WeightZeroNeverAttempted(t *testing.T) {
+	// Both positive-weight servers fail (503 retryable) so the try-loop exhausts
+	// all tryOrder entries. If m2-excluded were in tryOrder (guard absent), it
+	// would be reached and appear in the attempted list.
+	failM1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failM1.Close()
+
+	// m2-excluded: if contacted, the test must fail immediately.
+	excludedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("weight-0 model m2-excluded was attempted; structural exclusion guard broken")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer excludedSrv.Close()
+
+	failM3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failM3.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	var attempted []string
+	obs := func(ep llm.Endpoint, _ error) {
+		attempted = append(attempted, ep.Model)
+	}
+
+	for range 50 {
+		attempted = attempted[:0]
+		c := llm.NewClient("", "", "",
+			llm.WithEndpoints([]llm.Endpoint{
+				{URL: failM1.URL, Key: "k", Model: "m1"},
+				{URL: excludedSrv.URL, Key: "k", Model: "m2-excluded"},
+				{URL: failM3.URL, Key: "k", Model: "m3"},
+			}),
+			llm.WithMaxRetries(1),
+			llm.WithSelectionStrategy(llm.SelectionWeighted),
+			llm.WithModelWeights(map[string]int{"m1": 4, "m2-excluded": 0, "m3": 1}),
+			llm.WithRander(rng),
+			llm.WithEndpointAttemptObserver(obs),
+		)
+		// Call will fail (all positive-weight models return 503) — that is expected.
+		_, _ = c.Complete(context.Background(), "", "test")
+
+		for _, m := range attempted {
+			if m == "m2-excluded" {
+				t.Errorf("weight-0 model m2-excluded was attempted; structural exclusion guard broken; attempts=%v", attempted)
+				return
+			}
+		}
+	}
+}
+
+// TestWeightedSelection_FallbackWorks verifies that when the highest-weight model
+// fails with 503 (retryable), the chain advances to the lower-weight model.
+// m2 (weight=0) is excluded; m3 (weight=1) must serve the request.
+//
+// Mutation proof: if the `if w == 0 { continue }` guard is removed, m2-excluded
+// enters tryOrder at key=0 (sorts last after m1 and m3). m1 fails → m3 serves →
+// m2 unreached in this scenario. The weight-0 exclusion is mutation-proven by
+// TestWeightedSelection_WeightZeroNeverAttempted (which makes m3 also fail, forcing
+// fallthrough to m2 if the guard is absent). This test proves the fallback advance
+// mechanism: the chain correctly skips a failed endpoint and tries the next.
+func TestWeightedSelection_FallbackWorks(t *testing.T) {
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failSrv.Close()
+	// m2 excluded server — the handler fires t.Error if contacted.
+	excludedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("weight-0 model m2 was attempted")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer excludedSrv.Close()
+	okSrv := httptest.NewServer(okChatHandler(t, "m3-served"))
+	defer okSrv.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	var attempted []string
+	obs := func(ep llm.Endpoint, _ error) {
+		attempted = append(attempted, ep.Model)
+	}
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: failSrv.URL, Key: "k", Model: "m1"},
+			{URL: excludedSrv.URL, Key: "k", Model: "m2"},
+			{URL: okSrv.URL, Key: "k", Model: "m3"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithSelectionStrategy(llm.SelectionWeighted),
+		llm.WithModelWeights(map[string]int{"m1": 4, "m2": 0, "m3": 1}),
+		llm.WithRander(rng),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	resp, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("expected fallback success, got error: %v", err)
+	}
+	if resp == "" {
+		t.Error("expected non-empty response from fallback m3")
+	}
+	// Verify chain advanced past m1 (fallback worked) and m2 was excluded.
+	m1seen, m3seen := false, false
+	for _, m := range attempted {
+		if m == "m2" {
+			t.Errorf("weight-0 model m2 appeared in attempts; guard broken: %v", attempted)
+		}
+		if m == "m1" {
+			m1seen = true
+		}
+		if m == "m3" {
+			m3seen = true
+		}
+	}
+	if !m1seen {
+		t.Errorf("m1 (failing) never attempted; chain did not start: %v", attempted)
+	}
+	if !m3seen {
+		t.Errorf("m3 (fallback) never attempted; chain did not advance: %v", attempted)
+	}
+}
+
+// TestWeightedSelection_CooledHighWeightSkipped asserts that a cooled model with
+// high weight is not selected. m1 (weight=10) gets cooled; m2 (weight=1) must
+// serve all subsequent requests.
+func TestWeightedSelection_CooledHighWeightSkipped(t *testing.T) {
+	quota429Body := `{"error":{"message":"quota","type":"rate_limit_exceeded"}}`
+	quotaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(quota429Body))
+	}))
+	defer quotaSrv.Close()
+	okSrv := httptest.NewServer(okChatHandler(t, "m2-healthy"))
+	defer okSrv.Close()
+
+	var attempted []string
+	obs := func(ep llm.Endpoint, _ error) {
+		attempted = append(attempted, ep.Model)
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: quotaSrv.URL, Key: "k", Model: "m1-heavy"},
+			{URL: okSrv.URL, Key: "k", Model: "m2-healthy"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithModelCooldown(llm.CooldownConfig{FailThreshold: 1}),
+		llm.WithSelectionStrategy(llm.SelectionWeighted),
+		llm.WithModelWeights(map[string]int{"m1-heavy": 10, "m2-healthy": 1}),
+		llm.WithRander(rng),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	// Phase 1: drive m1-heavy into cooldown.
+	const maxWarmup = 10
+	cooled := false
+	for range maxWarmup {
+		attempted = attempted[:0]
+		_, _ = c.Complete(context.Background(), "", "test")
+		for _, m := range attempted {
+			if m == "m1-heavy" {
+				cooled = true
+			}
+		}
+		if cooled {
+			break
+		}
+	}
+	if !cooled {
+		t.Skip("m1-heavy never attempted in warmup; seed produced degenerate sequence")
+	}
+
+	// Phase 2: verify m1-heavy never attempted now that it's cooled.
+	attempted = attempted[:0]
+	for range 10 {
+		_, err := c.Complete(context.Background(), "", "test")
+		if err != nil {
+			t.Fatalf("post-cooldown call unexpected error: %v", err)
+		}
+	}
+	for _, m := range attempted {
+		if m == "m1-heavy" {
+			t.Errorf("cooled m1-heavy (weight=10) was attempted; cooldown+weighted exclusion broken: %v", attempted)
+			return
+		}
+	}
+	// Sanity: m2-healthy must have been tried.
+	seen := false
+	for _, m := range attempted {
+		if m == "m2-healthy" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Errorf("m2-healthy never attempted in post-cooldown calls: %v", attempted)
+	}
+}
+
+// TestWeightedSelection_AllWeightZeroGuard asserts that when all models have weight=0,
+// the call returns a real error (not nil,nil) and does not panic. The race guard
+// (endpoints[0] from cooldownCandidates) must fire.
+func TestWeightedSelection_AllWeightZeroGuard(t *testing.T) {
+	// Return 503 so the call gets a real error back (not a success).
+	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer errSrv.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: errSrv.URL, Key: "k", Model: "m1"},
+			{URL: errSrv.URL, Key: "k", Model: "m2"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithSelectionStrategy(llm.SelectionWeighted),
+		llm.WithModelWeights(map[string]int{"m1": 0, "m2": 0}),
+		llm.WithRander(rng),
+	)
+
+	// Must not panic; must return a real error (the 503 from the race guard attempt).
+	resp, err := c.Complete(context.Background(), "", "test")
+	// Either we get an error or a response — never (nil, nil).
+	if resp == "" && err == nil {
+		t.Error("all-weight-0 guard: got (nil, nil) — race guard not firing")
+	}
+	// Expect an error since our server returns 503.
+	if err == nil {
+		t.Error("expected an error from 503 server, got nil")
+	}
+}
+
+// TestWeightedSelection_UnlistedModelDefaultWeight1 asserts that models not in
+// the weights map get default weight 1 and participate in selection.
+func TestWeightedSelection_UnlistedModelDefaultWeight1(t *testing.T) {
+	s1 := httptest.NewServer(okChatHandler(t, "m1"))
+	defer s1.Close()
+	s2 := httptest.NewServer(okChatHandler(t, "m2"))
+	defer s2.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	firstPicks := make(map[string]int)
+
+	for range 1000 {
+		var firstModel string
+		obs := func(ep llm.Endpoint, err error) {
+			if err == nil && firstModel == "" {
+				firstModel = ep.Model
+			}
+		}
+		c := llm.NewClient("", "", "",
+			llm.WithEndpoints([]llm.Endpoint{
+				{URL: s1.URL, Key: "k", Model: "m1"},
+				{URL: s2.URL, Key: "k", Model: "m2"},
+			}),
+			llm.WithMaxRetries(1),
+			llm.WithSelectionStrategy(llm.SelectionWeighted),
+			// m1 not listed → default weight 1; m2 explicit weight 4.
+			llm.WithModelWeights(map[string]int{"m2": 4}),
+			llm.WithRander(rng),
+			llm.WithEndpointAttemptObserver(obs),
+		)
+		_, err := c.Complete(context.Background(), "", "test")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if firstModel != "" {
+			firstPicks[firstModel]++
+		}
+	}
+
+	// m2 should be first more often (weight=4 vs weight=1 default).
+	if firstPicks["m2"] <= firstPicks["m1"] {
+		t.Errorf("m2 (weight=4) should dominate m1 (default weight 1); got m1=%d m2=%d", firstPicks["m1"], firstPicks["m2"])
+	}
+	// m1 must still appear (default weight 1, not excluded).
+	if firstPicks["m1"] == 0 {
+		t.Errorf("m1 (unlisted, default weight 1) never picked first; must participate: dist=%v", firstPicks)
+	}
+}
+
+// TestWeightedSelection_EnvParsing asserts that parseModelWeights correctly
+// handles valid pairs, skips malformed ones, accepts weight=0, and skips negatives.
+func TestWeightedSelection_EnvParsing(t *testing.T) {
+	// "a:4,b:0,bad,c:notnum,d:-1,e:2"
+	// Expected: a=4, b=0, e=2; bad/c/d skipped.
+	got := llm.ParseModelWeights("a:4,b:0,bad,c:notnum,d:-1,e:2")
+	cases := []struct {
+		key  string
+		want int
+		ok   bool
+	}{
+		{"a", 4, true},
+		{"b", 0, true},
+		{"e", 2, true},
+	}
+	for _, tc := range cases {
+		v, exists := got[tc.key]
+		if !exists {
+			t.Errorf("key %q missing from result (want %d); full map=%v", tc.key, tc.want, got)
+			continue
+		}
+		if v != tc.want {
+			t.Errorf("key %q = %d, want %d", tc.key, v, tc.want)
+		}
+	}
+	// Skipped entries must not appear.
+	for _, bad := range []string{"bad", "c", "d"} {
+		if _, exists := got[bad]; exists {
+			t.Errorf("invalid key %q should be skipped, but exists in map=%v", bad, got)
+		}
+	}
+	// Empty string → nil.
+	if llm.ParseModelWeights("") != nil {
+		t.Errorf("ParseModelWeights(\"\") should return nil")
+	}
+}
+
+// TestWithModelWeights_NegativeWeightExcluded asserts that WithModelWeights
+// skips negative weights (same contract as parseModelWeights) rather than
+// promoting the model (math.Pow(rf, 1/negative) > 1 > all positive keys).
+// Without this guard a negative-weight model sorts FIRST — the opposite of
+// suppression.
+func TestWithModelWeights_NegativeWeightExcluded(t *testing.T) {
+	// bad-model (weight=-1) should never be first-picked.
+	// If the negative weight passes through: key = rf^(1/-1) = rf^(-1) > 1
+	// which always sorts higher than any positive-weight model's key ∈ (0,1).
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("negative-weight model was promoted to first-pick and attempted")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badSrv.Close()
+	goodSrv := httptest.NewServer(okChatHandler(t, "good"))
+	defer goodSrv.Close()
+
+	rng := rand.New(rand.NewSource(42))
+	for range 50 {
+		var firstModel string
+		obs := func(ep llm.Endpoint, err error) {
+			if err == nil && firstModel == "" {
+				firstModel = ep.Model
+			}
+		}
+		c := llm.NewClient("", "", "",
+			llm.WithEndpoints([]llm.Endpoint{
+				{URL: badSrv.URL, Key: "k", Model: "bad"},
+				{URL: goodSrv.URL, Key: "k", Model: "good"},
+			}),
+			llm.WithMaxRetries(1),
+			llm.WithSelectionStrategy(llm.SelectionWeighted),
+			llm.WithModelWeights(map[string]int{"bad": -1, "good": 1}),
+			llm.WithRander(rng),
+			llm.WithEndpointAttemptObserver(obs),
+		)
+		_, err := c.Complete(context.Background(), "", "test")
+		if err != nil {
+			t.Fatalf("unexpected error (good server should serve): %v", err)
+		}
+	}
+}

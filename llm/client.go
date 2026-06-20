@@ -6,6 +6,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
@@ -40,6 +41,7 @@ type Client struct {
 	cooldown           *modelCooldown   // nil = disabled; no per-model cooldown, behavior byte-identical to pre-feature
 	selectionStrategy  SelectionStrategy // default SelectionPriority
 	rander            *rand.Rand        // nil = global source; injectable for deterministic tests
+	modelWeights       map[string]int    // nil = all models default weight 1 (SelectionWeighted)
 }
 
 // Option configures the Client.
@@ -215,6 +217,33 @@ func WithRander(r *rand.Rand) Option {
 	return func(c *Client) { c.rander = r }
 }
 
+// WithModelWeights sets per-model weights for SelectionWeighted strategy.
+// Models with weight 0 are structurally excluded from the try-order.
+// Models absent from the map default to weight 1. Negative weights are
+// skipped (same contract as the env parser) with a warning — a negative
+// weight inverts the Efraimidis-Spirakis key, promoting rather than
+// suppressing a model, which is never the caller's intent. The map is
+// copied defensively. Has no effect unless SelectionWeighted is used.
+//
+// If EVERY eligible model is weight 0 (after filtering), the last-resort
+// guard in weightedShuffleEndpoints attempts the priority-primary endpoint
+// rather than failing closed — so "weight-0 never attempted" holds only
+// while ≥1 positive-weight eligible model exists.
+func WithModelWeights(weights map[string]int) Option {
+	return func(c *Client) {
+		m := make(map[string]int, len(weights))
+		for k, v := range weights {
+			if v < 0 {
+				slog.Warn("llm: WithModelWeights: negative weight treated as 0 (excluded); use 0 explicitly to suppress a model", "model", k, "weight", v)
+				m[k] = 0
+				continue
+			}
+			m[k] = v
+		}
+		c.modelWeights = m
+	}
+}
+
 // Middleware wraps chat completion calls. Use for logging, metrics, caching.
 // The next function sends the request to the API (or the next middleware).
 // First added middleware is the outermost wrapper.
@@ -304,6 +333,9 @@ func NewClient(baseURL, apiKey, model string, opts ...Option) *Client {
 		maxRetries:        defaultMaxRetries,
 		httpClient:        &http.Client{Timeout: defaultTimeout},
 		selectionStrategy: parseSelectionStrategy(os.Getenv("LLM_SELECTION_STRATEGY")),
+	}
+	if raw := os.Getenv("LLM_MODEL_WEIGHTS"); raw != "" {
+		c.modelWeights = parseModelWeights(raw)
 	}
 	for _, opt := range opts {
 		opt(c)
