@@ -247,33 +247,38 @@ var quotaBodyMarkers = []string{
 	"insufficient_quota",
 }
 
+// checkMarkers reports whether apiErr's Type, Code, or Body contains a quota/auth marker.
+// Used by isQuotaError (for the 503 case) and by ClassifyErrorType (for the 403 case)
+// so both share the same detection logic without routing 403 through the cooldown path.
+func checkMarkers(a *APIError) bool {
+	hay := strings.ToLower(a.Type + " " + a.Code + " " + a.Body)
+	for _, marker := range quotaBodyMarkers {
+		if strings.Contains(hay, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // isQuotaError reports whether err is a quota-class failure that should drive
 // per-model cooldown. Conservative by design (risk register row 4):
 //   - HTTP 429 is ALWAYS quota-class (any body).
 //   - HTTP 503 is quota-class ONLY when its parsed Type or body marks
 //     quota/auth-unavailable. A bare 503 (transient gateway blip) is NOT cooled.
-//   - HTTP 403 is quota-class ONLY when its parsed Type or body marks a quota
-//     marker (e.g. provider pool exhausted). A plain 403 (expired key) is NOT.
 //
 // All other statuses (500/413/4xx) are not quota-class.
+// NOTE: 403 is deliberately NOT included — a 403 (even with a quota marker) does
+// NOT trigger cooldown. ClassifyErrorType classifies 403+marker as dependency_block
+// for metrics purposes by calling checkMarkers directly.
 func isQuotaError(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	checkMarkers := func(a *APIError) bool {
-		hay := strings.ToLower(a.Type + " " + a.Code + " " + a.Body)
-		for _, marker := range quotaBodyMarkers {
-			if strings.Contains(hay, marker) {
-				return true
-			}
-		}
-		return false
-	}
 	switch apiErr.StatusCode {
 	case http.StatusTooManyRequests:
 		return true
-	case http.StatusForbidden, http.StatusServiceUnavailable:
+	case http.StatusServiceUnavailable:
 		return checkMarkers(apiErr)
 	default:
 		return false

@@ -136,8 +136,9 @@ func ClassifyErrorType(err error) string {
 	if apiErr.StatusCode == http.StatusUnauthorized {
 		return "auth_expiry"
 	}
+	// calls checkMarkers directly — 403 does NOT go through isQuotaError to avoid triggering cooldown
 	if apiErr.StatusCode == http.StatusForbidden {
-		if isQuotaError(err) {
+		if checkMarkers(apiErr) {
 			return "dependency_block"
 		}
 		return "auth_expiry"
