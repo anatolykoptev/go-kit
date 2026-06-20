@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"slices"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -161,6 +162,14 @@ func (c *Client) attemptEndpoint(ctx context.Context, ep Endpoint, req *ChatRequ
 	epReq := *req
 	if ep.Model != "" {
 		epReq.Model = ep.Model
+	}
+
+	// Per-endpoint reasoning_effort gate: strip from endpoints NOT in the allowlist.
+	// Empty allowlist = pass-through (existing behavior preserved).
+	if epReq.ReasoningEffort != "" && len(c.reasoningEffortModels) > 0 {
+		if !slices.Contains(c.reasoningEffortModels, epReq.Model) {
+			epReq.ReasoningEffort = ""
+		}
 	}
 
 	// Per-attempt timeout: derive a child ctx bounded by d, but only when
