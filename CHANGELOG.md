@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.91.0](https://github.com/anatolykoptev/go-kit/compare/v0.90.0...v0.91.0) (2026-06-24)
+
+
+### Features
+
+* **telegram:** add notify package — governed AlertSink + product ProductSink ([#132](https://github.com/anatolykoptev/go-kit/issues/132)) ([4f9a182](https://github.com/anatolykoptev/go-kit/commit/4f9a182c8d48ae086a687839ca1a4f9e8cba3fbd))
+
 ## [0.90.0](https://github.com/anatolykoptev/go-kit/compare/v0.89.0...v0.90.0) (2026-06-20)
 
 
