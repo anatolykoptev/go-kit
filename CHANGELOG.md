@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.85.0](https://github.com/anatolykoptev/go-kit/compare/v0.84.0...v0.85.0) (2026-06-24)
+
+
+### Features
+
+* **llm:** ClassifyErrorType + error_type label on llm_chain_attempt_total ([#127](https://github.com/anatolykoptev/go-kit/issues/127)) ([a4b76fd](https://github.com/anatolykoptev/go-kit/commit/a4b76fd4ac84deb606aaf3cb4724a758b5a0837b))
+* **llm:** per-endpoint reasoning_effort allowlist gating ([#131](https://github.com/anatolykoptev/go-kit/issues/131)) ([09853f1](https://github.com/anatolykoptev/go-kit/commit/09853f1f69c0dd8ac2c3f6bcca608184d82df825))
+* **llm:** randomized model selection strategy ([#128](https://github.com/anatolykoptev/go-kit/issues/128)) ([89e3757](https://github.com/anatolykoptev/go-kit/commit/89e3757397681eddc2cf1a0861ffd4a0ef823765))
+* **llm:** weighted model selection strategy ([#129](https://github.com/anatolykoptev/go-kit/issues/129)) ([b6c984c](https://github.com/anatolykoptev/go-kit/commit/b6c984ccb10c5d0e7873e9260b0345e209936ca4))
+* **telegram:** add notify package — governed AlertSink + product ProductSink ([#132](https://github.com/anatolykoptev/go-kit/issues/132)) ([4f9a182](https://github.com/anatolykoptev/go-kit/commit/4f9a182c8d48ae086a687839ca1a4f9e8cba3fbd))
+
+
+### Bug Fixes
+
+* **llm:** authenticate ModelRegistry /v1/models fetch (health-aware chain was dark -- proxy 401) ([#125](https://github.com/anatolykoptev/go-kit/issues/125)) ([0f209a0](https://github.com/anatolykoptev/go-kit/commit/0f209a02be3819b8dfa344d2a0f45b862cab255c))
+* **llm:** empty completion fails over instead of silently returning "" ([#130](https://github.com/anatolykoptev/go-kit/issues/130)) ([c7c4ee1](https://github.com/anatolykoptev/go-kit/commit/c7c4ee1f8077619ad8479193c5f16eb1c0e3d8f0))
+
 ## [0.84.0](https://github.com/anatolykoptev/go-kit/compare/v0.83.0...v0.84.0) (2026-06-18)
 
 
