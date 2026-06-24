@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 
@@ -26,6 +27,7 @@ type BotSender interface {
 
 // MetricProductTotal is the counter bumped on each send attempt by ProductSink.
 // Labels: result={sent,failed}.
+// All series are pre-touched at construction so rate() reads 0, not "no data".
 const MetricProductTotal = "notify_product_total"
 
 // defaultProductRPS mirrors broadcast.defaultRPS (30 — the Telegram Bot API
@@ -38,19 +40,20 @@ type Product struct {
 	// telegram.PrepareForTelegram on it to detect HTML/Markdown/plain and
 	// normalize to the Telegram HTML parse mode.
 	Text string
-	// ChatIDs is the list of recipient chat IDs. Must have at least one entry.
+	// ChatIDs is the list of recipient chat IDs. Must have at least one entry
+	// unless a default was set via NewProductSinkFromEnv.
 	ChatIDs []int64
 }
 
 // ProductSink delivers per-event product notifications to a bot, with
 // bounded-rate fan-out (via broadcast.Pacer), retry, dead-letter, and an
-// HTML→plaintext fallback on parse-mode failure (borrowed from go-hully
-// bot.go:274–291).
+// HTML→plaintext fallback on Telegram parse-entity errors.
 type ProductSink interface {
-	// Notify sends p to all ChatIDs in p. Returns the count of successful and
-	// failed sends plus any context-level error that stopped the broadcast early.
-	// Individual send failures are counted and dead-lettered but do not abort
-	// the broadcast.
+	// Notify sends p to all ChatIDs in p. If p.ChatIDs is empty and the sink
+	// was built with a default chat ID, the default is used. Returns the count
+	// of successful and failed sends plus any context-level error that stopped
+	// the broadcast early. Individual send failures are counted and dead-lettered
+	// but do not abort the broadcast.
 	Notify(ctx context.Context, p Product) (sent, failed int, err error)
 
 	// NotifyTo sends text to a single chat ID, bypassing p.ChatIDs.
@@ -79,10 +82,16 @@ func WithProductMetrics(m *metrics.Registry) ProductOption {
 	return func(s *productSink) { s.m = m }
 }
 
-// WithHTMLFallback controls whether the sink tries plain-text on HTML parse
-// failure. Default true (matches go-hully's production behaviour).
+// WithHTMLFallback controls whether the sink tries plain-text when a Telegram
+// parse-entity error is received. Default true.
 func WithHTMLFallback(enabled bool) ProductOption {
 	return func(s *productSink) { s.htmlFallback = enabled }
+}
+
+// withDefaultChatIDs sets the fallback recipient list used when Product.ChatIDs
+// is empty. Not exported — wired internally by NewProductSinkFromEnv.
+func withDefaultChatIDs(ids []int64) ProductOption {
+	return func(s *productSink) { s.defaultChatIDs = ids }
 }
 
 // NewProductSink builds a ProductSink that uses sender for delivery.
@@ -97,6 +106,7 @@ func NewProductSink(sender BotSender, opts ...ProductOption) ProductSink {
 	for _, o := range opts {
 		o(s)
 	}
+	preTouchProductMetrics(s.m)
 	return s
 }
 
@@ -106,8 +116,8 @@ func NewProductSink(sender BotSender, opts ...ProductOption) ProductSink {
 //   - TELEGRAM_BOT_TOKEN — bot token
 //
 // Optional env var:
-//   - <prefix>_NOTIFY_CHAT_ID — default chat ID (parsed as int64 by ParseChatID)
-//     e.g. BOUNTY_NOTIFY_CHAT_ID=428660
+//   - <prefix>_NOTIFY_CHAT_ID — default chat ID used when Product.ChatIDs is
+//     empty, e.g. BOUNTY_NOTIFY_CHAT_ID=428660. Parsed via telegram.ParseChatID.
 //
 // m may be nil.
 func NewProductSinkFromEnv(prefix string, m *metrics.Registry) (ProductSink, error) {
@@ -120,22 +130,47 @@ func NewProductSinkFromEnv(prefix string, m *metrics.Registry) (ProductSink, err
 		return nil, fmt.Errorf("notify: NewProductSinkFromEnv: create bot: %w", err)
 	}
 	sender := tgapi5.NewSender(bot, m)
-	return NewProductSink(sender, WithProductMetrics(m)), nil
+
+	opts := []ProductOption{WithProductMetrics(m)}
+
+	if raw := env.Str(prefix+"_NOTIFY_CHAT_ID", ""); raw != "" {
+		id, parseErr := telegram.ParseChatID(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("notify: NewProductSinkFromEnv: parse %s_NOTIFY_CHAT_ID=%q: %w", prefix, raw, parseErr)
+		}
+		opts = append(opts, withDefaultChatIDs([]int64{id}))
+	}
+
+	return NewProductSink(sender, opts...), nil
+}
+
+// preTouchProductMetrics bumps every result combination by 0 so all series are
+// registered in Prometheus from t=0. This ensures rate() returns 0 (not "no
+// data") during healthy operation.
+func preTouchProductMetrics(m *metrics.Registry) {
+	for _, result := range []string{"sent", "failed"} {
+		m.Add(metrics.Label(MetricProductTotal, "result", result), 0)
+	}
 }
 
 // productSink is the concrete ProductSink implementation.
 type productSink struct {
-	sender       BotSender
-	rps          int
-	deadLetter   func(chatID int64, err error)
-	m            *metrics.Registry
-	htmlFallback bool
+	sender         BotSender
+	rps            int
+	deadLetter     func(chatID int64, err error)
+	m              *metrics.Registry
+	htmlFallback   bool
+	defaultChatIDs []int64
 }
 
 // Notify implements ProductSink.
 func (s *productSink) Notify(ctx context.Context, p Product) (sent, failed int, err error) {
-	if len(p.ChatIDs) == 0 {
-		return 0, 0, errors.New("notify: Product.ChatIDs must not be empty")
+	chatIDs := p.ChatIDs
+	if len(chatIDs) == 0 {
+		chatIDs = s.defaultChatIDs
+	}
+	if len(chatIDs) == 0 {
+		return 0, 0, errors.New("notify: Product.ChatIDs must not be empty and no default chat ID configured")
 	}
 
 	text, _ := telegram.PrepareForTelegram(p.Text)
@@ -155,7 +190,7 @@ func (s *productSink) Notify(ctx context.Context, p Product) (sent, failed int, 
 		broadcast.WithDeadLetter(dlq),
 	)
 
-	sent, failed, err = pacer.Broadcast(ctx, p.ChatIDs, text)
+	sent, failed, err = pacer.Broadcast(ctx, chatIDs, text)
 
 	// Count successes in the metric (Pacer only fires DLQ for failures).
 	if sent > 0 {
@@ -176,19 +211,40 @@ func (s *productSink) NotifyTo(ctx context.Context, chatID int64, text string) e
 	return nil
 }
 
-// buildSendFn returns a broadcast.SendFn that delivers HTML with a
-// plaintext fallback (go-hully bot.go:274–291 pattern).
-// htmlText is the pre-prepared HTML string passed to the closure.
+// isParseEntityError reports whether a Telegram API error is a parse-entity
+// failure (i.e. malformed HTML/Markdown that the server refused). Only this
+// class of error warrants a plaintext fallback — transient errors (429, 5xx)
+// should surface to Pacer's retry logic instead.
+func isParseEntityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "can't parse entities") ||
+		strings.Contains(msg, "can't parse message text") ||
+		strings.Contains(msg, "bad request: entity")
+}
+
+// buildSendFn returns a broadcast.SendFn that delivers HTML with a plaintext
+// fallback on Telegram parse-entity errors. Other errors (429, 5xx, network)
+// are returned as-is so Pacer's retry logic can handle them.
+// The msg string param from Pacer is intentionally ignored — htmlText is
+// pre-prepared by Notify/NotifyTo and captured in the closure.
 func (s *productSink) buildSendFn(htmlText string) broadcast.SendFn {
-	return func(ctx context.Context, chatID int64, _ string) error {
+	return func(ctx context.Context, chatID int64, _ string) error { // _ = msg from Pacer, unused: htmlText captured
 		// First attempt: HTML parse mode.
 		msg := tgbotapi.NewMessage(chatID, htmlText)
 		msg.ParseMode = tgbotapi.ModeHTML
 		msg.LinkPreviewOptions = tgbotapi.LinkPreviewOptions{IsDisabled: true}
 
-		if _, err := s.sender.SendChattable(msg); err == nil {
+		_, err := s.sender.SendChattable(msg)
+		if err == nil {
 			return nil
-		} else if !s.htmlFallback {
+		}
+
+		// Only fall back to plaintext for parse-entity errors. Return other errors
+		// (transient 429, 5xx, network) so Pacer's retry logic handles them.
+		if !s.htmlFallback || !isParseEntityError(err) {
 			return err
 		}
 
@@ -197,12 +253,13 @@ func (s *productSink) buildSendFn(htmlText string) broadcast.SendFn {
 		if plain == "" {
 			plain = htmlText // last resort: send the raw string
 		}
-		slog.Warn("notify: HTML send failed, falling back to plain text",
-			slog.Int64("chat_id", chatID))
+		slog.Warn("notify: HTML parse-entity error, falling back to plain text",
+			slog.Int64("chat_id", chatID),
+			slog.Any("error", err))
 		plain2 := tgbotapi.NewMessage(chatID, plain)
 		plain2.LinkPreviewOptions = tgbotapi.LinkPreviewOptions{IsDisabled: true}
-		_, err := s.sender.SendChattable(plain2)
-		return err
+		_, err2 := s.sender.SendChattable(plain2)
+		return err2
 	}
 }
 

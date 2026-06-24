@@ -94,6 +94,8 @@ func TestAlertSink_V4PayloadShape(t *testing.T) {
 	if item.Labels["severity"] != "critical" {
 		t.Errorf("severity=%q, want %q", item.Labels["severity"], "critical")
 	}
+	// service and instance are passthrough labels (not used by dozor's gateway,
+	// but they must be present for downstream alertmanager rules).
 	if item.Labels["service"] != "node" {
 		t.Errorf("service=%q, want %q", item.Labels["service"], "node")
 	}
@@ -300,5 +302,40 @@ func TestAlertSink_ContentTypeIsJSON(t *testing.T) {
 	}
 	if !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type=%q, want application/json", ct)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pre-touch: all metric series exist from t=0
+// ---------------------------------------------------------------------------
+
+// TestAlertSink_MetricsPreTouchedAtConstruction verifies that all
+// severity×result combinations appear in Snapshot() immediately after
+// NewAlertSink, before any Alert call. This ensures rate() returns 0 rather
+// than "no data" during healthy operation — Snapshot() only includes keys that
+// were actually written (via Add or Incr), so a missing key proves pre-touch
+// was not called.
+// Red-on-revert: remove preTouchAlertMetrics from NewAlertSink and this test fails.
+func TestAlertSink_MetricsPreTouchedAtConstruction(t *testing.T) {
+	m := metrics.NewRegistry()
+	// Construct the sink — do NOT call Alert.
+	_ = notify.NewAlertSink(notify.WithAlertMetrics(m))
+
+	snap := m.Snapshot()
+
+	severities := []string{"critical", "warning", "info"}
+	results := []string{"ok", "error"}
+	for _, sev := range severities {
+		for _, result := range results {
+			key := metrics.Label(notify.MetricAlertTotal, "severity", sev, "result", result)
+			got, exists := snap[key]
+			if !exists {
+				t.Errorf("series %q absent from Snapshot before any Alert call", key)
+				continue
+			}
+			if got != 0 {
+				t.Errorf("series %q = %d, want 0 (pre-touch must not increment)", key, got)
+			}
+		}
 	}
 }

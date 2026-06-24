@@ -18,7 +18,7 @@ import (
 
 // stubSender is a test double for notify.BotSender.
 type stubSender struct {
-	// sendHTML is called when ParseMode == "HTML"; returns htmlErr.
+	// htmlErr is returned when SendChattable is called with ParseMode == HTML.
 	htmlErr error
 	// plainErr is returned on the fallback plain send (ParseMode == "").
 	plainErr error
@@ -79,11 +79,15 @@ func TestProductSink_NotifyPacedFanOut(t *testing.T) {
 	}
 }
 
-// TestProductSink_HTMLFallbackOnParseError verifies that when HTML send fails
-// the sink retries in plain-text mode (go-hully bot.go:283 pattern).
+// ---------------------------------------------------------------------------
+// HTML fallback (parse-entity-error-gated)
+// ---------------------------------------------------------------------------
+
+// TestProductSink_HTMLFallbackOnParseEntityError verifies that when HTML send
+// fails with a parse-entity error the sink retries in plain-text mode.
 // Red-on-revert: remove the fallback branch in buildSendFn and this test fails
-// (plainCalls stays 0, error is returned as terminal).
-func TestProductSink_HTMLFallbackOnParseError(t *testing.T) {
+// (plainCalls stays 0, send counted as failed).
+func TestProductSink_HTMLFallbackOnParseEntityError(t *testing.T) {
 	stub := &stubSender{
 		htmlErr:  errors.New("Bad Request: can't parse entities"),
 		plainErr: nil,
@@ -110,6 +114,33 @@ func TestProductSink_HTMLFallbackOnParseError(t *testing.T) {
 	}
 	if stub.plainCalls.Load() != 1 {
 		t.Errorf("plainCalls=%d, want 1 (fallback should have been tried)", stub.plainCalls.Load())
+	}
+}
+
+// TestProductSink_TransientErrorNotFalledBack verifies that a transient 429
+// error does NOT trigger the plaintext fallback — it should surface to Pacer's
+// retry logic instead.
+// Red-on-revert: remove the isParseEntityError gate and this test fails
+// (plain send would be tried on a 429, masking the transient error from Pacer).
+func TestProductSink_TransientErrorNotFalledBack(t *testing.T) {
+	stub := &stubSender{
+		// A transient 429 error — NOT a parse-entity error.
+		htmlErr:  errors.New("Too Many Requests: retry after 1"),
+		plainErr: nil,
+	}
+	sink := notify.NewProductSink(stub,
+		notify.WithRPS(1000),
+		notify.WithHTMLFallback(true), // fallback enabled, but should NOT fire for 429
+	)
+
+	_, _, _ = sink.Notify(context.Background(), notify.Product{
+		Text:    "<b>msg</b>",
+		ChatIDs: []int64{7},
+	})
+
+	// Plain fallback must NOT have been called for a transient error.
+	if stub.plainCalls.Load() != 0 {
+		t.Errorf("plainCalls=%d, want 0 (transient errors must not trigger fallback)", stub.plainCalls.Load())
 	}
 }
 
@@ -168,9 +199,10 @@ func TestProductSink_SentCounterIncremented(t *testing.T) {
 // is bumped for every terminal send failure.
 // Red-on-revert: remove the metric bump in the DLQ callback and this fails.
 func TestProductSink_FailedCounterIncremented(t *testing.T) {
+	terminalErr := errors.New("Forbidden: bot was blocked by the user")
 	stub := &stubSender{
-		htmlErr:  errors.New("Forbidden: bot was blocked by the user"),
-		plainErr: errors.New("Forbidden: bot was blocked by the user"),
+		htmlErr:  terminalErr,
+		plainErr: terminalErr,
 	}
 	m := metrics.NewRegistry()
 	sink := notify.NewProductSink(stub, notify.WithRPS(1000), notify.WithProductMetrics(m))
@@ -184,8 +216,7 @@ func TestProductSink_FailedCounterIncremented(t *testing.T) {
 		t.Errorf("failed=%d, want 2", failed)
 	}
 	key := metrics.Label(notify.MetricProductTotal, "result", "failed")
-	// Each chat ID fails: each one tries HTML + fallback plain, both fail →
-	// broadcast.Pacer calls DLQ once per terminal failure.
+	// Each chat ID fails terminally → DLQ fires once per chat ID.
 	if got := m.Value(key); got != 2 {
 		t.Errorf("failed counter=%d, want 2", got)
 	}
@@ -240,9 +271,10 @@ func TestProductSink_NotifyTo_Success(t *testing.T) {
 
 // TestProductSink_NotifyTo_Failure verifies error propagation and fail counter.
 func TestProductSink_NotifyTo_Failure(t *testing.T) {
+	terminalErr := errors.New("Forbidden: blocked")
 	stub := &stubSender{
-		htmlErr:  errors.New("Forbidden: blocked"),
-		plainErr: errors.New("Forbidden: blocked"),
+		htmlErr:  terminalErr,
+		plainErr: terminalErr,
 	}
 	m := metrics.NewRegistry()
 	sink := notify.NewProductSink(stub, notify.WithProductMetrics(m))
@@ -261,12 +293,43 @@ func TestProductSink_NotifyTo_Failure(t *testing.T) {
 // Guard: empty ChatIDs
 // ---------------------------------------------------------------------------
 
-// TestProductSink_EmptyChatIDsReturnsError is a programming-mistake guard.
+// TestProductSink_EmptyChatIDsReturnsError is a programming-mistake guard when
+// no default chat ID was configured.
 func TestProductSink_EmptyChatIDsReturnsError(t *testing.T) {
 	stub := &stubSender{}
 	sink := notify.NewProductSink(stub)
 	_, _, err := sink.Notify(context.Background(), notify.Product{Text: "hi", ChatIDs: nil})
 	if err == nil {
-		t.Fatal("expected error for empty ChatIDs, got nil")
+		t.Fatal("expected error for empty ChatIDs (no default configured), got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pre-touch: all metric series exist from t=0
+// ---------------------------------------------------------------------------
+
+// TestProductSink_MetricsPreTouchedAtConstruction verifies that all result
+// combinations appear in Snapshot() immediately after NewProductSink, before
+// any Notify call.
+// Red-on-revert: remove preTouchProductMetrics from NewProductSink and this fails.
+func TestProductSink_MetricsPreTouchedAtConstruction(t *testing.T) {
+	stub := &stubSender{}
+	m := metrics.NewRegistry()
+	// Construct the sink — do NOT call Notify.
+	_ = notify.NewProductSink(stub, notify.WithProductMetrics(m))
+
+	snap := m.Snapshot()
+
+	results := []string{"sent", "failed"}
+	for _, result := range results {
+		key := metrics.Label(notify.MetricProductTotal, "result", result)
+		got, exists := snap[key]
+		if !exists {
+			t.Errorf("series %q absent from Snapshot before any Notify call", key)
+			continue
+		}
+		if got != 0 {
+			t.Errorf("series %q = %d, want 0 (pre-touch must not increment)", key, got)
+		}
 	}
 }
