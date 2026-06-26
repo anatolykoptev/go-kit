@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.91.1](https://github.com/anatolykoptev/go-kit/compare/v0.91.0...v0.91.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **llm:** asFailover advances chain on model-not-found 422/400 ([#135](https://github.com/anatolykoptev/go-kit/issues/135)) ([a89335e](https://github.com/anatolykoptev/go-kit/commit/a89335e3b06913ec3ce330818ca9897be5c45c0a))
+
 ## [0.91.0](https://github.com/anatolykoptev/go-kit/compare/v0.90.0...v0.91.0) (2026-06-24)
 
 
