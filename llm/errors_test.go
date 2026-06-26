@@ -164,9 +164,75 @@ func TestClassifyErrorType(t *testing.T) {
 			err:  &llm.APIError{StatusCode: 400, Retryable: false},
 			want: "client",
 		},
+		// model_unavailable: 422 requires a model marker — bare 422 is a standard REST
+		// validation status used by Mistral/Cohere for malformed requests; status-alone
+		// would over-failover and mislabel genuine client bugs.
 		{
-			name: "422 returns client",
+			name: "422 bare no marker returns client (not model_unavailable)",
 			err:  &llm.APIError{StatusCode: 422, Retryable: false},
+			want: "client",
+		},
+		{
+			// Real cliproxyapi body when a provider silently swaps the backing model.
+			// Contains "is not available" + "available_models" → model marker present.
+			name: "422 with model-not-available body returns model_unavailable",
+			err: &llm.APIError{
+				StatusCode: 422,
+				Body:       `{"detail":{"error":"Model 'Qwen/Qwen3-235B-A22B-Instruct-2507-FP8' is not available","available_models":["MiniMaxAI/MiniMax-M2.7"]}}`,
+				Retryable:  false,
+			},
+			want: "model_unavailable",
+		},
+		{
+			// OpenAI-family 400 with param="model" — model-specific, next model may exist.
+			name: "400 with param=model returns model_unavailable (not client)",
+			err:  &llm.APIError{StatusCode: 400, Param: "model", Type: "invalid_request_error", Retryable: false},
+			want: "model_unavailable",
+		},
+		{
+			// 400 with a model-not-found body marker and param=model — full real shape.
+			name: "400 model-not-found body+param=model returns model_unavailable",
+			err: &llm.APIError{
+				StatusCode: 400,
+				Body:       `{"error":{"message":"Model \"gpt-X\" not found. Available: gpt-4","type":"invalid_request_error","param":"model"}}`,
+				Type:       "invalid_request_error",
+				Param:      "model",
+				Retryable:  false,
+			},
+			want: "model_unavailable",
+		},
+		{
+			// REGRESSION: plain malformed 400 (no model marker) must NOT become model_unavailable.
+			// A bad request recurs on every model → chain must abort.
+			name: "400 plain malformed returns client (regression — chain-abort preserved)",
+			err:  &llm.APIError{StatusCode: 400, Body: `{"error":{"message":"bad json","type":"invalid_request_error"}}`, Retryable: false},
+			want: "client",
+		},
+		{
+			// FIX 2 guard: capability-mismatch 400 must NOT trigger body-marker match.
+			// "response_format json_schema is not available for this model" contains
+			// "not available" and "model" (bare word), but param=response_format ≠ model
+			// and the body lacks the structured "available_models"/"available:" markers.
+			// The bare "model" word in the message text must not be a sufficient marker.
+			name: "400 capability mismatch param=response_format returns client (no bare-model false-positive)",
+			err: &llm.APIError{
+				StatusCode: 400,
+				Body:       `{"error":{"message":"response_format json_schema is not available for this model","type":"invalid_request_error","param":"response_format"}}`,
+				Type:       "invalid_request_error",
+				Param:      "response_format",
+				Retryable:  false,
+			},
+			want: "client",
+		},
+		{
+			// Same capability-mismatch via 422 (some providers use 422 for param errors).
+			// No "available_models"/"available:" in the body → must NOT failover.
+			name: "422 capability mismatch no structured marker returns client",
+			err: &llm.APIError{
+				StatusCode: 422,
+				Body:       `{"detail":{"error":"invalid temperature value"}}`,
+				Retryable:  false,
+			},
 			want: "client",
 		},
 		{
