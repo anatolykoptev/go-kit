@@ -33,11 +33,21 @@ const plainBadRequestBody = `{"error":{"message":"messages must be a non-empty a
 
 // Real cliproxyapi 422 body when a provider silently swaps the backing model.
 // The proxy still lists the alias in /v1/models (health-filter passes it), but
-// a real call returns 422 with this shape.
+// a real call returns 422 with this shape. Contains "is not available" +
+// "available_models" — model marker present → failover.
 const cliproxyapi422Body = `{"detail":{"error":"Model 'Qwen/Qwen3-235B-A22B-Instruct-2507-FP8' is not available","available_models":["MiniMaxAI/MiniMax-M2.7"]}}`
 
 // OpenAI-family 400 "model not found" shape (param=model).
 const modelNotFoundBody = `{"error":{"message":"Model \"gpt-X\" not found. Available: gpt-4","type":"invalid_request_error","param":"model"}}`
+
+// 422 generic validation error — no model marker. Mistral/Cohere emit 422 for
+// malformed-param errors that recur on every model. Must NOT failover.
+const genericValidation422Body = `{"detail":{"error":"invalid temperature value"}}`
+
+// 400 capability-mismatch shape — "not available for this model" but the param
+// is response_format, not model. The bare word "model" in the message text must
+// NOT be treated as a model-not-found signal (FIX 2 guard).
+const capabilityMismatch400Body = `{"error":{"message":"response_format json_schema is not available for this model","type":"invalid_request_error","param":"response_format"}}`
 
 // TestChain_AdvancesOn413TooLarge is the core fix: a 413 "request too large for
 // this model" must advance the model-fallback chain to the next (larger-budget)
@@ -386,5 +396,73 @@ func TestAPIError_ParamParsedFromJSON(t *testing.T) {
 	}
 	if ae.Type != "invalid_request_error" {
 		t.Errorf("Type = %q, want invalid_request_error", ae.Type)
+	}
+}
+
+// TestChain_422GenericValidationStillAborts: a 422 with NO model marker must
+// abort the chain (not advance). Guards against the over-failover introduced
+// by the original status-alone 422 treatment.
+func TestChain_422GenericValidationStillAborts(t *testing.T) {
+	bad := httptest.NewServer(statusBodyHandler(http.StatusUnprocessableEntity, genericValidation422Body))
+	defer bad.Close()
+	ok := httptest.NewServer(okChatHandler(t, "should-not-reach"))
+	defer ok.Close()
+
+	_, calls, obs := newObserver()
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: bad.URL, Key: "k", Model: "first"},
+			{URL: ok.URL, Key: "k", Model: "second"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	_, err := c.Complete(context.Background(), "", "test")
+	if err == nil {
+		t.Fatal("expected 422 generic validation to abort chain (no model marker — recurs on every model)")
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected exactly 1 call (abort, no advance), got %d: %+v", len(*calls), *calls)
+	}
+	if (*calls)[0].model != "first" {
+		t.Errorf("call[0].model = %q, want first", (*calls)[0].model)
+	}
+	if got := llm.ClassifyErrorType((*calls)[0].err); got != "client" {
+		t.Errorf("ClassifyErrorType for generic 422 = %q, want client", got)
+	}
+}
+
+// TestChain_400CapabilityMismatchStillAborts: a 400 with param=response_format
+// "not available for this model" must abort the chain. The bare word "model"
+// in the message text must NOT trigger the model-not-found path (FIX 2 guard).
+func TestChain_400CapabilityMismatchStillAborts(t *testing.T) {
+	bad := httptest.NewServer(statusBodyHandler(http.StatusBadRequest, capabilityMismatch400Body))
+	defer bad.Close()
+	ok := httptest.NewServer(okChatHandler(t, "should-not-reach"))
+	defer ok.Close()
+
+	_, calls, obs := newObserver()
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: bad.URL, Key: "k", Model: "first"},
+			{URL: ok.URL, Key: "k", Model: "second"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	_, err := c.Complete(context.Background(), "", "test")
+	if err == nil {
+		t.Fatal("expected 400 capability mismatch to abort chain (param=response_format, not model)")
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected exactly 1 call (abort, no advance), got %d: %+v", len(*calls), *calls)
+	}
+	if (*calls)[0].model != "first" {
+		t.Errorf("call[0].model = %q, want first", (*calls)[0].model)
+	}
+	if got := llm.ClassifyErrorType((*calls)[0].err); got != "client" {
+		t.Errorf("ClassifyErrorType for 400 capability mismatch = %q, want client", got)
 	}
 }

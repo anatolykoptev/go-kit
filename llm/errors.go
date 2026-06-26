@@ -81,38 +81,42 @@ func asRetryable(err error) bool {
 // model). Such errors are model-specific: the NEXT model in the chain is a
 // different model that may exist. The chain must ADVANCE, not abort.
 //
-// Recognised signals:
-//   - HTTP 422 Unprocessable Entity (status-alone): cliproxyapi emits this
-//     shape when the provider returns the alias in listings but the call fails.
-//     Mirrors the 413 status-alone trade-off; 422 does not collide with
-//     the 400-malformed-abort semantics.
-//   - HTTP 400 Bad Request WITH a model-not-found marker: either
-//     error.param == "model" (OpenAI-family "Model X not found") OR
-//     a body-level string match for "not available"/"not found"/"does not
-//     exist" co-occurring with "model"/"available_models"/"available:".
-//     A plain malformed-400 (no model marker) does NOT match.
+// The invariant: model-not-found is signalled by a MODEL MARKER, independent
+// of the 4xx code (400 or 422). Status alone does NOT carry the "model gone"
+// semantic — 422 is the standard REST validation status used by Mistral/Cohere
+// for malformed requests that recur on every model; 422 without a model marker
+// must NOT failover.
+//
+// Recognised signals (both 400 and 422 require a marker):
+//   - error.param == "model" (OpenAI-family "Model X not found", parsed by
+//     newAPIError into APIError.Param).
+//   - Body contains a structured unavailability term ("not available"/
+//     "not found"/"does not exist") AND a structured model-listing marker
+//     ("available_models" or "available:"). The bare word "model" is
+//     intentionally excluded from the model-context disjunct: capability-
+//     mismatch messages such as "response_format json_schema is not available
+//     for this model" contain "model" but param=response_format, not param=model
+//     — and they recur identically on every model (should abort, not failover).
+//
+// A plain 400/422 with no matching marker does NOT advance the chain.
 func isModelUnavailable(apiErr *APIError) bool {
-	if apiErr.StatusCode == http.StatusUnprocessableEntity { // 422
+	if apiErr.StatusCode != http.StatusBadRequest &&
+		apiErr.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	if apiErr.Param == "model" {
 		return true
 	}
-	if apiErr.StatusCode == http.StatusBadRequest {
-		if apiErr.Param == "model" {
-			return true
-		}
-		// Body-marker fallback for providers that omit the param field but
-		// embed the unavailability signal in the message text.
-		body := strings.ToLower(apiErr.Body)
-		hasUnavailSignal := strings.Contains(body, "not available") ||
-			strings.Contains(body, "not found") ||
-			strings.Contains(body, "does not exist")
-		hasModelContext := strings.Contains(body, "model") ||
-			strings.Contains(body, "available_models") ||
-			strings.Contains(body, "available:")
-		if hasUnavailSignal && hasModelContext {
-			return true
-		}
-	}
-	return false
+	// Body-marker fallback: structured unavailability term + structured
+	// model-listing indicator. Deliberately excludes the bare word "model"
+	// to avoid false-positives on capability-mismatch messages.
+	body := strings.ToLower(apiErr.Body)
+	hasUnavailSignal := strings.Contains(body, "not available") ||
+		strings.Contains(body, "not found") ||
+		strings.Contains(body, "does not exist")
+	hasModelListing := strings.Contains(body, "available_models") ||
+		strings.Contains(body, "available:")
+	return hasUnavailSignal && hasModelListing
 }
 
 // asFailover reports whether err is a per-model failure that should advance
@@ -125,21 +129,22 @@ func isModelUnavailable(apiErr *APIError) bool {
 // Recognised signals (cross-provider, observed on the cliproxyapi fleet):
 //   - HTTP 413 Payload Too Large — Groq emits this with type "tokens" when a
 //     single request exceeds the model's per-minute token (TPM) budget.
+//     Matched status-alone (any body) — see note below.
 //   - HTTP 400 with error code "context_length_exceeded" — the OpenAI-family
 //     context-window-overflow shape.
-//   - HTTP 422 Unprocessable Entity (status-alone) — provider silently swapped
+//   - HTTP 400/422 with a model-not-found marker — provider silently swapped
 //     the backing model; alias still lists in /v1/models but call fails.
-//   - HTTP 400 with a model-not-found marker (param=model or body marker) —
-//     model-specific; next model in chain may exist.
+//     Marker required: param=model or body contains ("not available"/"not found"/
+//     "does not exist") AND ("available_models"/"available:"). See isModelUnavailable.
 //
-// A plain 400 (malformed request, no model marker) is deliberately NOT a
-// failover: it recurs identically on every model, so the chain must abort,
-// not burn every endpoint.
+// A plain 400 or 422 with NO model marker is deliberately NOT a failover: it
+// recurs identically on every model, so the chain must abort, not burn every
+// endpoint.
 //
-// Note: 413 and 422 are matched on status alone (any body) — treated as
-// model-specific. A non-model 413/422 shared by every endpoint (e.g. a
-// gateway limit) would still advance and burn the chain, surfacing the same
-// error after N attempts. Acceptable for the same-proxy chains this targets.
+// Note: 413 is matched on status alone (any body) — treated as model-specific.
+// A non-model 413 shared by every endpoint (e.g. a gateway payload-size limit)
+// would still advance and burn the chain, surfacing the same error after N
+// attempts. Acceptable for the same-proxy chains this targets.
 func asFailover(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
