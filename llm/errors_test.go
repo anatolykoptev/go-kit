@@ -164,9 +164,45 @@ func TestClassifyErrorType(t *testing.T) {
 			err:  &llm.APIError{StatusCode: 400, Retryable: false},
 			want: "client",
 		},
+		// model_unavailable: 422 status-alone → advances chain (mirrors 413 status-alone trade-off)
 		{
-			name: "422 returns client",
+			name: "422 bare returns model_unavailable (not client)",
 			err:  &llm.APIError{StatusCode: 422, Retryable: false},
+			want: "model_unavailable",
+		},
+		{
+			// Real cliproxyapi body when a provider silently swaps the backing model.
+			name: "422 with model-not-available body returns model_unavailable",
+			err: &llm.APIError{
+				StatusCode: 422,
+				Body:       `{"detail":{"error":"Model 'Qwen/Qwen3-235B-A22B-Instruct-2507-FP8' is not available","available_models":["MiniMaxAI/MiniMax-M2.7"]}}`,
+				Retryable:  false,
+			},
+			want: "model_unavailable",
+		},
+		{
+			// OpenAI-family 400 with param="model" — model-specific, next model may exist.
+			name: "400 with param=model returns model_unavailable (not client)",
+			err:  &llm.APIError{StatusCode: 400, Param: "model", Type: "invalid_request_error", Retryable: false},
+			want: "model_unavailable",
+		},
+		{
+			// 400 with a model-not-found body marker and param=model — full real shape.
+			name: "400 model-not-found body+param=model returns model_unavailable",
+			err: &llm.APIError{
+				StatusCode: 400,
+				Body:       `{"error":{"message":"Model \"gpt-X\" not found. Available: gpt-4","type":"invalid_request_error","param":"model"}}`,
+				Type:       "invalid_request_error",
+				Param:      "model",
+				Retryable:  false,
+			},
+			want: "model_unavailable",
+		},
+		{
+			// REGRESSION: plain malformed 400 (no model marker) must NOT become model_unavailable.
+			// A bad request recurs on every model → chain must abort.
+			name: "400 plain malformed returns client (regression — chain-abort preserved)",
+			err:  &llm.APIError{StatusCode: 400, Body: `{"error":{"message":"bad json","type":"invalid_request_error"}}`, Retryable: false},
 			want: "client",
 		},
 		{

@@ -31,6 +31,14 @@ const contextLenBody = `{"error":{"message":"This model's maximum context length
 // chain must NOT advance on it.
 const plainBadRequestBody = `{"error":{"message":"messages must be a non-empty array","type":"invalid_request_error","code":"invalid_request_error"}}`
 
+// Real cliproxyapi 422 body when a provider silently swaps the backing model.
+// The proxy still lists the alias in /v1/models (health-filter passes it), but
+// a real call returns 422 with this shape.
+const cliproxyapi422Body = `{"detail":{"error":"Model 'Qwen/Qwen3-235B-A22B-Instruct-2507-FP8' is not available","available_models":["MiniMaxAI/MiniMax-M2.7"]}}`
+
+// OpenAI-family 400 "model not found" shape (param=model).
+const modelNotFoundBody = `{"error":{"message":"Model \"gpt-X\" not found. Available: gpt-4","type":"invalid_request_error","param":"model"}}`
+
 // TestChain_AdvancesOn413TooLarge is the core fix: a 413 "request too large for
 // this model" must advance the model-fallback chain to the next (larger-budget)
 // model instead of aborting. Pre-fix this FAILS — 413 is non-retryable and the
@@ -278,5 +286,105 @@ func TestAPIError_EmptyTypeCodeForNonJSON(t *testing.T) {
 	}
 	if ae.Type != "" || ae.Code != "" {
 		t.Errorf("Type=%q Code=%q, want both empty for non-JSON body", ae.Type, ae.Code)
+	}
+}
+
+// TestChain_AdvancesOn422ModelNotAvailable: a 422 "model not available"
+// (cliproxyapi shape) must advance the chain to the next model. The alias
+// still lists in /v1/models so the health-filter did not drop it; the call
+// itself fails with 422. Model-not-found is model-specific (the next model
+// differs and may exist), so the chain must advance, not abort.
+func TestChain_AdvancesOn422ModelNotAvailable(t *testing.T) {
+	dead := httptest.NewServer(statusBodyHandler(http.StatusUnprocessableEntity, cliproxyapi422Body))
+	defer dead.Close()
+	ok := httptest.NewServer(okChatHandler(t, "from-live-model"))
+	defer ok.Close()
+
+	_, calls, obs := newObserver()
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: dead.URL, Key: "k", Model: "dead-alias"},
+			{URL: ok.URL, Key: "k", Model: "live-model"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	out, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("expected chain to advance past 422 model-not-available, got error: %v", err)
+	}
+	if out != "from-live-model" {
+		t.Errorf("output = %q, want from-live-model", out)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 observer calls (422 then ok), got %d: %+v", len(*calls), *calls)
+	}
+	if (*calls)[0].model != "dead-alias" || (*calls)[0].err == nil {
+		t.Errorf("call[0] = %+v, want {dead-alias, err}", (*calls)[0])
+	}
+	var ae *llm.APIError
+	if !errors.As((*calls)[0].err, &ae) || ae.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("call[0].err = %v, want APIError 422", (*calls)[0].err)
+	}
+	if llm.ClassifyErrorType((*calls)[0].err) != "model_unavailable" {
+		t.Errorf("ClassifyErrorType for 422 = %q, want model_unavailable", llm.ClassifyErrorType((*calls)[0].err))
+	}
+	if (*calls)[1].model != "live-model" || (*calls)[1].err != nil {
+		t.Errorf("call[1] = %+v, want {live-model, nil}", (*calls)[1])
+	}
+}
+
+// TestChain_AdvancesOn400ModelNotFound: a 400 with param=model "model not
+// found" is model-specific (next model differs, may exist). Chain must advance.
+// REGRESSION: plain malformed-400 (no model marker) must still abort.
+func TestChain_AdvancesOn400ModelNotFound(t *testing.T) {
+	dead := httptest.NewServer(statusBodyHandler(http.StatusBadRequest, modelNotFoundBody))
+	defer dead.Close()
+	ok := httptest.NewServer(okChatHandler(t, "from-fallback"))
+	defer ok.Close()
+
+	_, calls, obs := newObserver()
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: dead.URL, Key: "k", Model: "missing-model"},
+			{URL: ok.URL, Key: "k", Model: "real-model"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	out, err := c.Complete(context.Background(), "", "test")
+	if err != nil {
+		t.Fatalf("expected chain to advance past 400 model-not-found, got error: %v", err)
+	}
+	if out != "from-fallback" {
+		t.Errorf("output = %q, want from-fallback", out)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 observer calls (400 model-not-found then ok), got %d: %+v", len(*calls), *calls)
+	}
+	if llm.ClassifyErrorType((*calls)[0].err) != "model_unavailable" {
+		t.Errorf("ClassifyErrorType for 400 model-not-found = %q, want model_unavailable", llm.ClassifyErrorType((*calls)[0].err))
+	}
+}
+
+// TestAPIError_ParamParsedFromJSON: the error.param field is parsed onto
+// APIError.Param for 400 "model not found" shapes (OpenAI-family).
+func TestAPIError_ParamParsedFromJSON(t *testing.T) {
+	srv := httptest.NewServer(statusBodyHandler(http.StatusBadRequest, modelNotFoundBody))
+	defer srv.Close()
+
+	c := llm.NewClient(srv.URL, "k", "m", llm.WithMaxRetries(1))
+	_, err := c.Complete(context.Background(), "", "test")
+	var ae *llm.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("want APIError, got %T: %v", err, err)
+	}
+	if ae.Param != "model" {
+		t.Errorf("Param = %q, want model", ae.Param)
+	}
+	if ae.Type != "invalid_request_error" {
+		t.Errorf("Type = %q, want invalid_request_error", ae.Type)
 	}
 }
