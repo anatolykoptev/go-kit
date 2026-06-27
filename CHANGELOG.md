@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.92.0](https://github.com/anatolykoptev/go-kit/compare/v0.91.1...v0.92.0) (2026-06-27)
+
+
+### Features
+
+* promote vaelor/pkg/pdf into go-kit/render as shared adapter ([#137](https://github.com/anatolykoptev/go-kit/issues/137)) ([5b46a9f](https://github.com/anatolykoptev/go-kit/commit/5b46a9f60d0cb1460a0f383812dfd3eebe8c4af0))
+
 ## [0.91.1](https://github.com/anatolykoptev/go-kit/compare/v0.91.0...v0.91.1) (2026-06-26)
 
 
