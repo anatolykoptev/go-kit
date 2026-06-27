@@ -1,0 +1,14 @@
+.vaelor-math {
+  display: block;
+  margin: 16px 0;
+  padding: 14px 18px;
+  background: var(--bg-card, #F7F7F7);
+  border-left: 3px solid var(--brand-primary, #4A5568);
+  font-family: "Latin Modern Math", "Cambria Math", "STIX Two Math", Georgia, serif;
+  font-size: 13px;
+  font-style: italic;
+  text-align: center;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}

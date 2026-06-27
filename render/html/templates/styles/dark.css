@@ -1,0 +1,217 @@
+/* Dark theme. On-screen reading aesthetic: dark slate background with high-
+   contrast body text, soft-blue primary and violet secondary accents, warm amber
+   for inline code. Designed for presentations, slide decks, and dark-mode PDF
+   exports. Less common for print but useful when the output will be viewed on
+   screen. Some class selectors (.cover-page, .toc, .page-break) are opt-in hooks
+   for CustomCSS callers; plain markdown only emits h1-h6, p, ul, ol, li, code,
+   pre, table, tr, td, th, blockquote. */
+:root {
+  --brand-primary: #60A5FA;   /* soft blue for accents */
+  --brand-accent:  #C084FC;   /* violet for secondary */
+  --text-body:     #E5E7EB;
+  --text-muted:    #9CA3AF;
+  --text-strong:   #FFFFFF;
+  --bg-cream:      #1F2937;   /* dark slate body bg */
+  --bg-card:       #111827;   /* darker cards */
+  --border-soft:   #374151;
+}
+
+@page {
+  size: letter;
+  margin: 50px;
+  background: #1F2937;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  background: #1F2937;
+  color: var(--text-body);
+}
+
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+h1 {
+  font-size: 26px;
+  color: var(--brand-primary);
+  margin: 20px 0 10px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+h2 {
+  font-size: 18px;
+  color: var(--text-strong);
+  margin: 18px 0 8px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 4px;
+}
+
+h3 {
+  font-size: 14px;
+  color: var(--brand-accent);
+  margin: 14px 0 6px;
+  font-weight: 600;
+}
+
+h4, h5, h6 {
+  font-size: 12px;
+  color: var(--text-strong);
+  margin: 12px 0 4px;
+  font-weight: 600;
+}
+
+p {
+  margin: 6px 0;
+  orphans: 3;
+  widows: 3;
+}
+
+strong { color: var(--text-strong); font-weight: 700; }
+em { color: var(--brand-primary); font-style: italic; }
+
+a {
+  color: var(--brand-primary);
+  text-decoration: underline;
+}
+
+a:hover { color: var(--brand-accent); }
+
+ul, ol {
+  margin: 8px 0 8px 24px;
+  padding-left: 4px;
+}
+
+li {
+  margin: 3px 0;
+  line-height: 1.55;
+}
+
+code {
+  font-family: "SF Mono", Consolas, "Courier New", monospace;
+  font-size: 10px;
+  background: var(--bg-card);
+  color: #FDE68A;             /* warm amber for inline code */
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+pre {
+  font-family: "SF Mono", Consolas, "Courier New", monospace;
+  font-size: 10px;
+  background: var(--bg-card);
+  color: var(--text-body);
+  padding: 12px 16px;
+  border-radius: 4px;
+  border-left: 3px solid var(--brand-primary);
+  line-height: 1.5;
+  margin: 10px 0;
+  overflow-x: auto;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 10px;
+}
+
+th {
+  background: var(--bg-card);
+  color: var(--text-strong);
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--brand-primary);
+  font-weight: 600;
+}
+
+td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-body);
+}
+
+tr:nth-child(even) td {
+  background: rgba(17, 24, 39, 0.4);
+}
+
+blockquote {
+  margin: 10px 0;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border-left: 3px solid var(--brand-accent);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 10px auto;
+  border-radius: 4px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  margin: 16px 0;
+}
+
+.cover-page {
+  text-align: center;
+  padding-top: 140px;
+  page-break-after: always;
+}
+
+.toc {
+  margin: 14px 0;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-left: 3px solid var(--brand-primary);
+  font-size: 10px;
+  border-radius: 0 4px 4px 0;
+}
+
+.toc h2 {
+  border: none;
+  color: var(--brand-primary);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc li { line-height: 1.5; }
+.toc li.toc-h1 { font-weight: 700; margin-top: 3px; }
+.toc li.toc-h2 { padding-left: 14px; }
+.toc li.toc-h3 { padding-left: 28px; font-size: 9.5px; }
+
+.toc a {
+  color: var(--text-body);
+  text-decoration: none;
+}
+
+.toc a:hover { color: var(--brand-primary); }
+
+.page-break { page-break-before: always; }

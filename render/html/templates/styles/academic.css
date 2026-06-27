@@ -1,0 +1,233 @@
+/* Academic theme. Scientific / research paper aesthetic: Times-like serif body,
+   small-caps section headings, justified text with hyphenation, footnote-ready
+   spacing, restrained palette keyed to dark ink on cream. Designed for long-form
+   prose (journal articles, white papers, theses). Some class selectors
+   (.cover-page, .toc, .page-break, .abstract) are opt-in hooks for CustomCSS
+   callers; plain markdown only emits h1-h6, p, ul, ol, li, code, pre, table, tr,
+   td, th, blockquote. */
+:root {
+  --brand-primary: #1a1a1a;
+  --brand-accent:  #8B4513;   /* saddle brown for subtle highlights */
+  --text-body:     #222;
+  --text-muted:    #555;
+  --text-strong:   #000;
+  --bg-cream:      #FFFFFF;
+  --bg-card:       #F5F5F0;
+  --border-soft:   #CCCCCC;
+}
+
+@page {
+  size: letter;
+  margin: 60px 55px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--text-body);
+  background: var(--bg-cream);
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  margin: 20px 0 14px;
+  letter-spacing: 0.5px;
+  color: var(--text-strong);
+}
+
+h2 {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant: small-caps;
+  letter-spacing: 1.5px;
+  margin: 18px 0 8px;
+  color: var(--text-strong);
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 2px;
+}
+
+h3 {
+  font-size: 12px;
+  font-weight: 700;
+  font-style: italic;
+  margin: 14px 0 6px;
+  color: var(--text-strong);
+}
+
+h4, h5, h6 {
+  font-size: 11px;
+  font-weight: 700;
+  margin: 12px 0 4px;
+  color: var(--text-strong);
+}
+
+p {
+  margin: 6px 0;
+  text-indent: 18px;
+  orphans: 3;
+  widows: 3;
+}
+
+p:first-of-type,
+h1 + p,
+h2 + p,
+h3 + p,
+h4 + p,
+blockquote + p,
+pre + p,
+.abstract + p {
+  text-indent: 0;
+}
+
+a {
+  color: var(--brand-accent);
+  text-decoration: none;
+}
+
+a:hover { text-decoration: underline; }
+
+strong { color: var(--text-strong); font-weight: 700; }
+em { font-style: italic; }
+
+ul, ol {
+  margin: 8px 0 8px 28px;
+  padding-left: 4px;
+}
+
+li {
+  margin: 3px 0;
+  line-height: 1.55;
+}
+
+blockquote {
+  margin: 12px 40px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border-soft);
+  font-style: italic;
+  color: var(--text-muted);
+  text-indent: 0;
+}
+
+code, pre {
+  font-family: "Courier New", Consolas, monospace;
+  font-size: 10px;
+  background: var(--bg-card);
+}
+
+code {
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+pre {
+  padding: 10px 14px;
+  margin: 8px 0;
+  border: 1px solid var(--border-soft);
+  text-align: left;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 10px;
+}
+
+th {
+  background: transparent;
+  color: var(--text-strong);
+  border-top: 1.5px solid var(--text-strong);
+  border-bottom: 1px solid var(--text-strong);
+  padding: 6px 8px;
+  text-align: left;
+  font-variant: small-caps;
+  letter-spacing: 0.5px;
+}
+
+td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+tr:last-child td {
+  border-bottom: 1.5px solid var(--text-strong);
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 10px auto;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  margin: 16px 0;
+}
+
+.cover-page {
+  text-align: center;
+  padding-top: 120px;
+  page-break-after: always;
+}
+
+.abstract {
+  margin: 14px 30px;
+  padding: 10px 14px;
+  font-size: 10.5px;
+  font-style: italic;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  text-indent: 0;
+}
+
+.toc {
+  margin: 18px 0;
+  padding: 12px 18px;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  font-size: 10px;
+}
+
+.toc h2 {
+  border: none;
+  margin-bottom: 6px;
+}
+
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc li { line-height: 1.5; }
+.toc li.toc-h1 { font-weight: 700; margin-top: 3px; }
+.toc li.toc-h2 { padding-left: 14px; }
+.toc li.toc-h3 { padding-left: 28px; font-size: 9.5px; }
+
+.toc a {
+  color: var(--text-body);
+  text-decoration: none;
+}
+
+.page-break { page-break-before: always; }
