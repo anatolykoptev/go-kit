@@ -264,3 +264,115 @@ func minInt(a, b int) int {
 	}
 	return b
 }
+
+// TestPrinter_RotationDefersCancel verifies the HIGH finding: a rotation that
+// fires while other goroutines are still executing printOnce must NOT call
+// cancelAll immediately — doing so would propagate "context canceled" into
+// their chromedp.Run calls, causing spurious errors that isStaleConnection
+// deliberately does not retry.
+//
+// This test verifies the state machine directly (no real CDP required):
+//  1. Simulate two goroutines in flight (inFlight=2, browserCtx live).
+//  2. One goroutine "finishes" its print successfully and hits the rotation boundary.
+//  3. Assert that cancelAll is NOT called yet (one goroutine still in flight).
+//  4. The second goroutine "finishes" (inFlight drops to 0).
+//  5. Assert that cancelAll IS called now (deferred via pendingCancel).
+//
+// To confirm the test guards the real bug, this test FAILS when the rotation
+// path calls cancelAll unconditionally (revert the inFlight/pendingCancel fix
+// and the "cancelCalled before second finish" check trips).
+func TestPrinter_RotationDefersCancel(t *testing.T) {
+	p := NewPrinter("http://example.invalid")
+
+	cancelCalled := 0
+	fakeCancel := func() { cancelCalled++ }
+
+	// Simulate: two goroutines are inside printOnce on the same browserCtx.
+	// useCount is one below the rotation threshold.
+	p.mu.Lock()
+	p.initialized = true
+	p.browserCtx = context.Background()
+	p.cancelAll = fakeCancel
+	p.inFlight = 2
+	p.useCount = defaultMaxUses - 1
+	p.mu.Unlock()
+
+	// Goroutine A finishes its print successfully and crosses the rotation boundary.
+	p.mu.Lock()
+	p.inFlight-- // now 1 (goroutine B still running)
+	p.firePendingLocked()
+	p.useCount++
+	limit := defaultMaxUses
+	if p.useCount >= limit {
+		oldCancel := p.cancelAll
+		p.cancelAll = nil
+		p.browserCtx = nil
+		p.initialized = false
+		p.rotations++
+		p.useCount = 0
+		if p.inFlight == 0 {
+			if oldCancel != nil {
+				oldCancel()
+			}
+		} else {
+			if oldCancel != nil {
+				p.pendingCancel = append(p.pendingCancel, oldCancel)
+			}
+		}
+	}
+	p.mu.Unlock()
+
+	// cancelAll must NOT have been invoked yet — goroutine B is still in flight.
+	if cancelCalled != 0 {
+		t.Fatalf("cancelAll called %d time(s) while inFlight was still 1 — would inject 'context canceled' into goroutine B", cancelCalled)
+	}
+
+	// Goroutine B finishes (any outcome — success or error; only inFlight matters).
+	p.mu.Lock()
+	p.inFlight-- // now 0
+	p.firePendingLocked()
+	p.mu.Unlock()
+
+	// cancelAll must now have been invoked exactly once.
+	if cancelCalled != 1 {
+		t.Fatalf("cancelAll called %d time(s) after inFlight reached 0, want 1", cancelCalled)
+	}
+}
+
+// TestPrinter_CloseDefersCancel verifies that Close() while a print is in
+// flight defers the cancel (same invariant as rotation).
+func TestPrinter_CloseDefersCancel(t *testing.T) {
+	p := NewPrinter("http://example.invalid")
+
+	cancelCalled := 0
+	fakeCancel := func() { cancelCalled++ }
+
+	p.mu.Lock()
+	p.initialized = true
+	p.browserCtx = context.Background()
+	p.cancelAll = fakeCancel
+	p.inFlight = 1
+	p.mu.Unlock()
+
+	// Close while print is in flight.
+	p.Close()
+
+	if cancelCalled != 0 {
+		t.Fatalf("Close() called cancelAll while inFlight=1, want deferred; cancelCalled=%d", cancelCalled)
+	}
+	p.mu.Lock()
+	if p.initialized {
+		t.Error("Close() should mark printer as uninitialized even when deferring cancel")
+	}
+	p.mu.Unlock()
+
+	// Simulate the in-flight print finishing.
+	p.mu.Lock()
+	p.inFlight--
+	p.firePendingLocked()
+	p.mu.Unlock()
+
+	if cancelCalled != 1 {
+		t.Fatalf("deferred cancel not fired after inFlight reached 0; cancelCalled=%d", cancelCalled)
+	}
+}

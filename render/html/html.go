@@ -89,7 +89,7 @@ func RenderHTML(ctx context.Context, markdown string, opts render.Options) (stri
 		return "", fmt.Errorf("context cancelled: %w", err)
 	}
 
-	source := []byte(sanitizeMarkdown(markdown))
+	source := []byte(markdown)
 
 	md := buildGoldmark(opts)
 

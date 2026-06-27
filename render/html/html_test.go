@@ -199,6 +199,29 @@ func TestRenderHTML_TOC_DuplicateHeadingsDisambiguated(t *testing.T) {
 	}
 }
 
+// TestRenderHTML_DataImagePreserved is the regression guard for the MEDIUM
+// finding: the old sanitizeMarkdown regex blanket-replaced ALL data: prefixes
+// (including data:image/*) with "#", destroying legitimate inline base64
+// images. Goldmark's IsDangerousURL correctly allows data:image/ — this test
+// FAILS on the pre-fix code (with sanitizeMarkdown active) and PASSES after.
+func TestRenderHTML_DataImagePreserved(t *testing.T) {
+	// A minimal valid 1x1 white PNG in base64.
+	const dataURI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	md := "![logo](" + dataURI + ")\n"
+	html, err := RenderHTML(context.Background(), md, render.Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The data URI must survive into the rendered <img src="...">.
+	if !strings.Contains(html, "data:image/png") {
+		t.Errorf("data:image/png was stripped — goldmark should permit data:image/ URIs\noutput:\n%s", html)
+	}
+	// Verify the src didn't collapse to "#" (the old sanitizeMarkdown regression).
+	if strings.Contains(html, `src="#"`) {
+		t.Errorf("data:image/png collapsed to src=\"#\" — sanitizeMarkdown regression\noutput:\n%s", html)
+	}
+}
+
 func TestRenderHTML_TitleExtractionWithInlineCode(t *testing.T) {
 	md := "# Report for `acme-corp`\n"
 	html, err := RenderHTML(context.Background(), md, render.Options{})

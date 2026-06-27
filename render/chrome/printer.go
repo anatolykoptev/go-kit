@@ -34,6 +34,31 @@ type Printer struct {
 	useCount   int // guarded by mu
 	rotations  int // guarded by mu; testing/observability counter
 	probeCount int // guarded by mu; cumulative probeCDP successes (test hook)
+
+	// inFlight counts goroutines currently executing printOnce or captureOnce.
+	// We must not call cancelAll (or rotate browserCtx) while inFlight > 0 because
+	// every tab context is a child of browserCtx: canceling the parent propagates
+	// "context canceled" into chromedp.Run in all sibling goroutines, and
+	// isStaleConnection deliberately excludes "context canceled" to avoid
+	// false-positive retries — so those goroutines would surface a spurious error.
+	inFlight int // guarded by mu
+
+	// pendingCancel holds cancelAll functions that could not be invoked immediately
+	// because inFlight > 0 at the time the rotation or Close was requested.
+	// They are called in firePendingLocked once inFlight drops to zero.
+	pendingCancel []func() // guarded by mu
+}
+
+// firePendingLocked calls and clears pendingCancel when inFlight has reached zero.
+// Must be called after every inFlight decrement. Caller must hold p.mu.
+func (p *Printer) firePendingLocked() {
+	if p.inFlight > 0 || len(p.pendingCancel) == 0 {
+		return
+	}
+	for _, c := range p.pendingCancel {
+		c()
+	}
+	p.pendingCancel = p.pendingCancel[:0]
 }
 
 // probeCountForTests returns the number of times probeCDP has run successfully
@@ -72,10 +97,27 @@ func NewPrinter(cdpURL string) *Printer {
 
 // Close releases the browser connection and resets to uninitialized state.
 // Subsequent Print calls will re-initialize.
+//
+// If there are renders currently in progress (concurrent Print or CaptureImage
+// calls), the browser context teardown is deferred until the last in-flight
+// call completes, rather than immediately canceling their shared context.
+// The printer is marked uninitialized immediately so new Print calls after
+// Close will not attempt to use the old context.
 func (p *Printer) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.resetLocked()
+	if p.inFlight == 0 {
+		p.resetLocked()
+		return
+	}
+	// Defer teardown: stash the old cancelAll and mark as uninitialized.
+	// firePendingLocked will fire the cancel when inFlight reaches zero.
+	if p.cancelAll != nil {
+		p.pendingCancel = append(p.pendingCancel, p.cancelAll)
+		p.cancelAll = nil
+	}
+	p.browserCtx = nil
+	p.initialized = false
 }
 
 // Print renders HTML to PDF bytes using a fresh tab inside the shared browser context.
@@ -95,32 +137,63 @@ func (p *Printer) Print(ctx context.Context, html string, opts PDFOptions) ([]by
 		}
 	}
 	browserCtx := p.browserCtx
+	p.inFlight++
 	p.mu.Unlock()
 
 	pdfBytes, err := p.printOnce(ctx, browserCtx, html, opts)
+
 	if err == nil {
 		// Successful print: bump use count and possibly rotate the browser
 		// context to avoid Chrome memory creep. Rotation tears down the
 		// current browser/allocator; next Print will lazily re-init.
+		//
+		// If other goroutines are still using the old browserCtx (inFlight > 0
+		// after our decrement), we defer the cancelAll so we don't propagate
+		// "context canceled" into their in-flight chromedp.Run calls.
 		p.mu.Lock()
+		p.inFlight--
+		p.firePendingLocked()
 		p.useCount++
 		limit := p.maxUses
 		if limit <= 0 {
 			limit = defaultMaxUses
 		}
 		if p.useCount >= limit {
-			p.resetLocked()
+			oldCancel := p.cancelAll
+			p.cancelAll = nil
+			p.browserCtx = nil
+			p.initialized = false
 			p.rotations++
 			p.useCount = 0
+			if p.inFlight == 0 {
+				// No other goroutines are using the old context; safe to cancel now.
+				if oldCancel != nil {
+					oldCancel()
+				}
+			} else {
+				// Other goroutines are still in printOnce on this browserCtx.
+				// Queue the cancel for when they finish.
+				if oldCancel != nil {
+					p.pendingCancel = append(p.pendingCancel, oldCancel)
+				}
+			}
 		}
 		p.mu.Unlock()
 		return pdfBytes, nil
 	}
+
+	// Error path: decrement before the stale check.
+	p.mu.Lock()
+	p.inFlight--
+	p.firePendingLocked()
+	p.mu.Unlock()
+
 	if !isStaleConnection(err) {
 		return nil, err
 	}
 
-	// Stale connection: reset, re-init, retry once. If re-init fails, surface
+	// Stale connection: the browser is dead — cancel immediately (no point deferring
+	// on a dead connection), reset, re-init, retry once. If re-init fails, surface
 	// the original error (don't mask it with an init error).
 	p.mu.Lock()
 	p.resetLocked()
@@ -129,9 +202,16 @@ func (p *Printer) Print(ctx context.Context, html string, opts PDFOptions) ([]by
 		return nil, err
 	}
 	browserCtx = p.browserCtx
+	p.inFlight++
 	p.mu.Unlock()
 
 	retried, retryErr := p.printOnce(ctx, browserCtx, html, opts)
+
+	p.mu.Lock()
+	p.inFlight--
+	p.firePendingLocked()
+	p.mu.Unlock()
+
 	if retryErr != nil {
 		return nil, fmt.Errorf("print to pdf after reset+retry: %w", retryErr)
 	}
@@ -168,6 +248,10 @@ func (p *Printer) initLocked(ctx context.Context) error {
 
 // resetLocked tears down the current browser context and marks the printer
 // uninitialized. Idempotent. Caller must hold p.mu.
+//
+// This cancels the browser context immediately. Use only when the browser is
+// known to be dead (stale connection) or when inFlight == 0. For graceful
+// rotation with concurrent renders, see the rotation logic in Print.
 func (p *Printer) resetLocked() {
 	if p.cancelAll != nil {
 		p.cancelAll()
@@ -273,9 +357,16 @@ func (p *Printer) CaptureImage(ctx context.Context, html string, opts ImageOptio
 		}
 	}
 	browserCtx := p.browserCtx
+	p.inFlight++
 	p.mu.Unlock()
 
 	out, err := p.captureOnce(ctx, browserCtx, html, opts)
+
+	p.mu.Lock()
+	p.inFlight--
+	p.firePendingLocked()
+	p.mu.Unlock()
+
 	if err == nil {
 		return out, nil
 	}
@@ -283,7 +374,7 @@ func (p *Printer) CaptureImage(ctx context.Context, html string, opts ImageOptio
 		return nil, err
 	}
 
-	// Stale connection: reset, re-init, retry once.
+	// Stale connection: reset immediately (browser is dead), re-init, retry once.
 	p.mu.Lock()
 	p.resetLocked()
 	if initErr := p.initLocked(ctx); initErr != nil {
@@ -291,9 +382,16 @@ func (p *Printer) CaptureImage(ctx context.Context, html string, opts ImageOptio
 		return nil, err
 	}
 	browserCtx = p.browserCtx
+	p.inFlight++
 	p.mu.Unlock()
 
 	retried, retryErr := p.captureOnce(ctx, browserCtx, html, opts)
+
+	p.mu.Lock()
+	p.inFlight--
+	p.firePendingLocked()
+	p.mu.Unlock()
+
 	if retryErr != nil {
 		return nil, fmt.Errorf("capture image after reset+retry: %w", retryErr)
 	}

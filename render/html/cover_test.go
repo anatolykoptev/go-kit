@@ -137,3 +137,35 @@ func TestRenderHTML_NoCoverPageByDefault(t *testing.T) {
 		t.Errorf("cover-page should not appear when Options.CoverPage is nil")
 	}
 }
+
+// TestCoverPage_LogoFileSchemeBlocked is the SSRF regression guard for the MEDIUM
+// finding: file: was in the old allowedLogoSchemes, letting Chrome load arbitrary
+// local files (e.g. file:///etc/passwd) and embed them in the rendered PDF.
+// This test FAILS on the pre-fix code and PASSES after.
+func TestCoverPage_LogoFileSchemeBlocked(t *testing.T) {
+	for _, logo := range []string{
+		"file:///etc/passwd",
+		"file:///proc/self/environ",
+		"FILE:///etc/shadow",
+	} {
+		got := renderCoverPage(&render.CoverPage{Title: "T", Logo: logo})
+		if strings.Contains(got, `class="cover-logo"`) {
+			t.Errorf("file: logo %q leaked into cover page output:\n%s", logo, got)
+		}
+	}
+}
+
+// TestCoverPage_LogoDataNonImageBlocked guards that bare data: (non-image subtypes)
+// are rejected. data:image/* remains allowed (checked in TestCoverPage_OnlyLogo).
+func TestCoverPage_LogoDataNonImageBlocked(t *testing.T) {
+	for _, logo := range []string{
+		"data:text/html,<script>alert(1)</script>",
+		"data:application/javascript,alert(1)",
+		"data:text/plain,hello",
+	} {
+		got := renderCoverPage(&render.CoverPage{Title: "T", Logo: logo})
+		if strings.Contains(got, `class="cover-logo"`) {
+			t.Errorf("non-image data: logo %q leaked into cover page output:\n%s", logo, got)
+		}
+	}
+}

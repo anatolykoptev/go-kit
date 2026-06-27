@@ -22,9 +22,19 @@ const (
 	typstTimeout  = 45 * time.Second
 	pandocTimeout = 15 * time.Second
 
-	// resolveBinaryEnvTypst is checked before PATH for typst binary.
+	// resolveBinaryEnvTypst / resolveBinaryEnvPandoc are checked before PATH
+	// for the typst/pandoc binaries. Set them in deployment to pin a binary
+	// without modifying the system PATH.
 	resolveBinaryEnvTypst  = "RENDER_TYPST_PATH"
 	resolveBinaryEnvPandoc = "RENDER_PANDOC_PATH"
+
+	// legacyEnvTypst / legacyEnvPandoc are the pre-v0.92.0 env var names
+	// (from the vaelor era before this package was extracted into go-kit).
+	// They are checked as a fallback when the new RENDER_* keys are unset,
+	// with a one-time deprecation warning, so deployments that set VAELOR_*
+	// continue to work until their env files are updated.
+	legacyEnvTypst  = "VAELOR_TYPST_PATH"
+	legacyEnvPandoc = "VAELOR_PANDOC_PATH"
 
 	typstFormatPDF = "pdf"
 	typstFormatPNG = "png"
@@ -150,7 +160,17 @@ type typstOutput struct {
 // When toc is true, --toc and --toc-depth=3 are appended so pandoc emits a
 // table-of-contents block at the top of the typst output.
 func pandocConvert(ctx context.Context, content, inputFmt string, toc bool) (string, error) {
-	bin := resolveEnvOrPath(resolveBinaryEnvPandoc, "pandoc")
+	// Allowlist inputFmt before passing it to exec.Command. The gosec linter
+	// correctly flags shell-injection risk on user-controlled strings passed
+	// as CLI arguments; restricting to a known-safe set eliminates the risk.
+	switch inputFmt {
+	case "markdown", "html":
+		// accepted
+	default:
+		return "", fmt.Errorf("pandoc: unsupported input format %q (must be \"markdown\" or \"html\")", inputFmt)
+	}
+
+	bin := resolveEnvOrPath(resolveBinaryEnvPandoc, legacyEnvPandoc, "pandoc")
 	if bin == "" {
 		return "", fmt.Errorf("pandoc binary not found (set %s or ensure pandoc is on PATH)", resolveBinaryEnvPandoc)
 	}
@@ -162,7 +182,7 @@ func pandocConvert(ctx context.Context, content, inputFmt string, toc bool) (str
 	if toc {
 		args = append(args, "--toc", "--toc-depth=3")
 	}
-	//nolint:gosec // bin resolved from env/PATH; inputFmt validated below
+	//nolint:gosec // bin resolved from env/PATH; inputFmt restricted to allowlist above
 	cmd := exec.CommandContext(pCtx, bin, args...)
 	cmd.Stdin = strings.NewReader(content)
 	out, err := cmd.Output()
@@ -270,7 +290,7 @@ func sanitizeTypstFromPandoc(in string) string {
 // compileTypst writes the .typ source to a temp file and runs typst compile.
 // out.Format selects "pdf" (default) or "png"; PPI applies to PNG only.
 func compileTypst(ctx context.Context, source string, out typstOutput) ([]byte, error) {
-	bin := resolveEnvOrPath(resolveBinaryEnvTypst, "typst")
+	bin := resolveEnvOrPath(resolveBinaryEnvTypst, legacyEnvTypst, "typst")
 	if bin == "" {
 		return nil, fmt.Errorf("typst binary not found (set %s or ensure typst is on PATH)", resolveBinaryEnvTypst)
 	}
@@ -330,10 +350,21 @@ func compileTypst(ctx context.Context, source string, out typstOutput) ([]byte, 
 	return os.ReadFile(dst)
 }
 
-// resolveEnvOrPath checks the env var first, then falls back to exec.LookPath.
-func resolveEnvOrPath(envKey, name string) string {
+// resolveEnvOrPath checks envKey first, then legacyKey (with a deprecation
+// warning), then falls back to exec.LookPath(name).
+//
+// legacyKey is the pre-v0.92.0 VAELOR_* env var name. Pass "" to skip the
+// legacy check.
+func resolveEnvOrPath(envKey, legacyKey, name string) string {
 	if v := os.Getenv(envKey); v != "" {
 		return v
+	}
+	if legacyKey != "" {
+		if v := os.Getenv(legacyKey); v != "" {
+			slog.Warn("render/typst: deprecated env var in use; rename to the new key",
+				"deprecated", legacyKey, "use_instead", envKey)
+			return v
+		}
 	}
 	p, _ := exec.LookPath(name)
 	return p

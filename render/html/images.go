@@ -18,6 +18,7 @@ import (
 	"github.com/yuin/goldmark/ast"
 
 	"github.com/anatolykoptev/go-kit/render"
+	"github.com/anatolykoptev/go-kit/tracing/httpmw"
 )
 
 // defaultImageMaxBytes is the fallback per-image size cap when
@@ -44,14 +45,19 @@ var privateIPCheck = isPrivateIP
 // server could return a public IP during resolve and a private IP at dial.
 // The dial-time check closes that gap by pinning the dial to an IP we have
 // just verified.
+//
+// The SSRF-safe Transport is wrapped with httpmw.WrapTransport so outbound
+// image fetches emit OTel client spans and propagate W3C traceparent headers,
+// joining the distributed trace for the enclosing render call.
 func newSafeHTTPClient(timeout time.Duration) *http.Client {
+	ssrfTransport := &http.Transport{
+		DialContext:           safeDial,
+		ResponseHeaderTimeout: timeout,
+		TLSHandshakeTimeout:   5 * time.Second,
+	}
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			DialContext:           safeDial,
-			ResponseHeaderTimeout: timeout,
-			TLSHandshakeTimeout:   5 * time.Second,
-		},
+		Timeout:   timeout,
+		Transport: httpmw.WrapTransport(ssrfTransport),
 	}
 }
 
