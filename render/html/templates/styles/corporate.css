@@ -1,0 +1,215 @@
+/* Corporate theme. Brandable report aesthetic using CSS custom properties so callers can override brand colors via CustomCSS.
+ *
+ * To rebrand, pass CustomCSS like:
+ *   :root { --brand-primary: #0B5394; --brand-accent: #F1C232; }
+ * All h1-h6, links, tables, TOC, and cover-page colors derive from these
+ * variables, so a single override re-skins the document.
+ *
+ * Some class selectors (.cover-page, .toc, .page-break) are opt-in hooks for
+ * CustomCSS callers; plain markdown only emits h1-h6, p, ul, ol, li, code,
+ * pre, table, tr, td, th.
+ */
+:root {
+  --brand-primary: #1E3A5F;     /* corporate: deep navy */
+  --brand-accent:  #C9A86A;     /* muted gold */
+  --text-body:     #2C2C2C;
+  --text-muted:    #666666;
+  --text-strong:   #1a1a1a;
+  --bg-cream:      #FAFAFA;
+  --bg-card:       #F8F9FA;
+  --border-soft:   #E8E8E8;
+  --font-body:     Georgia, "Times New Roman", serif;
+  --font-display:  -apple-system, "Segoe UI", sans-serif;
+}
+
+@page {
+  size: letter;
+  margin: 50px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--font-body);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-body);
+  padding: 0;
+}
+
+/* Headings */
+h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  color: var(--brand-primary);
+  margin-top: 28px;
+  margin-bottom: 10px;
+  font-weight: 700;
+  border-left: 4px solid var(--brand-accent);
+  padding-left: 12px;
+}
+h2 {
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--brand-primary);
+  margin-top: 24px;
+  margin-bottom: 8px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 4px;
+}
+h3 {
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--brand-primary);
+  margin-top: 16px;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+h4 {
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--brand-primary);
+  margin-top: 12px;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+h5, h6 {
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  margin-bottom: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Body text */
+p { margin: 6px 0; line-height: 1.55; }
+
+/* Lists */
+ul, ol { margin: 6px 0 6px 24px; }
+ul li, ol li { margin: 2px 0; line-height: 1.55; }
+
+/* Links */
+a {
+  color: var(--brand-primary);
+  text-decoration: underline;
+}
+
+/* Inline code + fenced blocks */
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  background: var(--bg-card);
+  color: var(--text-body);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+pre {
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 10px;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 10px;
+}
+th {
+  background: var(--brand-primary);
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-align: left;
+  padding: 7px 8px;
+}
+td {
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+tr:nth-child(even) td { background: var(--bg-card); }
+
+/* Dividers */
+hr {
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  margin: 16px 0;
+}
+
+/* Page breaks */
+.page-break { page-break-before: always; }
+
+/* Table of Contents (opt-in) */
+.toc {
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-left: 4px solid var(--brand-accent);
+  font-size: 10px;
+}
+.toc h2 {
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--brand-primary);
+  margin: 0 0 8px 0;
+  border: none;
+  padding: 0;
+}
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { line-height: 1.55; }
+.toc li.toc-h1 { font-weight: 700; margin-top: 4px; }
+.toc li.toc-h2 { padding-left: 14px; }
+.toc li.toc-h3 { padding-left: 28px; color: var(--text-muted); }
+.toc li.toc-h4, .toc li.toc-h5, .toc li.toc-h6 { padding-left: 42px; color: var(--text-muted); }
+.toc a { color: var(--brand-primary); text-decoration: none; }
+
+/* Cover page (opt-in) */
+.cover-page {
+  page-break-after: always;
+  min-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+  text-align: center;
+}
+.cover-logo { max-width: 200px; max-height: 120px; margin-bottom: 40px; }
+.cover-title {
+  font-family: var(--font-display);
+  font-size: 32px;
+  color: var(--brand-primary);
+  margin: 0 0 12px 0;
+  border: none;
+  padding: 0;
+  font-weight: 700;
+}
+.cover-subtitle {
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--brand-accent);
+  margin: 0 0 40px 0;
+  border: none;
+  font-weight: 400;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--brand-accent);
+}
+.cover-meta { font-size: 11px; color: var(--text-muted); margin-top: 60px; }
+.cover-author { font-weight: 700; color: var(--text-body); margin-bottom: 8px; }
+.cover-date { color: var(--text-muted); }

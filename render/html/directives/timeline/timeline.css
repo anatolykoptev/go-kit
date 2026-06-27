@@ -1,0 +1,46 @@
+.vaelor-timeline {
+  list-style: none;
+  padding: 0 0 0 24px;
+  margin: 16px 0;
+  position: relative;
+}
+.vaelor-timeline::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 6px;
+  width: 2px;
+  background: var(--border-soft, #E0E0E0);
+}
+.vaelor-timeline-item {
+  position: relative;
+  padding: 4px 0 12px 16px;
+}
+.vaelor-timeline-item::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: -22px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--brand-primary, #4A5568);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--border-soft, #E0E0E0);
+}
+.vaelor-timeline-date {
+  display: block;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--brand-primary, #4A5568);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+.vaelor-timeline-event {
+  display: block;
+  font-size: 13px;
+  color: var(--text-body, #333);
+  line-height: 1.5;
+}

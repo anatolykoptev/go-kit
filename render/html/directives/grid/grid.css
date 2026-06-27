@@ -1,0 +1,9 @@
+.vaelor-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 2), 1fr);
+  gap: 20px;
+  margin: 16px 0;
+}
+.vaelor-grid-col > :first-child { margin-top: 0; }
+.vaelor-grid-col > :last-child { margin-bottom: 0; }
+.vaelor-grid-col img { max-width: 100%; height: auto; }

@@ -1,0 +1,185 @@
+/* Minimal theme. Executive-brief aesthetic: sans-serif, generous whitespace, neutral palette. Some class selectors (.cover-page, .toc, .page-break) are opt-in hooks for CustomCSS callers; plain markdown only emits h1-h6, p, ul, ol, li, code, pre, table, tr, td, th. */
+:root {
+  --brand-primary: #4A5568;   /* minimal: neutral slate gray, no warm accents */
+  --brand-accent:  #2C3E50;
+  --text-body:     #1a1a1a;
+  --text-muted:    #666;
+  --text-strong:   #1a1a1a;
+  --bg-cream:      #FAFAFA;
+  --bg-card:       #F7F7F7;
+  --border-soft:   #E0E0E0;
+}
+@page {
+  size: letter;
+  margin: 50px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #1a1a1a;
+  padding: 0;
+}
+
+/* Headings */
+h1 {
+  font-size: 26px;
+  color: #1a1a1a;
+  margin-top: 28px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  border-bottom: 1px solid #E0E0E0;
+  padding-bottom: 4px;
+}
+h2 {
+  font-size: 18px;
+  color: #2C3E50;
+  margin-top: 24px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+h3 {
+  font-size: 14px;
+  color: #2C3E50;
+  margin-top: 16px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+h4 {
+  font-size: 12px;
+  color: #2C3E50;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+h5, h6 {
+  font-size: 11px;
+  color: #444;
+  margin-top: 10px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+/* Body text */
+p { margin: 6px 0; line-height: 1.6; }
+
+/* Lists */
+ul, ol { margin: 6px 0 6px 24px; line-height: 1.6; }
+ul li, ol li { margin: 2px 0; line-height: 1.6; }
+
+/* Inline code + fenced blocks */
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  background: #F4F4F4;
+  color: #333;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+pre {
+  background: #F7F7F7;
+  border: 1px solid #EAEAEA;
+  border-radius: 3px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 10px;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 10px;
+}
+th {
+  text-align: left;
+  font-weight: 600;
+  color: #1a1a1a;
+  border-bottom: 1px solid #CCC;
+  padding: 6px 8px;
+}
+td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #EEE;
+  vertical-align: top;
+}
+tr:nth-child(even) td { background: #FAFAFA; }
+
+/* Links */
+a { color: #2C3E50; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Dividers */
+hr {
+  border: none;
+  border-top: 1px solid #E0E0E0;
+  margin: 16px 0;
+}
+
+/* Page breaks */
+.page-break { page-break-before: always; }
+
+/* Table of Contents (opt-in) */
+.toc {
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  background: #FAFAFA;
+  border: 1px solid #EAEAEA;
+  font-size: 10px;
+}
+.toc h2 {
+  font-size: 13px;
+  color: #1a1a1a;
+  margin: 0 0 8px 0;
+  font-weight: 600;
+}
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { line-height: 1.6; }
+.toc li.toc-h1 { font-weight: 600; margin-top: 4px; }
+.toc li.toc-h2 { padding-left: 14px; }
+.toc li.toc-h3 { padding-left: 28px; color: #444; }
+.toc li.toc-h4, .toc li.toc-h5, .toc li.toc-h6 { padding-left: 42px; color: #777; }
+.toc a { color: #2C3E50; text-decoration: none; }
+
+/* Cover page (opt-in) */
+.cover-page {
+  page-break-after: always;
+  min-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+  text-align: center;
+}
+.cover-logo { max-width: 200px; max-height: 120px; margin-bottom: 40px; }
+.cover-title {
+  font-size: 30px;
+  color: #1a1a1a;
+  margin: 0 0 16px 0;
+  border: none;
+  padding-bottom: 0;
+  font-weight: 600;
+}
+.cover-subtitle {
+  font-size: 16px;
+  color: #555;
+  margin: 0 0 40px 0;
+  border: none;
+  font-weight: 400;
+  padding-bottom: 0;
+}
+.cover-meta { font-size: 11px; color: #666; margin-top: 60px; }
+.cover-author { font-weight: 600; margin-bottom: 8px; }
+.cover-date { color: #888; }

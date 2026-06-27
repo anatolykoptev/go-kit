@@ -1,0 +1,37 @@
+.vaelor-callout {
+  padding: 12px 16px;
+  margin: 12px 0;
+  border-radius: 4px;
+  border-left: 4px solid #2196F3;
+  background: rgba(33, 150, 243, 0.08);
+}
+
+.vaelor-callout--info {
+  border-left-color: #2196F3;
+  background: rgba(33, 150, 243, 0.08);
+}
+
+.vaelor-callout--warning {
+  border-left-color: #F59E0B;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.vaelor-callout--error {
+  border-left-color: #DC2626;
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.vaelor-callout--success {
+  border-left-color: #10B981;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.vaelor-callout-title {
+  font-weight: 600;
+  margin: 0 0 6px 0;
+  color: inherit;
+}
+
+.vaelor-callout-body > :last-child {
+  margin-bottom: 0;
+}
