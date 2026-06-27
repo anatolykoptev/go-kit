@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.92.1](https://github.com/anatolykoptev/go-kit/compare/v0.92.0...v0.92.1) (2026-06-27)
+
+
+### Bug Fixes
+
+* **render:** concurrent printer rotation, drop redundant md sanitizer, cover-logo SSRF, env-rename fallback ([#139](https://github.com/anatolykoptev/go-kit/issues/139)) ([3d5379e](https://github.com/anatolykoptev/go-kit/commit/3d5379e6e32764a5b9b0fa2a7f4e4cbfaf42f815))
+
 ## [0.92.0](https://github.com/anatolykoptev/go-kit/compare/v0.91.1...v0.92.0) (2026-06-27)
 
 
