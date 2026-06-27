@@ -10,27 +10,39 @@ import (
 	"github.com/anatolykoptev/go-kit/render"
 )
 
-// allowedLogoSchemes restricts Cover.Logo URLs to a small set of safe schemes.
-// javascript:, vbscript:, and other executable schemes are excluded. Relative
-// paths (no scheme) are allowed and resolved as workspace files upstream.
+// allowedLogoSchemes restricts Cover.Logo URLs to http/https only.
+//
+// Removed from earlier revisions:
+//   - "file": Chrome would load and embed the local file (e.g. file:///etc/passwd).
+//     This is an SSRF / local-file-read vector. File-based logos must be embedded
+//     as data:image/* by the caller before passing to CoverPage.Logo.
+//   - bare "data:": allows data:text/html, data:application/javascript, etc.
+//     Only data:image/* is accepted; checked explicitly in validLogoURL below.
 var allowedLogoSchemes = map[string]bool{
 	"http":  true,
 	"https": true,
-	"data":  true,
-	"file":  true, // workspace-resolved paths
 }
 
 // validLogoURL returns true when u is safe to render as an <img src=...>.
 // Empty strings are considered valid (caller skips rendering). Strings without
 // a ":" are treated as relative paths and allowed.
+//
+// data:image/* is the only accepted data: sub-type — it allows callers to embed
+// logos as base64 without an HTTP round-trip while blocking data:text/html and
+// similar executable payloads. file: is explicitly rejected (local-file SSRF).
 func validLogoURL(u string) bool {
 	if u == "" {
 		return true
 	}
 	if !strings.Contains(u, ":") {
-		return true
+		return true // relative path, no scheme
 	}
-	scheme := strings.ToLower(strings.SplitN(u, ":", 2)[0])
+	lower := strings.ToLower(u)
+	// data:image/* is safe to embed; all other data: subtypes are not.
+	if strings.HasPrefix(lower, "data:") {
+		return strings.HasPrefix(lower, "data:image/")
+	}
+	scheme := strings.SplitN(lower, ":", 2)[0]
 	return allowedLogoSchemes[scheme]
 }
 

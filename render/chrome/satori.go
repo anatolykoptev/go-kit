@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/anatolykoptev/go-kit/tracing/httpmw"
 )
 
 // defaultSatoriURL is the local satori-render sidecar endpoint. Override via
@@ -73,7 +75,7 @@ func SatoriRender(ctx context.Context, html string, width, height int, fonts []s
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpmw.Client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("satori sidecar unavailable at %s: %w", base, err)
 	}
