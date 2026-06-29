@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.94.0](https://github.com/anatolykoptev/go-kit/compare/v0.93.0...v0.94.0) (2026-06-29)
+
+
+### Features
+
+* **typst:** gold-standard resume theme typography (margins, rhythm, ATS) ([44ccaf4](https://github.com/anatolykoptev/go-kit/commit/44ccaf49e92ac50656efb40fff841e673e3a3b84))
+* **typst:** polish resume theme typography to gold-standard ([1b12d4e](https://github.com/anatolykoptev/go-kit/commit/1b12d4e36bd67df89a0c3c8c8ab683270c8a8443))
+
 ## [0.93.0](https://github.com/anatolykoptev/go-kit/compare/v0.92.1...v0.93.0) (2026-06-29)
 
 
