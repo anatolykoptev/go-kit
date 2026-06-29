@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.93.0](https://github.com/anatolykoptev/go-kit/compare/v0.92.1...v0.93.0) (2026-06-29)
+
+
+### Features
+
+* **render/typst:** add compact "resume" theme for dense single-page CVs ([25a5ddd](https://github.com/anatolykoptev/go-kit/commit/25a5dddb987d07a5f0959f331f7e505fffcc1349))
+* **render/typst:** add compact "resume" theme for dense single-page CVs ([6bca740](https://github.com/anatolykoptev/go-kit/commit/6bca7405b4a0e6143704a6110a80e088ac12d662))
+
+
+### Bug Fixes
+
+* **render/typst:** resume theme US design review — Letter, left-align, wider margin, no footer ([041af28](https://github.com/anatolykoptev/go-kit/commit/041af28093a04fcafb87f05d9c02e10e2f85f4dc))
+
 ## [0.92.1](https://github.com/anatolykoptev/go-kit/compare/v0.92.0...v0.92.1) (2026-06-27)
 
 
