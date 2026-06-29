@@ -254,3 +254,122 @@ func TestTypstRenderImage_RemoteImage(t *testing.T) {
 }
 // NOTE: TestTypstRenderImage_GoldenRealisticContent lives in typst_image_test.go
 // (package typst_test) because it uses the updateGolden flag defined there.
+
+// ── resume theme tests ────────────────────────────────────────────────────────
+
+// resumeMarkdownSample is a content-rich one-page CV that exercises all
+// typical resume constructs: multiple ## sections, bullet lists, a table,
+// inline code, and enough text that the "report" theme would spill to 2 pages.
+const resumeMarkdownSample = "# Jane Smith\n\n" +
+	"jane@example.com | github.com/janesmith | San Francisco, CA\n\n" +
+	"## Summary\n\n" +
+	"Staff engineer with 10 years of experience building distributed systems " +
+	"at scale. Expert in Go, Rust, and TypeScript. Strong track record of " +
+	"delivering reliable, high-throughput data pipelines and developer tooling.\n\n" +
+	"## Experience\n\n" +
+	"### Senior Staff Engineer — Acme Corp (2020–present)\n\n" +
+	"- Designed a multi-region event pipeline handling 2M events/s, reducing p99 by 60%\n" +
+	"- Led a team of 8 engineers across 3 time zones to deliver a new query engine\n" +
+	"- Reduced infrastructure cost by $2M/yr via shared-target Cargo build cache\n\n" +
+	"### Staff Engineer — Beta Inc (2017–2020)\n\n" +
+	"- Rewrote the authentication service in Go; cut latency from 120ms to 8ms\n" +
+	"- Shipped zero-downtime migration of 50M rows across 12 sharded Postgres clusters\n" +
+	"- Mentored 6 mid-level engineers; 4 promoted to senior within 18 months\n\n" +
+	"### Senior Engineer — Gamma LLC (2014–2017)\n\n" +
+	"- Built the company's first ML serving layer (ONNX, gRPC, 99.99% uptime)\n" +
+	"- Integrated SFU-based real-time video into a B2B SaaS product (WebRTC, Rust)\n\n" +
+	"## Skills\n\n" +
+	"| Category | Technologies |\n" +
+	"|----------|--------------|\n" +
+	"| Languages | Go, Rust, TypeScript, Python, SQL |\n" +
+	"| Infra | Docker, Postgres, Redis, Kubernetes |\n" +
+	"| Observability | Prometheus, Grafana, Jaeger, Loki |\n\n" +
+	"## Education\n\n" +
+	"**B.S. Computer Science** — MIT, 2014. GPA 3.9. Thesis: _Adaptive congestion control in WebRTC media planes_.\n"
+
+// TestResolveTypstTheme_Resume verifies that "resume" resolves to the resume
+// theme and NOT the report fallback.
+func TestResolveTypstTheme_Resume(t *testing.T) {
+	got := resolveTypstTheme("resume")
+	report := resolveTypstTheme("report")
+	if got == report {
+		t.Fatal(`resolveTypstTheme("resume") returned the report theme — new case not wired`)
+	}
+}
+
+// TestResumeThemePreamble_TightValues guards that the key tightness knobs
+// cannot silently regress to the looser "report" values, and that the
+// US-resume-specific design decisions (Letter paper, left-align, no footer)
+// cannot be accidentally reverted.
+func TestResumeThemePreamble_TightValues(t *testing.T) {
+	p := typstThemeResume.preamble
+
+	// Values that MUST be present.
+	must := []struct {
+		label   string
+		contain string
+	}{
+		{"us-letter paper", `paper:  "us-letter"`},
+		{"x-margin 20mm", "margin: (x: 20mm"},
+		{"tight top margin", "top: 14mm"},
+		{"tight bottom margin", "bottom: 14mm"},
+		{"text size 10.5pt", "size: 10.5pt"},
+		{"tight par leading", "leading: 0.6em"},
+		{"tight par spacing", "spacing: 0.7em"},
+		{"h1 small vspace", "v(3mm, weak: true)"},
+		{"h1 size 16pt", "size: 16pt"},
+		{"h2 small vspace", "v(2.5mm, weak: true)"},
+		{"h2 size 12pt", "size: 12pt"},
+	}
+	for _, c := range must {
+		if !strings.Contains(p, c.contain) {
+			t.Errorf("resume preamble missing %s: want substring %q", c.label, c.contain)
+		}
+	}
+
+	// Values that MUST NOT be present (design regressions).
+	mustNot := []struct {
+		label  string
+		banned string
+	}{
+		{"no justify: true (rivers)", "justify: true"},
+		{"no footer date block", "footer:"},
+		{"no a4 paper", `"a4"`},
+	}
+	for _, c := range mustNot {
+		if strings.Contains(p, c.banned) {
+			t.Errorf("resume preamble contains banned %s: found substring %q", c.label, c.banned)
+		}
+	}
+}
+
+// TestResumeTheme_ReportUnchanged ensures that modifying the resume theme
+// never accidentally mutates the report theme.
+func TestResumeTheme_ReportUnchanged(t *testing.T) {
+	const wantReportMargin = "margin: (x: 24mm"
+	if !strings.Contains(typstThemeReport.preamble, wantReportMargin) {
+		t.Errorf("report theme margin changed — expected %q", wantReportMargin)
+	}
+}
+
+// pdfMagic is the 5-byte PDF signature (%PDF-).
+var pdfMagic = []byte{'%', 'P', 'D', 'F', '-'}
+
+// TestTypstRender_ResumePDF is the end-to-end integration test: it renders
+// the multi-section resume markdown with the "resume" theme and asserts a
+// valid PDF is produced. Skips if typst+pandoc are not installed.
+func TestTypstRender_ResumePDF(t *testing.T) {
+	skipIfNoTypstPandoc(t)
+	r := NewTypstRenderer()
+	out, err := r.Render(context.Background(), resumeMarkdownSample, "markdown", render.Options{
+		Theme: "resume",
+		Title: "Jane Smith — Resume",
+	})
+	if err != nil {
+		t.Fatalf("Render resume: %v", err)
+	}
+	if len(out) < 5 || !bytes.Equal(out[:5], pdfMagic) {
+		t.Fatalf("output is not PDF (first 5 bytes: % x)", out[:min(5, len(out))])
+	}
+	t.Logf("resume PDF: %d bytes", len(out))
+}
