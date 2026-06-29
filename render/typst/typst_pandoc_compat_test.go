@@ -298,27 +298,47 @@ func TestResolveTypstTheme_Resume(t *testing.T) {
 }
 
 // TestResumeThemePreamble_TightValues guards that the key tightness knobs
-// cannot silently regress to the looser "report" values.
+// cannot silently regress to the looser "report" values, and that the
+// US-resume-specific design decisions (Letter paper, left-align, no footer)
+// cannot be accidentally reverted.
 func TestResumeThemePreamble_TightValues(t *testing.T) {
 	p := typstThemeResume.preamble
-	checks := []struct {
+
+	// Values that MUST be present.
+	must := []struct {
 		label   string
 		contain string
 	}{
-		{"narrow x-margin", "margin: (x: 16mm"},
+		{"us-letter paper", `paper:  "us-letter"`},
+		{"x-margin 20mm", "margin: (x: 20mm"},
 		{"tight top margin", "top: 14mm"},
 		{"tight bottom margin", "bottom: 14mm"},
-		{"small text size", "size: 10pt"},
+		{"text size 10.5pt", "size: 10.5pt"},
 		{"tight par leading", "leading: 0.6em"},
 		{"tight par spacing", "spacing: 0.7em"},
 		{"h1 small vspace", "v(3mm, weak: true)"},
-		{"h1 smaller size", "size: 17pt"},
+		{"h1 size 16pt", "size: 16pt"},
 		{"h2 small vspace", "v(2.5mm, weak: true)"},
-		{"h2 size", "size: 12pt"},
+		{"h2 size 12pt", "size: 12pt"},
 	}
-	for _, c := range checks {
+	for _, c := range must {
 		if !strings.Contains(p, c.contain) {
 			t.Errorf("resume preamble missing %s: want substring %q", c.label, c.contain)
+		}
+	}
+
+	// Values that MUST NOT be present (design regressions).
+	mustNot := []struct {
+		label  string
+		banned string
+	}{
+		{"no justify: true (rivers)", "justify: true"},
+		{"no footer date block", "footer:"},
+		{"no a4 paper", `"a4"`},
+	}
+	for _, c := range mustNot {
+		if strings.Contains(p, c.banned) {
+			t.Errorf("resume preamble contains banned %s: found substring %q", c.label, c.banned)
 		}
 	}
 }

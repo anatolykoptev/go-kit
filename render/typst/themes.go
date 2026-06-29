@@ -230,28 +230,26 @@ var typstThemeDark = typstTheme{preamble: `
 `}
 
 // ── resume ────────────────────────────────────────────────
-// Compact single-page resume theme.  Much tighter margins, leading, and
-// heading vspace than "report" so content-rich one-page CVs don't spill
-// to a second page.  All show-rules for code blocks and tables are
-// identical to "report" so markdown with code/tables still renders cleanly.
+// Compact single-page resume theme tuned for US job applications.
+// US-Letter paper (recruiters print/scan Letter; A4 gets scaled or clipped).
+// Left-aligned body (no justify) — justified text creates visible inter-word
+// rivers that read as template tells.  Tighter margins, leading, and heading
+// vspace than "report" so content-rich one-page CVs don't spill to a second
+// page.  All show-rules for code blocks and tables are identical to "report".
 var typstThemeResume = typstTheme{preamble: `
 #set page(
-  paper:  "a4",
-  margin: (x: 16mm, top: 14mm, bottom: 14mm),
-  footer: context {
-    set text(size: 7pt, fill: rgb("#cbd5e1"))
-    align(center, datetime.today().display("[month repr:long] [year]"))
-  },
+  paper:  "us-letter",
+  margin: (x: 20mm, top: 14mm, bottom: 14mm),
 )
 
-#set text(font: "IBM Plex Sans", size: 10pt, fill: rgb("#0f172a"))
-#set par(leading: 0.6em, spacing: 0.7em, justify: true)
+#set text(font: "IBM Plex Sans", size: 10.5pt, fill: rgb("#0f172a"))
+#set par(leading: 0.6em, spacing: 0.7em)
 #set list(indent: 8pt)
 #set enum(indent: 8pt)
 
 #show heading.where(level: 1): it => {
   v(3mm, weak: true)
-  text(size: 17pt, weight: "semibold", fill: rgb("#0f172a"), tracking: -0.5pt, it.body)
+  text(size: 16pt, weight: "semibold", fill: rgb("#0f172a"), tracking: -0.5pt, it.body)
   v(1mm, weak: true)
   line(length: 100%, stroke: rgb("#e2e8f0") + 1pt)
   v(1.5mm, weak: true)
