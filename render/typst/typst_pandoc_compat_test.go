@@ -310,16 +310,19 @@ func TestResumeThemePreamble_TightValues(t *testing.T) {
 		contain string
 	}{
 		{"us-letter paper", `paper:  "us-letter"`},
-		{"x-margin 20mm", "margin: (x: 20mm"},
-		{"tight top margin", "top: 14mm"},
-		{"tight bottom margin", "bottom: 14mm"},
+		{"convention x-margin 16mm", "margin: (x: 16mm"},
+		{"top margin 14mm", "top: 14mm"},
+		{"bottom margin 14mm", "bottom: 14mm"},
 		{"text size 10.5pt", "size: 10.5pt"},
-		{"tight par leading", "leading: 0.6em"},
-		{"tight par spacing", "spacing: 0.7em"},
-		{"h1 small vspace", "v(3mm, weak: true)"},
-		{"h1 size 16pt", "size: 16pt"},
-		{"h2 small vspace", "v(2.5mm, weak: true)"},
-		{"h2 size 12pt", "size: 12pt"},
+		{"ATS ligatures off", "ligatures: false"},
+		{"navy link accent", `show link: set text(fill: rgb("#26428b"))`},
+		{"par leading", "leading: 0.68em"},
+		{"par spacing", "spacing: 0.85em"},
+		{"bullet item spacing", "list(indent: 8pt, spacing: 0.9em)"},
+		{"h1 name dominant 19pt", "size: 19pt"},
+		{"h2 uppercase section", "upper(it.body)"},
+		{"h2 section tracking", "tracking: 0.4pt"},
+		{"h2 size 11.5pt", "size: 11.5pt"},
 	}
 	for _, c := range must {
 		if !strings.Contains(p, c.contain) {
