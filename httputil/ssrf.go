@@ -146,6 +146,17 @@ func GuardedDialContext(base *net.Dialer) func(ctx context.Context, network, add
 // it directly with a hardcoded post-resolution address (simulating exactly
 // what net/http passes after DNS lookup) without needing a real DNS rebind.
 func denyBlockedAddress(network, address string) error {
+	switch network {
+	case "unix", "unixgram", "unixpacket":
+		// A Unix domain socket dials a local filesystem path, not a network
+		// address (address is e.g. "/var/run/sidecar.sock", not host:port) —
+		// it is not an SSRF-to-internal-IP vector, since the caller already
+		// chose a specific local socket path rather than a resolvable
+		// hostname. Blocking it here would make this guard unusable for a
+		// future framework consumer whose base Transport dials a UDS
+		// sidecar (a legitimate, increasingly common pattern).
+		return nil
+	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		host = address // no port present — shouldn't happen for a tcp/udp dial target
@@ -163,13 +174,44 @@ func denyBlockedAddress(network, address string) error {
 }
 
 // guardedTransport returns an *http.Transport cloned from
-// http.DefaultTransport (preserving its proxy / idle-conn / HTTP2 defaults)
-// with DialContext replaced by GuardedDialContext, so every connection made
-// through it is SSRF-safe by default.
+// http.DefaultTransport (preserving its proxy / idle-conn / HTTP2 defaults —
+// NOTE this means Proxy: http.ProxyFromEnvironment is preserved too, which
+// is exactly the case wrapTransportTier's outer CheckURL layer exists to
+// cover) with DialContext replaced by GuardedDialContext, so every DIRECT
+// (non-proxied) connection made through it is SSRF-safe at connect time.
 func guardedTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // http.DefaultTransport is always *http.Transport per stdlib contract
 	t.DialContext = GuardedDialContext(&net.Dialer{Timeout: guardedDialTimeout, KeepAlive: guardedDialKeepAlive})
 	return t
+}
+
+// wrapTransportTier composes the pre-request CheckURL guard (guardedRoundTripper)
+// on top of an already dial-guarded *http.Transport t.
+//
+// Why both layers are needed: when t.Proxy is non-nil (either explicitly set
+// by a caller, or inherited from http.DefaultTransport's
+// Proxy: http.ProxyFromEnvironment via guardedTransport()/Clone()), net/http
+// calls DialContext with the PROXY's host:port, not the real destination —
+// the real target lives in the request line (plain HTTP) or the CONNECT
+// tunnel target (HTTPS), and t.DialContext (GuardedDialContext) never sees
+// it. A proxied request to an internal target would sail straight through
+// the connect-time guard, which only ever inspects the (public, allowed)
+// proxy address. guardedRoundTripper's CheckURL(req.URL) runs BEFORE t is
+// even reached and always evaluates the real destination URL regardless of
+// whether the request ends up proxied, closing that hole.
+//
+// Net effect per request:
+//   - direct (no proxy in play): BOTH tiers fire — the pre-request CheckURL
+//     here, plus GuardedDialContext's connect-time, DNS-rebind-proof check
+//     already wired into t.
+//   - proxied: only the pre-request CheckURL fires (the same pre-resolve
+//     tier CheckURL's own GoDoc describes — weaker than connect-time against
+//     DNS-rebind, but real: it refuses the request outright for a target
+//     that resolves blocked at check time). http.Client re-invokes
+//     RoundTrip on every redirect hop, so each hop's real destination is
+//     re-checked too.
+func wrapTransportTier(t *http.Transport) http.RoundTripper {
+	return &guardedRoundTripper{next: t}
 }
 
 // NewSSRFGuardedClient returns an SSRF-guarded *http.Client built on top of
@@ -179,31 +221,33 @@ func guardedTransport() *http.Transport {
 //
 //   - nil or *http.Transport: cloned (Clone() preserves TLSClientConfig,
 //     proxy, HTTP2 settings, MaxIdleConns, etc. — every field a caller may
-//     have set) with ONLY DialContext replaced by GuardedDialContext — the
-//     STRONG, connect-time, DNS-rebind-proof tier.
+//     have set) with DialContext replaced by GuardedDialContext, THEN
+//     wrapped with the pre-request CheckURL layer (wrapTransportTier) — see
+//     wrapTransportTier's doc for why a proxy-configured Transport needs
+//     both layers, not just the dial-time one.
 //   - any other http.RoundTripper (e.g. a stealth/fingerprint-evasion
 //     client whose Transport performs its own dial via a bespoke backend,
-//     with no DialContext/net.Dialer hook exposed at all): wrapped with a
-//     RoundTripper that runs CheckURL on the outbound request's URL before
-//     delegating — a necessarily WEAKER pre-resolve tier (a DNS-rebind can
-//     still occur between this check and the delegate's own, separate
-//     resolution), but the best guarantee available without reaching into a
-//     dial mechanism this package does not own.
+//     with no DialContext/net.Dialer hook exposed at all): wrapped with
+//     ONLY the pre-request CheckURL layer — the necessarily WEAKER
+//     pre-resolve tier (a DNS-rebind can still occur between this check and
+//     the delegate's own, separate resolution), but the best guarantee
+//     available without reaching into a dial mechanism this package does
+//     not own.
 //
 // The returned *http.Client is a shallow copy of base; base itself (and its
 // Transport) is never mutated.
 func NewSSRFGuardedClient(base *http.Client) *http.Client {
 	if base == nil {
-		return &http.Client{Transport: guardedTransport()}
+		return &http.Client{Transport: wrapTransportTier(guardedTransport())}
 	}
 	cc := *base
 	switch t := base.Transport.(type) {
 	case nil:
-		cc.Transport = guardedTransport()
+		cc.Transport = wrapTransportTier(guardedTransport())
 	case *http.Transport:
 		tc := t.Clone()
 		tc.DialContext = GuardedDialContext(&net.Dialer{Timeout: guardedDialTimeout, KeepAlive: guardedDialKeepAlive})
-		cc.Transport = tc
+		cc.Transport = wrapTransportTier(tc)
 	default:
 		cc.Transport = &guardedRoundTripper{next: t}
 	}
@@ -212,7 +256,9 @@ func NewSSRFGuardedClient(base *http.Client) *http.Client {
 
 // guardedRoundTripper wraps an arbitrary http.RoundTripper with a
 // pre-request SSRF check (see CheckURL) on the outbound request's URL. This
-// composes with ANY RoundTripper implementation — it never touches the
+// composes with ANY RoundTripper implementation — including a dial-guarded
+// *http.Transport (see wrapTransportTier, which layers this on top of the
+// *http.Transport tier too, to cover the proxy case) — it never touches the
 // wrapped one's internal dial mechanics, so a stealth/fingerprint-evasion
 // implementation is untouched on the allow path.
 type guardedRoundTripper struct {

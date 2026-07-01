@@ -52,15 +52,26 @@
 // the ALREADY-RESOLVED address at connect time, immediately before the
 // connect(2) syscall -- this defeats DNS-rebinding, since the check
 // inspects the literal address about to be dialed, never a hostname string
-// that could resolve differently between lookup and connect.
+// that could resolve differently between lookup and connect. Non-TCP/UDP
+// dials -- a Unix domain socket ("unix"/"unixgram"/"unixpacket") -- pass
+// through unchecked: a UDS dials a local filesystem path, not a network
+// address, so it is not an SSRF-to-internal-IP vector.
 //
 // NewSSRFGuardedClient wraps an *http.Client in two tiers depending on its
 // Transport: a *http.Transport (or nil) gets DialContext replaced with
-// GuardedDialContext -- the strong, connect-time tier; any other
-// http.RoundTripper (e.g. a stealth/fingerprint-evasion client with no
-// exposed dial hook) gets a pre-request CheckURL check instead -- a
-// necessarily weaker, pre-resolve tier, but the best available without
-// reaching into a dial mechanism this package does not own.
+// GuardedDialContext AND is wrapped in a pre-request CheckURL check; any
+// other http.RoundTripper (e.g. a stealth/fingerprint-evasion client with no
+// exposed dial hook) gets ONLY the pre-request CheckURL check. Both layers
+// are needed on the *http.Transport tier because a proxy-configured
+// Transport (explicitly, or inherited via Proxy: http.ProxyFromEnvironment)
+// causes net/http to call DialContext with the PROXY's address, never the
+// real target -- GuardedDialContext alone would silently pass a proxied
+// request to an internal host straight through. So: a direct (non-proxied)
+// request gets BOTH the connect-time, DNS-rebind-proof dial guard AND the
+// pre-request check; a proxied request gets only the pre-request check
+// (still real protection -- it evaluates the actual destination URL, not
+// the proxy's -- but a necessarily weaker, pre-resolve tier, the same one
+// CheckURL itself provides for a delegate this package cannot dial-guard).
 //
 // CheckURL is the pre-handoff check for a URL this package never dials
 // itself -- e.g. before handing an "any place" URL to an out-of-process

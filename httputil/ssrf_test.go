@@ -233,6 +233,42 @@ func TestDenyBlockedAddress_AllowsPublicAddress(t *testing.T) {
 	}
 }
 
+// TestDenyBlockedAddress_AllowsUnixSocket proves a Unix domain socket dial
+// (address is a filesystem path, not host:port) passes through unchecked —
+// before the fix, net.SplitHostPort/net.ParseIP would fail to parse the
+// path and the guard would fail-closed, refusing every UDS dial (a
+// legitimate future consumer, e.g. a sidecar client, would be unusable).
+func TestDenyBlockedAddress_AllowsUnixSocket(t *testing.T) {
+	t.Parallel()
+	networks := []string{"unix", "unixgram", "unixpacket"}
+	for _, network := range networks {
+		network := network
+		t.Run(network, func(t *testing.T) {
+			t.Parallel()
+			if err := denyBlockedAddress(network, "/var/run/sidecar.sock"); err != nil {
+				t.Errorf("denyBlockedAddress(%q, socket path) = %v, want nil (UDS is not an SSRF-to-internal-IP vector)", network, err)
+			}
+		})
+	}
+}
+
+// TestGuardedDialContext_PassesThroughUnixNetwork drives the actual
+// DialContext func (not just denyBlockedAddress directly) with network
+// "unix" and a nonexistent socket path: the dial itself must fail (no such
+// socket), but the failure must NOT be the SSRF guard — proving the Control
+// hook let it through to the real dial attempt.
+func TestGuardedDialContext_PassesThroughUnixNetwork(t *testing.T) {
+	t.Parallel()
+	dial := GuardedDialContext(&net.Dialer{Timeout: time.Second})
+	_, err := dial(context.Background(), "unix", "/nonexistent/gokit-ssrf-test.sock")
+	if err == nil {
+		t.Fatal("expected a dial error for a nonexistent socket path (the guard should not be why)")
+	}
+	if errors.Is(err, ErrSSRFBlocked) {
+		t.Errorf("dial(unix, nonexistent socket) blocked by SSRF guard, want pass-through: %v", err)
+	}
+}
+
 // TestNewSSRFGuardedClient_RefusesLoopbackServer is the client-level
 // (not just predicate-level) regression test: a real httptest server bound
 // to loopback must be refused by the guarded client's connect-time dial.
@@ -258,13 +294,33 @@ func TestNewSSRFGuardedClient_RefusesLoopbackServer(t *testing.T) {
 	}
 }
 
+// transportTierOf unwraps the *http.Transport tier's composition
+// (guardedRoundTripper{next: *http.Transport} — see wrapTransportTier) down
+// to the underlying *http.Transport, failing the test if the shape doesn't
+// match what NewSSRFGuardedClient is documented to produce for that tier.
+func transportTierOf(t *testing.T, rt http.RoundTripper) *http.Transport {
+	t.Helper()
+	grt, ok := rt.(*guardedRoundTripper)
+	if !ok {
+		t.Fatalf("expected *guardedRoundTripper (pre-request layer over the dial-guarded transport), got %T", rt)
+	}
+	tr, ok := grt.next.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected guardedRoundTripper.next to be *http.Transport, got %T", grt.next)
+	}
+	return tr
+}
+
 // TestNewSSRFGuardedClient_TransportTierPreservesConfig proves the
 // *http.Transport tier is a real Clone() — a config marker set on the base
 // Transport survives (by value; http.Transport.Clone() deep-copies
 // TLSClientConfig via tls.Config.Clone(), so pointer identity is NOT
 // expected to survive, only the field values) into the guarded client's
 // Transport, and the base itself is left untouched (no shared mutable state
-// between caller and guard).
+// between caller and guard). Also proves the composition shape: the
+// returned RoundTripper is the pre-request guardedRoundTripper layered over
+// the dial-guarded *http.Transport (see wrapTransportTier / FIX for the
+// proxy-bypass hole), not the bare *http.Transport.
 func TestNewSSRFGuardedClient_TransportTierPreservesConfig(t *testing.T) {
 	t.Parallel()
 	const marker = "config-preserved-marker"
@@ -277,10 +333,7 @@ func TestNewSSRFGuardedClient_TransportTierPreservesConfig(t *testing.T) {
 	}
 	guarded := NewSSRFGuardedClient(base)
 
-	tr, ok := guarded.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("expected *http.Transport, got %T", guarded.Transport)
-	}
+	tr := transportTierOf(t, guarded.Transport)
 	if tr.TLSClientConfig == nil || tr.TLSClientConfig.ServerName != marker {
 		t.Error("TLSClientConfig marker not preserved through Clone()")
 	}
@@ -299,6 +352,47 @@ func TestNewSSRFGuardedClient_TransportTierPreservesConfig(t *testing.T) {
 	}
 	if baseTr.DialContext != nil {
 		t.Error("NewSSRFGuardedClient mutated the caller's base Transport")
+	}
+}
+
+// TestNewSSRFGuardedClient_ProxiedTransportStillRefusesInternalTarget is the
+// FIX for the HIGH proxy-bypass finding: when base.Transport.Proxy is set,
+// net/http calls DialContext with the PROXY's host:port, never the real
+// destination (the real target lives in the request line / CONNECT tunnel
+// target) — so GuardedDialContext alone inspects only the (public, allowed)
+// proxy address and never sees an internal target hidden behind it. Before
+// the fix, a request to an internal host through an allowed proxy would
+// dial straight through. wrapTransportTier composes the pre-request
+// CheckURL(req.URL) layer on top of the *http.Transport tier, which always
+// evaluates the real destination URL regardless of proxying, closing the
+// hole.
+func TestNewSSRFGuardedClient_ProxiedTransportStillRefusesInternalTarget(t *testing.T) {
+	t.Parallel()
+	proxyURL, err := url.Parse("http://203.0.113.10:3128") // TEST-NET-3 (RFC 5737), a public-looking proxy address
+	if err != nil {
+		t.Fatalf("parse proxy URL: %v", err)
+	}
+	base := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+	}
+	guarded := NewSSRFGuardedClient(base)
+	guarded.Timeout = 2 * time.Second
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/latest/meta-data/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, doErr := guarded.Do(req) //nolint:bodyclose // resp is expected nil: the guard refuses before any real dial
+	if resp != nil {
+		resp.Body.Close() //nolint:errcheck
+	}
+	if doErr == nil {
+		t.Fatal("expected the proxied request to an internal target to be refused, got nil error")
+	}
+	if !errors.Is(doErr, ErrSSRFBlocked) {
+		t.Errorf("expected error to wrap ErrSSRFBlocked, got: %v", doErr)
 	}
 }
 
@@ -361,17 +455,17 @@ func TestNewSSRFGuardedClient_OpaqueTierPreChecksBeforeDelegating(t *testing.T) 
 }
 
 // TestNewSSRFGuardedClient_NilBase proves the nil-base path doesn't panic
-// and is itself guarded.
+// and is itself guarded — both the dial-time layer (for a direct request)
+// and the pre-request layer (for a proxied one, since guardedTransport()
+// clones http.DefaultTransport, which carries
+// Proxy: http.ProxyFromEnvironment).
 func TestNewSSRFGuardedClient_NilBase(t *testing.T) {
 	t.Parallel()
 	guarded := NewSSRFGuardedClient(nil)
 	if guarded == nil {
 		t.Fatal("NewSSRFGuardedClient(nil) returned nil")
 	}
-	tr, ok := guarded.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("expected *http.Transport, got %T", guarded.Transport)
-	}
+	tr := transportTierOf(t, guarded.Transport)
 	if tr.DialContext == nil {
 		t.Error("nil-base client Transport not guarded")
 	}
