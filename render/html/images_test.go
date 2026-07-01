@@ -3,9 +3,10 @@ package html
 import (
 	"context"
 	"encoding/base64"
-	"net"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
 
+	"github.com/anatolykoptev/go-kit/httputil"
 	"github.com/anatolykoptev/go-kit/render"
 )
 
@@ -53,12 +55,20 @@ func pngBytes() []byte {
 	return []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 }
 
-// allowAllIPs is a helper to bypass the SSRF guard for httptest servers.
+// allowAllIPs is a helper to bypass the SSRF guard for httptest servers. It
+// swaps the whole client-construction seam (newHTTPClientFn) for an
+// unguarded *http.Client, mirroring go-enriche's WithClient escape hatch —
+// httputil.NewSSRFGuardedClient's own predicate is not swappable by design
+// (a framework-owned block-list must not be weakenable by an arbitrary
+// caller), so tests that need a real fetch against a local httptest server
+// (bound to 127.0.0.1) opt out of the guard entirely at this seam instead.
 func allowAllIPs(t *testing.T) {
 	t.Helper()
-	orig := privateIPCheck
-	privateIPCheck = func(ip net.IP) bool { return false }
-	t.Cleanup(func() { privateIPCheck = orig })
+	orig := newHTTPClientFn
+	newHTTPClientFn = func(timeout time.Duration) *http.Client {
+		return &http.Client{Timeout: timeout}
+	}
+	t.Cleanup(func() { newHTTPClientFn = orig })
 }
 
 func TestEmbedImages_DataURLPassthrough(t *testing.T) {
@@ -244,51 +254,63 @@ func TestEmbedImages_HTTPNon200(t *testing.T) {
 	}
 }
 
-// TestSafeDial_RejectsPrivateIP verifies the dial-time DNS rebinding guard.
-// "localhost" resolves to 127.0.0.1 (or ::1), which the default privateIPCheck
-// rejects. safeDial must return an error before any TCP connect happens.
-func TestSafeDial_RejectsPrivateIP(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	conn, err := safeDial(ctx, "tcp", "localhost:1")
-	if err == nil {
-		if conn != nil {
-			_ = conn.Close()
-		}
-		t.Fatal("safeDial accepted loopback host; expected private-IP refusal")
+// TestEmbedImages_SSRFLocalhostHostname verifies the dial-time DNS-rebind
+// guard through the REAL entrypoint (embedImages), rather than a deleted
+// low-level safeDial helper: "localhost" resolves to 127.0.0.1 (or ::1) only
+// at dial time, after fetchHTTP has already handed the request to the
+// httputil-guarded client — proving the guard fires on the resolved address,
+// not a hostname string, exactly as GuardedDialContext is documented to.
+// isPrivateIP/safeDial no longer exist locally; the block-list and dial
+// wrapper are now go-kit/httputil's (see httputil.TestIsBlockedIP /
+// TestGuardedDialContext_BlocksResolvedAddress for the predicate-level
+// table).
+func TestEmbedImages_SSRFLocalhostHostname(t *testing.T) {
+	const url = "http://localhost:1/z.png"
+	doc, src := parseMarkdownWithImage(t, "![x]("+url+")")
+	err := embedImages(context.Background(), doc, src, render.ImageEmbedOptions{Timeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("embedImages: %v", err)
 	}
-	if !strings.Contains(err.Error(), "private IP") && !strings.Contains(err.Error(), "resolve") {
-		t.Fatalf("expected private-IP or resolve error, got: %v", err)
+	img := firstImage(doc)
+	if string(img.Destination) != url {
+		t.Fatalf("SSRF bypass — destination mutated: %q", img.Destination)
 	}
 }
 
-func TestIsPrivateIP_Table(t *testing.T) {
-	cases := []struct {
-		ip   string
-		want bool
+// TestFetchHTTP_SSRFBlocked is the network-noise-immune sibling of the
+// TestEmbedImages_SSRF* tests above. embedImages swallows every fetch
+// failure into a log line and leaves the AST destination untouched
+// REGARDLESS of the failure reason — on a shared host that happens to run
+// other services bound to loopback/private addresses, a coincidental
+// non-SSRF failure (connection refused, TLS error, unrelated 404) would
+// make embedImages "pass" even if the SSRF guard were silently removed.
+// This test calls fetchHTTP directly and asserts the error specifically
+// wraps httputil.ErrSSRFBlocked, so it cannot be satisfied by an unrelated
+// network failure.
+func TestFetchHTTP_SSRFBlocked(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
 	}{
-		{"127.0.0.1", true},
-		{"::1", true},
-		{"10.0.0.1", true},
-		{"172.16.0.1", true},
-		{"192.168.0.1", true},
-		{"169.254.1.1", true},
-		{"169.254.169.254", true},
-		{"fe80::1", true},
-		{"224.0.0.1", true},
-		{"0.0.0.0", true},
-		{"8.8.8.8", false},
-		{"1.1.1.1", false},
-		{"93.184.216.34", false},
+		{"loopback literal", "http://127.0.0.1/z.png"},
+		{"private literal", "http://10.0.0.1/z.png"},
+		{"cloud metadata literal", "http://169.254.169.254/latest/"},
+		{"localhost hostname", "http://localhost:1/z.png"},
 	}
-	for _, c := range cases {
-		ip := net.ParseIP(c.ip)
-		if ip == nil {
-			t.Fatalf("parse %q", c.ip)
-		}
-		if got := isPrivateIP(ip); got != c.want {
-			t.Errorf("isPrivateIP(%s)=%v, want %v", c.ip, got, c.want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, parseErr := url.Parse(tt.rawURL)
+			if parseErr != nil {
+				t.Fatalf("parse %q: %v", tt.rawURL, parseErr)
+			}
+			_, fetchErr := fetchHTTP(context.Background(), u, render.ImageEmbedOptions{}, defaultImageMaxBytes, 500*time.Millisecond)
+			if fetchErr == nil {
+				t.Fatalf("fetchHTTP(%q) succeeded, want SSRF refusal", tt.rawURL)
+			}
+			if !errors.Is(fetchErr, httputil.ErrSSRFBlocked) {
+				t.Errorf("fetchHTTP(%q) error %v does not wrap httputil.ErrSSRFBlocked", tt.rawURL, fetchErr)
+			}
+		})
 	}
 }
 
