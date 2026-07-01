@@ -1,0 +1,337 @@
+package httputil
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// ErrSSRFBlocked wraps every error CheckURL, GuardedDialContext, or a
+// NewSSRFGuardedClient-wrapped transport returns when a target address is
+// loopback, private (RFC1918 / RFC4193 ULA), link-local (including the cloud
+// metadata address 169.254.169.254), unspecified, multicast, carrier-grade
+// NAT (RFC 6598), or one of the IPv6 transition ranges that embed or route
+// to an IPv4 address (NAT64, 6to4, the deprecated IPv4-compatible form) —
+// the address classes an SSRF payload targets to reach internal
+// infrastructure that must never be dialed from a caller-supplied target
+// (e.g. an advertiser-provided website URL, a redirect Location header, an
+// out-of-process render delegate's fetch target).
+var ErrSSRFBlocked = errors.New("httputil: SSRF-blocked address")
+
+const (
+	guardedDialTimeout   = 10 * time.Second
+	guardedDialKeepAlive = 30 * time.Second
+)
+
+// extraBlockedCIDRs are the ranges neither net.IP's built-in predicates
+// (IsLoopback / IsPrivate / IsLinkLocalUnicast / IsLinkLocalMulticast /
+// IsUnspecified / IsMulticast) cover:
+//
+//   - 100.64.0.0/10  CGNAT (RFC 6598) — shared address space carriers use
+//     for NAT; not globally routable, frequently fronts internal services.
+//   - 64:ff9b::/96   NAT64 well-known prefix (RFC 6052) — embeds an IPv4
+//     address in the low 32 bits; blocking the whole prefix is simpler and
+//     safer than unpacking and re-checking the embedded address.
+//   - 2002::/16      6to4 (RFC 3056) — encodes a full IPv4 address in bits
+//     16-47; deprecated and rare in legitimate traffic, so blocking the
+//     entire range outright costs nothing.
+//   - ::/96          IPv4-compatible IPv6 (deprecated, RFC 4291 §2.5.5.1,
+//     distinct from the IPv4-MAPPED ::ffff:a.b.c.d form net.IP.To4()
+//     already unwraps) — embeds an IPv4 address in the low 32 bits with an
+//     all-zero high 96 bits.
+var extraBlockedCIDRs = mustParseCIDRs(
+	"100.64.0.0/10",
+	"64:ff9b::/96",
+	"2002::/16",
+	"::/96",
+)
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic(fmt.Sprintf("httputil: invalid CIDR %q: %v", c, err))
+		}
+		nets = append(nets, n)
+	}
+	return nets
+}
+
+// allowedSchemes is the scheme allowlist CheckURL enforces. A caller that
+// hands a raw URL to an out-of-process render delegate (a headless browser,
+// a fetch microservice) must reject file:// and gopher:// etc. before
+// dispatch — those schemes can read local files or speak arbitrary
+// protocols to internal services, and no dial-time guard in THIS package
+// can intervene once the delegate's own client executes them.
+var allowedSchemes = map[string]bool{
+	"http":  true,
+	"https": true,
+}
+
+// IsBlockedIP reports whether ip must never be dialed as a fetch/render
+// target. This is the single, framework-owned SSRF block-list — every other
+// primitive in this file (GuardedDialContext, NewSSRFGuardedClient,
+// CheckURL) is built on top of this one predicate. A nil IP is treated as
+// blocked (fail closed).
+//
+// Go's net.IP predicates already unwrap IPv4-mapped-IPv6 addresses (e.g.
+// ::ffff:10.0.0.1 or ::ffff:127.0.0.1) to their IPv4 form before matching —
+// including against extraBlockedCIDRs, since net.IPNet.Contains performs
+// the same To4() unwrap internally — so no separate normalization step is
+// needed here.
+func IsBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		return true
+	}
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	// Cloud-metadata address 169.254.169.254 is already covered by
+	// IsLinkLocalUnicast (169.254.0.0/16); the explicit check below exists
+	// purely to make the intent unmissable in review or a future refactor
+	// of the link-local branch above.
+	if ip.Equal(net.IPv4(169, 254, 169, 254)) { //nolint:mnd // the well-known cloud-metadata address, not a tunable
+		return true
+	}
+	for _, n := range extraBlockedCIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// GuardedDialContext wraps base with a Control hook that refuses to connect
+// to a blocked address (see IsBlockedIP). The check runs on the
+// ALREADY-RESOLVED address at connect time — after DNS lookup, immediately
+// before the connect(2) syscall — which is what defeats DNS-rebinding: a
+// hostname that resolves to a public IP when net/http first looks it up but
+// resolves to a private IP by the time this fires is still caught, because
+// the check inspects the literal address about to be dialed, never the
+// hostname string. Any pre-existing Control hook on base still runs first.
+//
+// base == nil uses a Dialer with sane guarded-fetch defaults (10s connect
+// timeout, 30s keepalive).
+func GuardedDialContext(base *net.Dialer) func(ctx context.Context, network, address string) (net.Conn, error) {
+	var d net.Dialer
+	switch {
+	case base != nil:
+		d = *base // shallow copy: never mutate the caller's *net.Dialer
+	default:
+		d = net.Dialer{Timeout: guardedDialTimeout, KeepAlive: guardedDialKeepAlive}
+	}
+	prevControl := d.Control
+	d.Control = func(network, address string, c syscall.RawConn) error {
+		if prevControl != nil {
+			if err := prevControl(network, address, c); err != nil {
+				return err
+			}
+		}
+		return denyBlockedAddress(network, address)
+	}
+	return d.DialContext
+}
+
+// denyBlockedAddress is the Control-hook body, split out so tests can drive
+// it directly with a hardcoded post-resolution address (simulating exactly
+// what net/http passes after DNS lookup) without needing a real DNS rebind.
+func denyBlockedAddress(network, address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address // no port present — shouldn't happen for a tcp/udp dial target
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// A resolved dial target that isn't a literal IP is unexpected; fail
+		// closed rather than let an unparseable address through.
+		return fmt.Errorf("%w: cannot parse dial address %q (%s)", ErrSSRFBlocked, address, network)
+	}
+	if IsBlockedIP(ip) {
+		return fmt.Errorf("%w: %s (%s)", ErrSSRFBlocked, ip, network)
+	}
+	return nil
+}
+
+// guardedTransport returns an *http.Transport cloned from
+// http.DefaultTransport (preserving its proxy / idle-conn / HTTP2 defaults)
+// with DialContext replaced by GuardedDialContext, so every connection made
+// through it is SSRF-safe by default.
+func guardedTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone() //nolint:forcetypeassert // http.DefaultTransport is always *http.Transport per stdlib contract
+	t.DialContext = GuardedDialContext(&net.Dialer{Timeout: guardedDialTimeout, KeepAlive: guardedDialKeepAlive})
+	return t
+}
+
+// NewSSRFGuardedClient returns an SSRF-guarded *http.Client built on top of
+// base. base == nil returns a fresh client with a guardedTransport().
+//
+// Two composition tiers, chosen by what base.Transport actually is:
+//
+//   - nil or *http.Transport: cloned (Clone() preserves TLSClientConfig,
+//     proxy, HTTP2 settings, MaxIdleConns, etc. — every field a caller may
+//     have set) with ONLY DialContext replaced by GuardedDialContext — the
+//     STRONG, connect-time, DNS-rebind-proof tier.
+//   - any other http.RoundTripper (e.g. a stealth/fingerprint-evasion
+//     client whose Transport performs its own dial via a bespoke backend,
+//     with no DialContext/net.Dialer hook exposed at all): wrapped with a
+//     RoundTripper that runs CheckURL on the outbound request's URL before
+//     delegating — a necessarily WEAKER pre-resolve tier (a DNS-rebind can
+//     still occur between this check and the delegate's own, separate
+//     resolution), but the best guarantee available without reaching into a
+//     dial mechanism this package does not own.
+//
+// The returned *http.Client is a shallow copy of base; base itself (and its
+// Transport) is never mutated.
+func NewSSRFGuardedClient(base *http.Client) *http.Client {
+	if base == nil {
+		return &http.Client{Transport: guardedTransport()}
+	}
+	cc := *base
+	switch t := base.Transport.(type) {
+	case nil:
+		cc.Transport = guardedTransport()
+	case *http.Transport:
+		tc := t.Clone()
+		tc.DialContext = GuardedDialContext(&net.Dialer{Timeout: guardedDialTimeout, KeepAlive: guardedDialKeepAlive})
+		cc.Transport = tc
+	default:
+		cc.Transport = &guardedRoundTripper{next: t}
+	}
+	return &cc
+}
+
+// guardedRoundTripper wraps an arbitrary http.RoundTripper with a
+// pre-request SSRF check (see CheckURL) on the outbound request's URL. This
+// composes with ANY RoundTripper implementation — it never touches the
+// wrapped one's internal dial mechanics, so a stealth/fingerprint-evasion
+// implementation is untouched on the allow path.
+type guardedRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (g *guardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := CheckURL(req.Context(), req.URL); err != nil {
+		return nil, err
+	}
+	return g.next.RoundTrip(req)
+}
+
+// CheckURL is a pre-handoff safety check for a URL this package does not
+// itself dial — e.g. before handing an "any place" URL to an out-of-process
+// render delegate (a headless browser, a fetch microservice) whose own
+// outbound dial GuardedDialContext / NewSSRFGuardedClient cannot reach.
+// Call it as close as possible to the point of dispatch, and again after
+// each redirect hop the delegate reports, to minimize the DNS-rebind
+// window — CheckURL is necessarily weaker against rebinding than
+// GuardedDialContext, since DNS can change between this resolution and the
+// delegate's own, separate one.
+//
+// Enforces two things:
+//  1. Scheme allowlist — only "http" and "https" are permitted; a headless
+//     browser coerced into "file://" or "gopher://" bypasses every IP-based
+//     check below, since those schemes never dial the checked host at all.
+//  2. Every resolved address for the URL's host passes IsBlockedIP.
+//
+// A host that is a literal IP is checked directly. A host that LOOKS like a
+// non-standard numeral encoding of an IP (decimal, octal, or hex — e.g.
+// "2130706433", "0x7f000001", or "012.0.0.1") but fails net.ParseIP is
+// refused outright rather than handed to DNS resolution: some resolvers
+// (notably glibc's getaddrinfo via cgo) still parse these forms as literal
+// IPs, which would silently defeat this check if it fell through to a
+// same-string-but-different DNS lookup.
+func CheckURL(ctx context.Context, u *url.URL) error {
+	if u == nil {
+		return fmt.Errorf("%w: nil URL", ErrSSRFBlocked)
+	}
+	if !allowedSchemes[strings.ToLower(u.Scheme)] {
+		return fmt.Errorf("%w: scheme %q not allowed (http/https only)", ErrSSRFBlocked, u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("%w: empty host", ErrSSRFBlocked)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if IsBlockedIP(ip) {
+			return fmt.Errorf("%w: %s", ErrSSRFBlocked, ip)
+		}
+		return nil
+	}
+	if looksLikeAltEncodedIP(host) {
+		return fmt.Errorf("%w: host %q looks like a non-standard IP encoding", ErrSSRFBlocked, host)
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("httputil: resolve %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("%w: %q resolved to no addresses", ErrSSRFBlocked, host)
+	}
+	for _, a := range addrs {
+		if IsBlockedIP(a.IP) {
+			return fmt.Errorf("%w: %s resolves to %s", ErrSSRFBlocked, host, a.IP)
+		}
+	}
+	return nil
+}
+
+// CheckRawURL parses rawURL and delegates to CheckURL. Convenience for
+// callers holding a string (a redirect Location header, an MCP tool
+// argument) rather than an already-parsed *url.URL.
+func CheckRawURL(ctx context.Context, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%w: parse %q: %w", ErrSSRFBlocked, rawURL, err)
+	}
+	return CheckURL(ctx, u)
+}
+
+// looksLikeAltEncodedIP reports whether host resembles an alternate-encoding
+// numeric IP literal (hex, pure-decimal, or octal-per-component) that
+// net.ParseIP rejects but a permissive resolver may still interpret as an IP
+// address — a classic SSRF filter bypass technique.
+func looksLikeAltEncodedIP(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(host), "0x") {
+		return true
+	}
+	allDigits := true
+	for _, r := range host {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		// Pure-decimal integer form, e.g. "2130706433" == 127.0.0.1.
+		return true
+	}
+	for _, part := range strings.Split(host, ".") {
+		if len(part) < 2 || part[0] != '0' {
+			continue
+		}
+		numeric := true
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				numeric = false
+				break
+			}
+		}
+		if numeric {
+			// Octal-looking dotted component, e.g. "012.0.0.1".
+			return true
+		}
+	}
+	return false
+}

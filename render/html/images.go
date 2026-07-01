@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/yuin/goldmark/ast"
 
+	"github.com/anatolykoptev/go-kit/httputil"
 	"github.com/anatolykoptev/go-kit/render"
 	"github.com/anatolykoptev/go-kit/tracing/httpmw"
 )
@@ -29,61 +29,40 @@ const defaultImageMaxBytes int64 = 5 << 20 // 5 MB
 // ImageEmbedOptions.Timeout is zero.
 const defaultImageTimeout = 5 * time.Second
 
-// privateIPCheck is the SSRF blocklist predicate used by fetchAndEncode. It is
-// a package-level variable (rather than a direct call to isPrivateIP) so tests
-// can swap it out when using httptest.NewServer, which binds to 127.0.0.1 and
-// would otherwise be rejected by the guard.
+// newHTTPClientFn constructs the SSRF-guarded HTTP client used for image
+// fetches. A package-level variable (rather than a direct call to
+// newSafeHTTPClient) so tests can swap in an unguarded client factory when
+// exercising httptest.NewServer, which binds to 127.0.0.1 and would
+// otherwise be refused by the SSRF guard.
 //
-// Production code MUST NOT mutate this. Tests that override it are expected to
-// restore the default via defer.
-var privateIPCheck = isPrivateIP
+// Production code MUST NOT mutate this. Tests that override it are expected
+// to restore the default via t.Cleanup.
+var newHTTPClientFn = newSafeHTTPClient
 
-// newSafeHTTPClient returns an *http.Client whose Transport re-resolves the
-// host at dial time and refuses any IP that the privateIPCheck predicate
-// rejects. This is defense-in-depth against DNS rebinding: fetchHTTP also
-// checks IPs at resolve-time (fast-fail), but an attacker-controlled DNS
-// server could return a public IP during resolve and a private IP at dial.
-// The dial-time check closes that gap by pinning the dial to an IP we have
-// just verified.
+// newSafeHTTPClient returns an *http.Client whose Transport is SSRF-guarded
+// via the shared go-kit/httputil primitive (httputil.NewSSRFGuardedClient) —
+// the single, framework-owned block-list also used by every other go-kit
+// service that fetches a caller-supplied URL. render/html no longer defines
+// its own private-IP predicate or dial wrapper; both now live in httputil,
+// covering the wider CGNAT/NAT64/6to4/IPv4-compatible ranges too.
 //
 // The SSRF-safe Transport is wrapped with httpmw.WrapTransport so outbound
-// image fetches emit OTel client spans and propagate W3C traceparent headers,
-// joining the distributed trace for the enclosing render call.
+// image fetches emit OTel client spans and propagate W3C traceparent
+// headers, joining the distributed trace for the enclosing render call. The
+// guard is applied to the raw *http.Transport BEFORE this wrap (via
+// NewSSRFGuardedClient), so tracing sits outermost without touching dial
+// mechanics.
 func newSafeHTTPClient(timeout time.Duration) *http.Client {
-	ssrfTransport := &http.Transport{
-		DialContext:           safeDial,
-		ResponseHeaderTimeout: timeout,
-		TLSHandshakeTimeout:   5 * time.Second,
+	base := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: timeout,
+			TLSHandshakeTimeout:   5 * time.Second,
+		},
 	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: httpmw.WrapTransport(ssrfTransport),
-	}
-}
-
-// safeDial resolves host -> IP, runs every returned IP through privateIPCheck,
-// and then dials the first IP directly (pinning). Any private/loopback IP in
-// the result aborts the dial with an error — we refuse to connect even if
-// one of several returned IPs is public, to keep behavior strict.
-func safeDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("split host/port: %w", err)
-	}
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve: %w", err)
-	}
-	if len(addrs) == 0 {
-		return nil, errors.New("no IP addresses for host")
-	}
-	for _, a := range addrs {
-		if privateIPCheck(a.IP) {
-			return nil, fmt.Errorf("dial to private IP refused: %s", a.IP)
-		}
-	}
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	return dialer.DialContext(ctx, network, net.JoinHostPort(addrs[0].IP.String(), port))
+	guarded := httputil.NewSSRFGuardedClient(base)
+	guarded.Transport = httpmw.WrapTransport(guarded.Transport)
+	return guarded
 }
 
 // embedImages walks the AST and replaces each *ast.Image node's Destination
@@ -128,7 +107,8 @@ func embedImages(ctx context.Context, doc ast.Node, source []byte, opts render.I
 // data:<mime>;base64,... URL. Supports three schemes: existing data: URLs
 // (pass-through), file:// or relative paths (resolved under opts.Workspace
 // with the same path-safety as convert_document), and http(s):// with an
-// SSRF blocklist based on privateIPCheck plus AllowedHosts.
+// SSRF blocklist (httputil.IsBlockedIP, enforced at connect time by the
+// client newHTTPClientFn returns) plus AllowedHosts.
 func fetchAndEncode(ctx context.Context, ref string, opts render.ImageEmbedOptions) (string, error) {
 	if strings.HasPrefix(ref, "data:") {
 		return ref, nil
@@ -214,7 +194,11 @@ func readWorkspaceFile(path, workspace string, maxBytes int64) (string, error) {
 	return encodeDataURL(data, sniffImageMIME(data, "")), nil
 }
 
-// fetchHTTP downloads an image over http(s) with SSRF and size/timeout guards.
+// fetchHTTP downloads an image over http(s) with SSRF and size/timeout
+// guards. The SSRF guard is enforced entirely inside the client
+// newHTTPClientFn returns (httputil.NewSSRFGuardedClient's connect-time
+// DialContext hook, defeating DNS-rebinding) — no separate resolve-time
+// check is duplicated here.
 func fetchHTTP(ctx context.Context, u *url.URL, opts render.ImageEmbedOptions, maxBytes int64, timeout time.Duration) (string, error) {
 	host := u.Hostname()
 	if host == "" {
@@ -234,22 +218,7 @@ func fetchHTTP(ctx context.Context, u *url.URL, opts render.ImageEmbedOptions, m
 		}
 	}
 
-	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	addrs, err := net.DefaultResolver.LookupIPAddr(resolveCtx, host)
-	if err != nil {
-		return "", fmt.Errorf("resolve host: %w", err)
-	}
-	if len(addrs) == 0 {
-		return "", errors.New("no IP addresses for host")
-	}
-	for _, a := range addrs {
-		if privateIPCheck(a.IP) {
-			return "", fmt.Errorf("refusing private/loopback IP for %s: %s", host, a.IP)
-		}
-	}
-
-	client := newSafeHTTPClient(timeout)
+	client := newHTTPClientFn(timeout)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
@@ -308,25 +277,4 @@ func sniffImageMIME(data []byte, contentType string) string {
 		}
 	}
 	return "image/png"
-}
-
-// isPrivateIP reports whether the given IP should be refused as an image
-// source. It covers loopback, RFC1918/ULA private ranges, link-local unicast
-// and multicast, generic multicast, and unspecified. The well-known cloud
-// metadata address 169.254.169.254 is also refused explicitly; link-local
-// catches it already, but the explicit check makes intent clear.
-func isPrivateIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
-		return true
-	}
-	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	if ip.Equal(net.IPv4(169, 254, 169, 254)) {
-		return true
-	}
-	return false
 }
