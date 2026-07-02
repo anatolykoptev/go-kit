@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.95.0](https://github.com/anatolykoptev/go-kit/compare/v0.94.0...v0.95.0) (2026-07-02)
+
+
+### Features
+
+* **httputil:** export the SSRF guard as a single framework-owned primitive ([#145](https://github.com/anatolykoptev/go-kit/issues/145)) ([448f4bc](https://github.com/anatolykoptev/go-kit/commit/448f4bc6113b343c79d8cd5388e410ecee0d6121))
+
 ## [0.94.0](https://github.com/anatolykoptev/go-kit/compare/v0.93.0...v0.94.0) (2026-06-29)
 
 
