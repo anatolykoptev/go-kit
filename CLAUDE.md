@@ -1,3 +1,3 @@
 # CLAUDE.md
 
-Версию присваивает только release-please — ручной `git tag`/`gh release create` запрещён.
+Only release-please assigns versions — manual `git tag`/`gh release create` is forbidden.
