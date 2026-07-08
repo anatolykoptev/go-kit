@@ -226,8 +226,8 @@ func TestDenyBlockedAddress_AllowsPublicAddress(t *testing.T) {
 		addr := addr
 		t.Run(addr, func(t *testing.T) {
 			t.Parallel()
-			if err := denyBlockedAddress("tcp", addr); err != nil {
-				t.Errorf("denyBlockedAddress(%q) = %v, want nil (public address must be allowed)", addr, err)
+			if err := DenyBlockedAddress("tcp", addr); err != nil {
+				t.Errorf("DenyBlockedAddress(%q) = %v, want nil (public address must be allowed)", addr, err)
 			}
 		})
 	}
@@ -245,8 +245,8 @@ func TestDenyBlockedAddress_AllowsUnixSocket(t *testing.T) {
 		network := network
 		t.Run(network, func(t *testing.T) {
 			t.Parallel()
-			if err := denyBlockedAddress(network, "/var/run/sidecar.sock"); err != nil {
-				t.Errorf("denyBlockedAddress(%q, socket path) = %v, want nil (UDS is not an SSRF-to-internal-IP vector)", network, err)
+			if err := DenyBlockedAddress(network, "/var/run/sidecar.sock"); err != nil {
+				t.Errorf("DenyBlockedAddress(%q, socket path) = %v, want nil (UDS is not an SSRF-to-internal-IP vector)", network, err)
 			}
 		})
 	}
@@ -468,5 +468,109 @@ func TestNewSSRFGuardedClient_NilBase(t *testing.T) {
 	tr := transportTierOf(t, guarded.Transport)
 	if tr.DialContext == nil {
 		t.Error("nil-base client Transport not guarded")
+	}
+}
+
+// TestSSRFGuards_DialIsDenyBlockedAddress proves the dial closure SSRFGuards
+// returns enforces the EXACT same policy DenyBlockedAddress does (not a
+// separate, potentially-drifting copy) — required so a consumer wiring an
+// opaque transport's Control-hook-shaped seam gets behavior identical to
+// GuardedDialContext's connect-time tier.
+func TestSSRFGuards_DialIsDenyBlockedAddress(t *testing.T) {
+	t.Parallel()
+	_, dial := SSRFGuards()
+
+	const blocked = "169.254.169.254:80" // cloud metadata
+	if err := dial("tcp", blocked); !errors.Is(err, ErrSSRFBlocked) {
+		t.Errorf("dial(%q) = %v, want ErrSSRFBlocked", blocked, err)
+	}
+	const public = "8.8.8.8:443"
+	if err := dial("tcp", public); err != nil {
+		t.Errorf("dial(%q) = %v, want nil", public, err)
+	}
+}
+
+// TestSSRFGuards_RedirectBlocksInternalHop proves the redirect closure
+// enforces IsBlockedIP (via CheckURL) on every hop it is invoked for, not
+// just the first — the exact gap the fleet-wide redirect-swallow fix exists
+// to close for an opaque-transport client that follows redirects internally
+// and never re-invokes an outer net/http redirect loop per hop.
+func TestSSRFGuards_RedirectBlocksInternalHop(t *testing.T) {
+	t.Parallel()
+	redirect, _ := SSRFGuards()
+
+	internalURL, err := url.Parse("http://169.254.169.254/latest/meta-data/")
+	if err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	req := (&http.Request{URL: internalURL}).WithContext(context.Background())
+
+	if err := redirect(req, nil); !errors.Is(err, ErrSSRFBlocked) {
+		t.Errorf("redirect(internal target) = %v, want ErrSSRFBlocked", err)
+	}
+}
+
+// TestSSRFGuards_RedirectAllowsPublicHop is the allow-path complement to
+// TestSSRFGuards_RedirectBlocksInternalHop: a public target under the hop
+// cap must pass through untouched (proves the closure doesn't over-block).
+func TestSSRFGuards_RedirectAllowsPublicHop(t *testing.T) {
+	t.Parallel()
+	redirect, _ := SSRFGuards()
+
+	publicURL, err := url.Parse("https://93.184.216.34/next") // TEST-NET-adjacent public literal, no DNS dependency
+	if err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	req := (&http.Request{URL: publicURL}).WithContext(context.Background())
+
+	if err := redirect(req, nil); err != nil {
+		t.Errorf("redirect(public target, hop 0) = %v, want nil", err)
+	}
+}
+
+// TestSSRFGuards_RedirectHopCap is the redirect-LOOP footgun guard: the
+// redirect closure REPLACES whatever redirect-decision hook a backend
+// exposes (http.Client.CheckRedirect or an equivalent), which drops
+// net/http's own built-in 10-hop cap along with it — see maxSSRFRedirectHops'
+// doc. This proves the closure re-owns that cap itself, rather than a
+// malicious self-redirecting or looping target hanging the caller until its
+// own outer timeout.
+//
+// Driven directly against the closure with a PUBLIC literal IP, not a real
+// self-redirecting httptest server: httptest necessarily binds to loopback,
+// which CheckURL refuses at hop 0 for the unrelated reason of being an SSRF
+// block — that would prove the wrong thing (an IP-class block, not the hop
+// cap). A public host isolates the hop-cap logic from the IsBlockedIP check
+// it composes with, so the assertion "blocked at cap" can only be explained
+// by the cap itself: absent it, this exact call would return nil forever
+// (the host is public), i.e. this test is RED without the cap.
+func TestSSRFGuards_RedirectHopCap(t *testing.T) {
+	t.Parallel()
+	redirect, _ := SSRFGuards()
+
+	publicURL, err := url.Parse("https://93.184.216.34/next")
+	if err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	req := (&http.Request{URL: publicURL}).WithContext(context.Background())
+
+	viaUnderCap := make([]*http.Request, maxSSRFRedirectHops-1)
+	for i := range viaUnderCap {
+		viaUnderCap[i] = req
+	}
+	if err := redirect(req, viaUnderCap); err != nil {
+		t.Errorf("redirect at hop %d (under cap, public host) = %v, want nil", len(viaUnderCap), err)
+	}
+
+	viaAtCap := make([]*http.Request, maxSSRFRedirectHops)
+	for i := range viaAtCap {
+		viaAtCap[i] = req
+	}
+	atCapErr := redirect(req, viaAtCap)
+	if atCapErr == nil {
+		t.Fatalf("redirect at hop %d (= cap) = nil, want a hop-limit error (a self-redirect loop would hang without this)", maxSSRFRedirectHops)
+	}
+	if errors.Is(atCapErr, ErrSSRFBlocked) {
+		t.Errorf("redirect at cap wrapped ErrSSRFBlocked (%v) — want a distinct hop-limit error, proving the cap fires independently of (before) the IsBlockedIP check", atCapErr)
 	}
 }
