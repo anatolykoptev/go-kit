@@ -137,15 +137,23 @@ func GuardedDialContext(base *net.Dialer) func(ctx context.Context, network, add
 				return err
 			}
 		}
-		return denyBlockedAddress(network, address)
+		return DenyBlockedAddress(network, address)
 	}
 	return d.DialContext
 }
 
-// denyBlockedAddress is the Control-hook body, split out so tests can drive
-// it directly with a hardcoded post-resolution address (simulating exactly
-// what net/http passes after DNS lookup) without needing a real DNS rebind.
-func denyBlockedAddress(network, address string) error {
+// DenyBlockedAddress is the Control-hook body: it inspects the
+// ALREADY-RESOLVED network/address pair — exactly what net.Dialer.Control
+// receives, and what GuardedDialContext wires this into — and refuses
+// anything IsBlockedIP flags. Exported (split out from GuardedDialContext
+// originally so tests could drive it directly with a hardcoded
+// post-resolution address, simulating exactly what net/http passes after DNS
+// lookup, without needing a real DNS rebind) so a caller wiring a bespoke
+// Control-hook-shaped seam on an opaque transport this package does not
+// itself dial (e.g. a stealth/fingerprint-evasion client's own dialer hook)
+// can reuse the identical policy GuardedDialContext uses internally, rather
+// than duplicating it. See SSRFGuards for the paired redirect-guard closure.
+func DenyBlockedAddress(network, address string) error {
 	switch network {
 	case "unix", "unixgram", "unixpacket":
 		// A Unix domain socket dials a local filesystem path, not a network
@@ -339,6 +347,55 @@ func CheckRawURL(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("%w: parse %q: %w", ErrSSRFBlocked, rawURL, err)
 	}
 	return CheckURL(ctx, u)
+}
+
+// maxSSRFRedirectHops caps how many redirect hops the redirect closure
+// SSRFGuards returns will follow before refusing. Owned ONCE here, not
+// duplicated per consumer: installing a custom redirect-decision hook (a
+// stdlib http.Client.CheckRedirect, or an adapter around a non-stdlib
+// equivalent) REPLACES net/http's own built-in 10-hop cap, not just its SSRF
+// behavior. A consumer that re-implements the SSRF check but forgets this
+// trades a bounded redirect chain for an unbounded one — a self-redirecting
+// or looping target then hangs the caller until its own request timeout
+// instead of failing fast. Keeping the cap here, next to the check it
+// replaces, means every consumer gets it for free and identically.
+const maxSSRFRedirectHops = 10
+
+// SSRFGuards returns the pair of stdlib-typed closures an opaque-transport
+// HTTP client (one whose Transport performs its own dial/redirect via a
+// bespoke backend this package cannot reach — e.g. a stealth/
+// fingerprint-evasion client) installs to close the SAME two gaps
+// NewSSRFGuardedClient already closes for a plain *http.Transport-backed
+// client:
+//
+//   - dial is DenyBlockedAddress itself — wire it into whatever
+//     Control-hook-shaped seam the opaque transport exposes (directly, if it
+//     accepts a net.Dialer.Control-shaped func, or behind a thin adapter
+//     otherwise) for the rebind-proof, connect-time check.
+//   - redirect enforces the ≤maxSSRFRedirectHops cap (see that const's doc
+//     for why re-owning it is required, not optional) and THEN
+//     CheckURL(req.Context(), req.URL) on every hop — wire it into whatever
+//     per-hop redirect-decision seam the opaque transport exposes. Its
+//     signature matches http.Client.CheckRedirect exactly, so a
+//     stdlib-backed caller can assign it directly with no adapter.
+//
+// Named for the CAPABILITY (this package's framework-owned SSRF policy), not
+// any one consumer — this package takes no dependency on whatever
+// opaque-transport client ends up wiring these in, and the identical pair of
+// closures can be handed to more than one backend so their behavior cannot
+// drift apart.
+func SSRFGuards() (
+	redirect func(req *http.Request, via []*http.Request) error,
+	dial func(network, address string) error,
+) {
+	redirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxSSRFRedirectHops {
+			return fmt.Errorf("httputil: stopped after %d redirects", maxSSRFRedirectHops)
+		}
+		return CheckURL(req.Context(), req.URL)
+	}
+	dial = DenyBlockedAddress
+	return redirect, dial
 }
 
 // looksLikeAltEncodedIP reports whether host resembles an alternate-encoding
