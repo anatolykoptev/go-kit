@@ -3,7 +3,10 @@ package fsm_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -190,5 +193,125 @@ func TestPostgresStore_Get_ContextCancelled_PropagatesError(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Get with cancelled ctx: expected context.Canceled in error chain, got: %v", err)
+	}
+}
+
+// bootstrapOnboardingController stands in for a real consumer's bot
+// controller (e.g. oxpulse-admin/internal/bootstrap.KitBot) whose StateFns
+// are bound methods. Taking a method value (not a top-level func) makes
+// funcName() return the full package-import-path + receiver type + method
+// name + "-fm" suffix — routinely >64 chars in a real module tree.
+type bootstrapOnboardingController struct{}
+
+func (c *bootstrapOnboardingController) AskPartnerIdentifierAndValidateStep(_ context.Context, _ fsm.Event) (fsm.StateFn, error) {
+	return nil, nil
+}
+
+// TestPostgresStore_Put_LongBoundMethodStateFnName is a regression test for
+// the go-kit incident: oxpulse-bootstrap-bot's Postgres-backed onboarding
+// flow never persisted a single session (0 rows in bootstrap_bot_sessions,
+// ever) because funcName() (fsm.go) has no length bound, and a bound-method
+// StateFn's reflection-derived name (e.g.
+// ".../bootstrap.(*KitBot).fsmAskPartnerID-fm", ~86 chars in prod) overflows
+// a fixed-width VARCHAR step/flow column. TestFuncName_* in fsm_test.go only
+// exercises MemoryStore with short top-level functions and cannot catch
+// this — the gap is Postgres's actual column constraint, not funcName()
+// itself.
+func TestPostgresStore_Put_LongBoundMethodStateFnName(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	store, err := fsm.NewPostgresStore(ctx, pool, time.Hour)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+
+	controller := &bootstrapOnboardingController{}
+	var fn fsm.StateFn = controller.AskPartnerIdentifierAndValidateStep
+
+	// Guard the fixture itself: if this ever stops exceeding 64 chars (e.g.
+	// module path shortened), the test would pass for the wrong reason.
+	label := runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name()
+	if len(label) <= 64 {
+		t.Fatalf("fixture label %q is only %d chars; widen the receiver/method name to exceed the historical 64-char VARCHAR bound", label, len(label))
+	}
+
+	m := fsm.New(store, func(string) fsm.StateFn { return fn }, time.Hour)
+
+	if err := m.Start(ctx, 42001, "onboard"); err != nil {
+		t.Fatalf("Start with a long bound-method StateFn: %v (go-kit incident: Postgres 22001 value-too-long — bootstrap_bot_sessions.step must be TEXT, not a fixed-width VARCHAR)", err)
+	}
+
+	got, err := store.Get(ctx, 42001)
+	if err != nil {
+		t.Fatalf("Get after Start: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get after Start: session missing")
+	}
+	if got.Step != label {
+		t.Fatalf("Step mismatch: want %q, got %q", label, got.Step)
+	}
+}
+
+// TestPostgresStore_Migrate_WidensPreExistingNarrowColumns proves that a
+// bootstrap_bot_sessions table pre-created by a legacy schema (prod's table
+// predated this package and had flow/step VARCHAR(32); this package's own
+// CREATE TABLE IF NOT EXISTS has since declared VARCHAR(64), also too
+// narrow) self-heals on the next migrate() run. CREATE TABLE IF NOT EXISTS
+// alone only helps fresh installs — without an unconditional ALTER COLUMN
+// ... TYPE, a pre-existing narrow install never widens, silently, forever.
+func TestPostgresStore_Migrate_WidensPreExistingNarrowColumns(t *testing.T) {
+	for _, width := range []int{32, 64} {
+		t.Run(fmt.Sprintf("varchar_%d", width), func(t *testing.T) {
+			pool := newTestPool(t)
+			ctx := context.Background()
+
+			// Simulate a pre-existing legacy install narrower than (or
+			// equal to) this package's previously-declared VARCHAR(64).
+			_, err := pool.Exec(ctx, fmt.Sprintf(`
+				CREATE TABLE bootstrap_bot_sessions (
+					chat_id     BIGINT       PRIMARY KEY,
+					flow        VARCHAR(%d)  NOT NULL,
+					step        VARCHAR(%d)  NOT NULL,
+					state_json  JSONB        NOT NULL DEFAULT '{}'::jsonb,
+					updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+					expires_at  TIMESTAMPTZ  NOT NULL
+				)
+			`, width, width))
+			if err != nil {
+				t.Fatalf("pre-create legacy table: %v", err)
+			}
+
+			// NewPostgresStore runs migrate() against the pre-existing table.
+			store, err := fsm.NewPostgresStore(ctx, pool, time.Hour)
+			if err != nil {
+				t.Fatalf("NewPostgresStore: %v", err)
+			}
+
+			for _, col := range []string{"flow", "step"} {
+				var dataType string
+				qErr := pool.QueryRow(ctx, `
+					SELECT data_type FROM information_schema.columns
+					WHERE table_name = 'bootstrap_bot_sessions' AND column_name = $1
+				`, col).Scan(&dataType)
+				if qErr != nil {
+					t.Fatalf("introspect column %q: %v", col, qErr)
+				}
+				if dataType != "text" {
+					t.Fatalf("column %q: want widened to text, got %q (pre-existing VARCHAR(%d) install never self-healed)", col, dataType, width)
+				}
+			}
+
+			// Functional proof, not just metadata: the real incident's
+			// reproduction (a long bound-method StateFn label) must now fit
+			// even though this table started life as a narrow VARCHAR.
+			controller := &bootstrapOnboardingController{}
+			var fn fsm.StateFn = controller.AskPartnerIdentifierAndValidateStep
+			m := fsm.New(store, func(string) fsm.StateFn { return fn }, time.Hour)
+			if startErr := m.Start(ctx, int64(50000+width), "onboard"); startErr != nil {
+				t.Fatalf("Start after widening a pre-existing VARCHAR(%d) table: %v", width, startErr)
+			}
+		})
 	}
 }

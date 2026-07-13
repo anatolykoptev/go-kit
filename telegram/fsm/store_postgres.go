@@ -35,17 +35,34 @@ func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool, ttl time.Duration
 }
 
 func (s *PostgresStore) migrate(ctx context.Context) error {
+	// flow/step hold funcName()'s reflection-derived StateFn label (fsm.go),
+	// which has no length bound — a bound method's name is the full
+	// package-import-path + receiver type + method + "-fm" suffix, routinely
+	// >64 chars. A fixed-width VARCHAR is the wrong constraint for that; use
+	// TEXT (unbounded, same on-disk representation, no perf cost in
+	// Postgres).
+	//
+	// CREATE TABLE IF NOT EXISTS only helps fresh installs. A pre-existing
+	// table (e.g. one that predates this package, or was created before this
+	// column was widened) never gets touched by it, so the ALTER COLUMN
+	// below runs unconditionally on every migrate() call to self-heal any
+	// narrower install. VARCHAR(n)->TEXT is metadata-only in Postgres (no
+	// table rewrite) and a no-op when the column is already TEXT — safe to
+	// run on every startup.
 	_, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS bootstrap_bot_sessions (
 			chat_id     BIGINT       PRIMARY KEY,
-			flow        VARCHAR(64)  NOT NULL,
-			step        VARCHAR(64)  NOT NULL,
+			flow        TEXT         NOT NULL,
+			step        TEXT         NOT NULL,
 			state_json  JSONB        NOT NULL DEFAULT '{}'::jsonb,
 			updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
 			expires_at  TIMESTAMPTZ  NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_bootstrap_bot_sessions_expires
 			ON bootstrap_bot_sessions(expires_at);
+
+		ALTER TABLE bootstrap_bot_sessions ALTER COLUMN flow TYPE TEXT;
+		ALTER TABLE bootstrap_bot_sessions ALTER COLUMN step TYPE TEXT;
 	`)
 	if err != nil {
 		return fmt.Errorf("fsm: postgres migration: %w", err)
