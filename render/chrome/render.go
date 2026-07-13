@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	htmlpkg "github.com/anatolykoptev/go-kit/render/html"
 	render "github.com/anatolykoptev/go-kit/render"
+	htmlpkg "github.com/anatolykoptev/go-kit/render/html"
 )
 
 // PDFOptions configures headless-Chrome PDF rendering.

@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	defaultPrefix       = "session:"
-	scanPageSize        = 100
-	contentTruncSuffix  = "\n... [truncated]"
+	defaultPrefix      = "session:"
+	scanPageSize       = 100
+	contentTruncSuffix = "\n... [truncated]"
 )
 
 // Store is a Redis-backed implementation of session.Store.

@@ -1,0 +1,46 @@
+name: preflight
+
+# Pre-merge build/test/lint gate for the public go-kit module.
+# Runs on the self-hosted runner on krolik (not a paid GitHub-hosted runner).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref; cancel in-flight if a new push arrives. krolik is a shared
+# 4-core prod box — do not pile up CI jobs.
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: "off"
+
+jobs:
+  preflight:
+    # go-kit is a PUBLIC repo on a self-hosted runner living on the prod
+    # krolik box. Without this guard, a fork PR's workflow run would execute
+    # arbitrary code on that runner.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, krolik]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: make preflight
+        run: make preflight
+
+      # golangci-lint ratchet — only NEW issues vs origin/main fail the gate.
+      # The repo has a pre-existing lint backlog; plain `golangci-lint run`
+      # would red every PR. Cache is cleaned because the non-ephemeral runner
+      # replays stale Position.Filename paths from deleted worktrees.
+      - name: golangci-lint (only new issues vs origin/main)
+        run: |
+          ~/.local/bin/golangci-lint cache clean
+          ~/.local/bin/golangci-lint run --allow-parallel-runners --timeout=30m --new-from-merge-base=origin/main ./...

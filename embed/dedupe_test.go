@@ -78,10 +78,10 @@ func TestDedupeGroups_TransitiveChain(t *testing.T) {
 	// Set threshold = 0.95: A~B OK, B~C OK, A~C NOT OK (0.878 < 0.95).
 	const threshold = float32(0.95)
 	vecs := [][]float32{
-		{1.0000, 0.0000},         // A
-		{0.9689, 0.2474},         // B  (≈ cos/sin 0.25rad)
-		{0.8776, 0.4794},         // C  (≈ cos/sin 0.50rad)
-		{0.0000, 1.0000},         // D  orthogonal singleton
+		{1.0000, 0.0000}, // A
+		{0.9689, 0.2474}, // B  (≈ cos/sin 0.25rad)
+		{0.8776, 0.4794}, // C  (≈ cos/sin 0.50rad)
+		{0.0000, 1.0000}, // D  orthogonal singleton
 	}
 	got := DedupeGroups(vecs, threshold)
 	if len(got) != 2 {

@@ -269,10 +269,14 @@ func TestInlineAnswerer_AnswerInlineQuery_error(t *testing.T) {
 // corresponding interface at compile time. A mismatch causes a build error.
 
 var (
-	_ interface{ Send(chatID int64, text string) error }                                             = (*tgapi5.BotSender)(nil)
-	_ interface{ AnswerCallback(callbackID string) error }                                           = (*tgapi5.BotCallbackAnswerer)(nil)
-	_ interface{ DeleteMessage(chatID int64, messageID int) error }                                  = (*tgapi5.BotMessageDeleter)(nil)
-	_ tgapi5.InlineAnswerer                                                                          = (*tgapi5.BotInlineAnswerer)(nil)
+	_ interface {
+		Send(chatID int64, text string) error
+	} = (*tgapi5.BotSender)(nil)
+	_ interface{ AnswerCallback(callbackID string) error } = (*tgapi5.BotCallbackAnswerer)(nil)
+	_ interface {
+		DeleteMessage(chatID int64, messageID int) error
+	} = (*tgapi5.BotMessageDeleter)(nil)
+	_ tgapi5.InlineAnswerer = (*tgapi5.BotInlineAnswerer)(nil)
 )
 
 // ---- BotInvoiceSender -------------------------------------------------------

@@ -54,5 +54,5 @@ type fakeEmitter struct {
 	gauges map[string]float64
 }
 
-func (f *fakeEmitter) Incr(name string) { f.incrs = append(f.incrs, name) }
+func (f *fakeEmitter) Incr(name string)                 { f.incrs = append(f.incrs, name) }
 func (f *fakeEmitter) Gauge(name string, value float64) { f.gauges[name] = value }

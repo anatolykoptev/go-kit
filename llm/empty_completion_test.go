@@ -155,7 +155,7 @@ func TestChain_AllEmptyTerminatesWithError(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"finish_reason": "length",
-				"message": map[string]any{"content": ""},
+				"message":       map[string]any{"content": ""},
 			}},
 		})
 	}))
@@ -169,7 +169,7 @@ func TestChain_AllEmptyTerminatesWithError(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
 				"finish_reason": "length",
-				"message": map[string]any{"content": ""},
+				"message":       map[string]any{"content": ""},
 			}},
 		})
 	}))

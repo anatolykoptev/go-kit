@@ -445,7 +445,6 @@ func RunContract(t *testing.T, newStore func(t *testing.T) botusers.Store) {
 		}
 	})
 
-
 	t.Run("CursorTampered_ReturnsErrCursor", func(t *testing.T) {
 		// MED5: a tampered/invalid cursor string must return a wrapped ErrCursor,
 		// not a raw base64 or JSON error.

@@ -94,7 +94,6 @@ func (m *MemStore) UpsertFromInitData(ctx context.Context, botID string, user bo
 			FirstSeenAt:       at,
 			LastSeenAt:        at,
 			TotalObservations: 1,
-
 		}
 	}
 	return nil
@@ -240,7 +239,10 @@ func (m *MemStore) Aggregate(ctx context.Context, botID string) (botusers.Aggreg
 	}
 
 	// Build TopCountries sorted by count desc.
-	type cc struct{ code string; cnt int64 }
+	type cc struct {
+		code string
+		cnt  int64
+	}
 	var ccs []cc
 	for code, cnt := range countryCounts {
 		ccs = append(ccs, cc{code, cnt})
@@ -298,4 +300,3 @@ func (m *MemStore) DeleteInactive(ctx context.Context, botID string, olderThan t
 
 // Ensure MemStore satisfies the Store interface at compile time.
 var _ botusers.Store = (*MemStore)(nil)
-
