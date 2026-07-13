@@ -15,7 +15,9 @@ import (
 //
 // Schema: bootstrap_bot_sessions — preserves the production table used by
 // oxpulse-admin/internal/bootstrap/sessions.go (unmerged feat/bot-session-engine).
-// PR 5 migration is drop-in: no ALTER TABLE required, column names match.
+// Column names match, but flow/step now need an ALTER on migrate (see below) —
+// the legacy table's VARCHAR width doesn't fit a bound-method StateFn's
+// funcName() label.
 //
 // Direct port of postgresSessionStore from that branch; CreatedAt removed
 // per spec §4 (Session struct has no CreatedAt field).
@@ -25,7 +27,8 @@ type PostgresStore struct {
 }
 
 // NewPostgresStore creates a PostgresStore and runs an idempotent schema
-// migration (CREATE TABLE IF NOT EXISTS).
+// migration (CREATE TABLE IF NOT EXISTS, plus an unconditional ALTER widening
+// flow/step to TEXT so pre-existing installs self-heal too).
 func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool, ttl time.Duration) (*PostgresStore, error) {
 	s := &PostgresStore{pool: pool, ttl: ttl}
 	if err := s.migrate(ctx); err != nil {
@@ -35,12 +38,14 @@ func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool, ttl time.Duration
 }
 
 func (s *PostgresStore) migrate(ctx context.Context) error {
-	// flow/step hold funcName()'s reflection-derived StateFn label (fsm.go),
-	// which has no length bound — a bound method's name is the full
+	// step holds funcName()'s reflection-derived StateFn label (fsm.go Start/
+	// Feed), which has no length bound — a bound method's name is the full
 	// package-import-path + receiver type + method + "-fm" suffix, routinely
 	// >64 chars. A fixed-width VARCHAR is the wrong constraint for that; use
 	// TEXT (unbounded, same on-disk representation, no perf cost in
-	// Postgres).
+	// Postgres). flow is just the consumer-supplied flow name (fsm.go Start)
+	// and stays short in practice, but widens too for parity/simplicity —
+	// one column-width rule, not two.
 	//
 	// CREATE TABLE IF NOT EXISTS only helps fresh installs. A pre-existing
 	// table (e.g. one that predates this package, or was created before this
