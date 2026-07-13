@@ -6,7 +6,7 @@ import (
 )
 
 func TestIdleTTL_EvictsUnusedEntries(t *testing.T) {
-	idleTTL := 1 * time.Second
+	idleTTL := 5 * time.Second
 	c := New(Config{
 		L1MaxItems: 100,
 		L1TTL:      1 * time.Hour, // far-away absolute expiry
@@ -18,11 +18,13 @@ func TestIdleTTL_EvictsUnusedEntries(t *testing.T) {
 	c.Set(nil, "cold", []byte("v2"))
 
 	// Keep "hot" accessed; leave "cold" untouched.
-	time.Sleep(idleTTL / 2)
+	time.Sleep(idleTTL / 5)
 	c.Get(nil, "hot")
 
 	// Wait long enough that "cold" is idle-expired, but "hot" is still fresh.
-	time.Sleep(idleTTL*3/4 + idleTTL/10)
+	// Use idleTTL * 9/10 so "hot" is still within its idle window even with
+	// several hundred milliseconds of scheduler/CI jitter.
+	time.Sleep(idleTTL * 9 / 10)
 
 	// cold should now be idle-expired, hot should survive.
 	_, coldOK := c.Get(nil, "cold")

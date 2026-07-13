@@ -1,5 +1,10 @@
 .RECIPEPREFIX = >
 
+# Race detector requires CGO. On runners without libtokenizers/libonnxruntime
+# (e.g. GitHub-hosted ubuntu-latest), go-kit falls back to the !cgo stubs, so
+# skip -race when CGO_ENABLED is 0.
+RACE := $(if $(filter 1,$(shell GOWORK=off go env CGO_ENABLED)),-race,)
+
 .PHONY: test lint cover preflight
 
 test:
@@ -24,5 +29,5 @@ preflight:
 > @GOWORK=off go vet ./...
 > @echo "==> go build ./..."
 > @GOWORK=off go build ./...
-> @echo "==> go test -race -count=1 ./..."
-> @GOWORK=off go test -race -count=1 ./...
+> @echo "==> go test $(RACE) -count=1 ./..."
+> @GOWORK=off go test $(RACE) -count=1 ./...
