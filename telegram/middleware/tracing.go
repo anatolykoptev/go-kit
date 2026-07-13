@@ -46,10 +46,10 @@ const tracingTracerName = "github.com/anatolykoptev/go-kit/telegram/middleware"
 //
 // # Errors
 //
-// - A nil error leaves span.Status at codes.Unset (success is the default).
-// - ErrThrottled sets codes.Error + telegram.status="throttled" without calling
-//   RecordError — throttling is expected, not a bug.
-// - Any other non-nil error calls span.RecordError and sets codes.Error.
+//   - A nil error leaves span.Status at codes.Unset (success is the default).
+//   - ErrThrottled sets codes.Error + telegram.status="throttled" without calling
+//     RecordError — throttling is expected, not a bug.
+//   - Any other non-nil error calls span.RecordError and sets codes.Error.
 //
 // scope is passed as the OTel instrumentation scope (service name). An empty
 // scope falls back to the package tracer name.

@@ -23,9 +23,15 @@ func TestFullChain_ComposesInDocumentedOrder(t *testing.T) {
 
 	var answered []string
 	answer := func(id string) error { answered = append(answered, id); return nil }
-	var deleted []struct{ chatID int64; msgID int }
+	var deleted []struct {
+		chatID int64
+		msgID  int
+	}
 	del := func(chatID int64, msgID int) error {
-		deleted = append(deleted, struct{ chatID int64; msgID int }{chatID, msgID})
+		deleted = append(deleted, struct {
+			chatID int64
+			msgID  int
+		}{chatID, msgID})
 		return nil
 	}
 	isOp := func(chatID int64) bool { return chatID == 1 }

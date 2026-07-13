@@ -342,4 +342,3 @@ func TestCooldown_Observer_FiresOnEntryAndRecovery(t *testing.T) {
 		t.Errorf("first event = %+v, want {primary, cooling=true}", first)
 	}
 }
-

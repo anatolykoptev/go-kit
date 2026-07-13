@@ -12,8 +12,8 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
-	htmlpkg "github.com/anatolykoptev/go-kit/render/html"
 	render "github.com/anatolykoptev/go-kit/render"
+	htmlpkg "github.com/anatolykoptev/go-kit/render/html"
 )
 
 // ImageFormat identifies the raster encoding for CaptureImage output.

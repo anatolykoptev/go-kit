@@ -115,7 +115,7 @@ func TestTracing_CallbackUpdate(t *testing.T) {
 func TestTracing_OtherUpdate(t *testing.T) {
 	rec := setupTracingRecorder(t)
 
-	h := Tracing("svc")( nopHandler)
+	h := Tracing("svc")(nopHandler)
 	upd := &tgbotapi.Update{} // neither Message nor CallbackQuery
 	if err := h(context.Background(), upd); err != nil {
 		t.Fatalf("unexpected error: %v", err)

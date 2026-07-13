@@ -90,7 +90,7 @@ func isNotFoundErr(err error) bool {
 // Used to test sweeper error handling.
 type errStore struct {
 	*botuserstest.MemStore // embed as pointer to avoid copying sync.RWMutex
-	deleteErr error
+	deleteErr              error
 }
 
 func (e *errStore) DeleteInactive(ctx context.Context, botID string, olderThan time.Duration) (int64, error) {

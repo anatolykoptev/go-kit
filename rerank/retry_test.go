@@ -45,7 +45,7 @@ func TestRetry_MaxAttempts(t *testing.T) {
 func TestRetry_BackoffTiming(t *testing.T) {
 	p := RetryPolicy{
 		MaxAttempts:     4,
-		BaseBackoff:     10 * time.Millisecond,
+		BaseBackoff:     100 * time.Millisecond,
 		MaxBackoff:      1 * time.Second,
 		Multiplier:      2.0,
 		Jitter:          0, // deterministic
@@ -59,9 +59,9 @@ func TestRetry_BackoffTiming(t *testing.T) {
 	if len(timestamps) != 4 {
 		t.Fatalf("expected 4 attempts, got %d", len(timestamps))
 	}
-	// Gap between attempt 0→1 should be ~10ms (BaseBackoff * 2^0).
-	// Gap between attempt 1→2 should be ~20ms (BaseBackoff * 2^1).
-	// Gap between attempt 2→3 should be ~40ms (BaseBackoff * 2^2).
+	// Gap between attempt 0→1 should be ~100ms (BaseBackoff * 2^0).
+	// Gap between attempt 1→2 should be ~200ms (BaseBackoff * 2^1).
+	// Gap between attempt 2→3 should be ~400ms (BaseBackoff * 2^2).
 	gaps := make([]time.Duration, 3)
 	for i := 0; i < 3; i++ {
 		gaps[i] = timestamps[i+1].Sub(timestamps[i])

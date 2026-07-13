@@ -18,10 +18,10 @@ import (
 )
 
 type config struct {
-	responseSize  bool
-	pathLabel     func(*http.Request) string
+	responseSize   bool
+	pathLabel      func(*http.Request) string
 	histRegisterer prometheus.Registerer
-	histBuckets   []float64
+	histBuckets    []float64
 }
 
 // Option configures the middleware.
@@ -94,8 +94,8 @@ func WithDurationHistogram(reg prometheus.Registerer, buckets ...float64) Option
 // histogramCache caches registered HistogramVec per subsystem name to avoid
 // double-registration across multiple calls to Middleware with the same args.
 type histogramCache struct {
-	mu    sync.Mutex
-	vecs  map[string]*prometheus.HistogramVec // keyed by "<registerer-addr>/<name>"
+	mu   sync.Mutex
+	vecs map[string]*prometheus.HistogramVec // keyed by "<registerer-addr>/<name>"
 }
 
 var globalHistCache = &histogramCache{vecs: make(map[string]*prometheus.HistogramVec)}

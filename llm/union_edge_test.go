@@ -34,8 +34,12 @@ func TestExtractOneOf_EmptyStruct(t *testing.T) {
 }
 
 func TestExtractOneOf_NestedStruct(t *testing.T) {
-	type Inner struct{ Value int `json:"value"` }
-	type Outer struct{ Inner Inner `json:"inner"` }
+	type Inner struct {
+		Value int `json:"value"`
+	}
+	type Outer struct {
+		Inner Inner `json:"inner"`
+	}
 	body := mj(t, map[string]any{"result": map[string]any{"action": "n", "inner": map[string]any{"value": 42}}})
 	srv := newTestServer(t, chatHandler(body, nil, "stop"))
 	c := llm.NewClient(srv.URL, "key", "model")

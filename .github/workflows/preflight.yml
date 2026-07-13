@@ -1,0 +1,34 @@
+name: preflight
+
+# Pre-merge build/test gate for the public go-kit module.
+# Public repos use free GitHub-hosted Actions (ubuntu-latest).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: "off"
+  CGO_ENABLED: "0"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: make preflight
+        run: make preflight

@@ -199,10 +199,10 @@ func TestRenderImage_Integration(t *testing.T) {
 	img, err := chrome.RenderImage(context.Background(),
 		"<html><body><h1>Image</h1></body></html>",
 		chrome.ImageOptions{
-			CDPURL:             url,
-			Format:             chrome.ImageFormatPNG,
-			Width:              800,
-			Height:             600,
+			CDPURL:            url,
+			Format:            chrome.ImageFormatPNG,
+			Width:             800,
+			Height:            600,
 			DeviceScaleFactor: 1.0,
 		},
 	)
@@ -223,10 +223,10 @@ func TestRenderMarkdownToImage_Integration(t *testing.T) {
 		chrome.CombinedImageOptions{
 			HTML: render.Options{},
 			Image: chrome.ImageOptions{
-				CDPURL:             url,
-				Format:             chrome.ImageFormatPNG,
-				Width:              800,
-				Height:             600,
+				CDPURL:            url,
+				Format:            chrome.ImageFormatPNG,
+				Width:             800,
+				Height:            600,
 				DeviceScaleFactor: 1.0,
 			},
 		},

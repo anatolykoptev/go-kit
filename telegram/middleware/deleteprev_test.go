@@ -10,7 +10,10 @@ import (
 
 // TestDeletePrev_DeletesBeforeNext verifies Delete is called before next().
 func TestDeletePrev_DeletesBeforeNext(t *testing.T) {
-	type call struct{ chatID int64; msgID int }
+	type call struct {
+		chatID int64
+		msgID  int
+	}
 	var calls []call
 	del := func(chatID int64, msgID int) error {
 		calls = append(calls, call{chatID, msgID})

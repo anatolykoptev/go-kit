@@ -80,19 +80,19 @@ func TestBreaker_ProbeSuccessClosesBreaker(t *testing.T) {
 func TestBreaker_ProbeFailureReopensWithHigherCooldown(t *testing.T) {
 	b := New(Options{
 		FailThreshold:     1,
-		OpenDuration:      50 * time.Millisecond,
+		OpenDuration:      200 * time.Millisecond,
 		BackoffMultiplier: 2.0,
-		MaxOpenDuration:   500 * time.Millisecond,
+		MaxOpenDuration:   2 * time.Second,
 	})
-	b.Record(false) // trip #1, cooldown = 50ms
-	time.Sleep(80 * time.Millisecond)
+	b.Record(false) // trip #1, cooldown = 200ms
+	time.Sleep(300 * time.Millisecond)
 	b.Allow()       // → half-open
-	b.Record(false) // probe failed → open trip #2, cooldown = 100ms
-	time.Sleep(60 * time.Millisecond)
+	b.Record(false) // probe failed → open trip #2, cooldown = 400ms
+	time.Sleep(200 * time.Millisecond)
 	if b.Allow() {
-		t.Fatal("should still be open (cooldown 100ms not yet elapsed)")
+		t.Fatal("should still be open (cooldown 400ms not yet elapsed)")
 	}
-	time.Sleep(60 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	if !b.Allow() {
 		t.Fatal("should allow probe after cooldown 2 elapses")
 	}

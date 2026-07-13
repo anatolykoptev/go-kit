@@ -252,6 +252,7 @@ func TestTypstRenderImage_RemoteImage(t *testing.T) {
 		t.Fatalf("output is not PNG (first 8 bytes: % x)", out[:min(8, len(out))])
 	}
 }
+
 // NOTE: TestTypstRenderImage_GoldenRealisticContent lives in typst_image_test.go
 // (package typst_test) because it uses the updateGolden flag defined there.
 

@@ -307,7 +307,6 @@ func TestModelRegistry_ConcurrentColdStart_SingleFetch(t *testing.T) {
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // Auth header tests (TDD: written RED before the fix).
 // ---------------------------------------------------------------------------

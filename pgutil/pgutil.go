@@ -16,10 +16,10 @@ import (
 
 // Default retry parameters for postgres startup connections.
 const (
-	DefaultMaxAttempts      = 10
-	DefaultInitDelay        = time.Second
-	DefaultMaxDelay         = 30 * time.Second
-	DefaultHealthInterval   = 15 * time.Second
+	DefaultMaxAttempts    = 10
+	DefaultInitDelay      = time.Second
+	DefaultMaxDelay       = 30 * time.Second
+	DefaultHealthInterval = 15 * time.Second
 )
 
 // Options configures the Connect and Lazy behavior.

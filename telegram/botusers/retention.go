@@ -51,7 +51,6 @@ func NewRetentionSweeper(store Store, opts ...Option) *RetentionSweeper {
 	}
 }
 
-
 // Run blocks and performs a sweep at every SweepInterval until ctx is
 // cancelled. Safe to call without go (synchronous), or as go sweeper.Run(ctx).
 //
