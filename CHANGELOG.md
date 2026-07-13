@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.95.2](https://github.com/anatolykoptev/go-kit/compare/v0.95.1...v0.95.2) (2026-07-13)
+
+
+### Fixed
+
+* widen fsm session flow/step columns from VARCHAR to TEXT ([#155](https://github.com/anatolykoptev/go-kit/issues/155)) ([af84d1a](https://github.com/anatolykoptev/go-kit/commit/af84d1aab184183544ca205b49bb25b3d2455620))
+
 ## [0.95.1](https://github.com/anatolykoptev/go-kit/compare/v0.95.0...v0.95.1) (2026-07-13)
 
 
