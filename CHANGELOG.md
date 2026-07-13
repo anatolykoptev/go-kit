@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.96.0](https://github.com/anatolykoptev/go-kit/compare/v0.95.0...v0.96.0) (2026-07-13)
+
+
+### Features
+
+* **httputil:** export DenyBlockedAddress + add SSRFGuards() with owned hop-cap (step 1/4) ([#151](https://github.com/anatolykoptev/go-kit/issues/151)) ([bbd818a](https://github.com/anatolykoptev/go-kit/commit/bbd818a159a9cb9b5eec701cc46f0f0ec7921172))
+
+
+### Documentation
+
+* add release-please guard rule to CLAUDE.md ([#148](https://github.com/anatolykoptev/go-kit/issues/148)) ([ec9fc24](https://github.com/anatolykoptev/go-kit/commit/ec9fc24382429b96668770e9e66097d5e950bded))
+* translate CLAUDE.md rule to English ([#150](https://github.com/anatolykoptev/go-kit/issues/150)) ([a9dc2f6](https://github.com/anatolykoptev/go-kit/commit/a9dc2f64e20eb9506c0d6477e7a01269df69a40b))
+* trim release-please guard rule to one line ([#149](https://github.com/anatolykoptev/go-kit/issues/149)) ([88bfc63](https://github.com/anatolykoptev/go-kit/commit/88bfc63b386093a0a3dc519fd501b3458301bd27))
+
 ## [0.95.0](https://github.com/anatolykoptev/go-kit/compare/v0.94.0...v0.95.0) (2026-07-01)
 
 
