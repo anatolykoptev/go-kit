@@ -180,6 +180,39 @@ func TestOnRecover_FiresOnClose(t *testing.T) {
 	}
 }
 
+// TestBreaker_PanicInCallbackDoesNotCrash verifies that a panic in OnTrip or
+// OnRecover is recovered and does not crash the process. Before the fix,
+// callbacks were launched as bare goroutines with no recover — a panic
+// propagated and killed the entire program.
+func TestBreaker_PanicInCallbackDoesNotCrash(t *testing.T) {
+	// OnTrip panics; the breaker must not crash the test process.
+	b := New(Options{
+		Name:          "panic-svc",
+		FailThreshold: 1,
+		OpenDuration:  10 * time.Millisecond,
+		OnTrip:        func(name string) { panic("boom") },
+		OnRecover:     func(name string) { panic("recover-boom") },
+	})
+
+	// Trip the breaker — OnTrip fires (and panics).
+	b.Record(false)
+	if b.State() != StateOpen {
+		t.Fatalf("state = %s, want open after trip", b.State())
+	}
+
+	// Wait for cooldown, then recover — OnRecover fires (and panics).
+	time.Sleep(30 * time.Millisecond)
+	b.Allow()      // → half-open
+	b.Record(true) // → closed, OnRecover fires
+
+	// Give the goroutines time to run (and panic). If the recover guard is
+	// missing, the test process would have already crashed by now.
+	time.Sleep(50 * time.Millisecond)
+	if b.State() != StateClosed {
+		t.Fatalf("state = %s, want closed after recover", b.State())
+	}
+}
+
 func TestMaxHalfOpenCalls_AllowsConfiguredParallelism(t *testing.T) {
 	b := New(Options{
 		FailThreshold:    1,
