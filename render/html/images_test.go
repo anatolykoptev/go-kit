@@ -314,6 +314,53 @@ func TestFetchHTTP_SSRFBlocked(t *testing.T) {
 	}
 }
 
+// TestFetchHTTP_RejectsNonImageContent verifies that a server returning
+// non-image content (e.g. text/html) with a non-image Content-Type and a
+// body that does NOT match any known image magic bytes is rejected — the
+// "not an image" guard must actually fire. Before the fix, sniffImageMIME
+// defaulted to "image/png" for unrecognized payloads, making the guard
+// unreachable and allowing arbitrary content to be embedded as a data URL.
+func TestFetchHTTP_RejectsNonImageContent(t *testing.T) {
+	allowAllIPs(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><body>not an image</body></html>"))
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL + "/page.html")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, fetchErr := fetchHTTP(context.Background(), u, render.ImageEmbedOptions{}, defaultImageMaxBytes, 5*time.Second)
+	if fetchErr == nil {
+		t.Fatal("fetchHTTP succeeded for text/html content, want rejection")
+	}
+}
+
+// TestEmbedImages_HTTPNonImage verifies through the public embedImages entry
+// point that a non-image HTTP response leaves the AST destination untouched
+// (the per-image error is swallowed by embedImages, but the destination must
+// NOT be replaced with a data URL).
+func TestEmbedImages_HTTPNonImage(t *testing.T) {
+	allowAllIPs(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>not an image</html>"))
+	}))
+	defer srv.Close()
+
+	url := srv.URL + "/page.html"
+	doc, src := parseMarkdownWithImage(t, "![x]("+url+")")
+	if err := embedImages(context.Background(), doc, src, render.ImageEmbedOptions{}); err != nil {
+		t.Fatalf("embedImages: %v", err)
+	}
+	img := firstImage(doc)
+	if string(img.Destination) != url {
+		t.Fatalf("non-image content was embedded — destination mutated to %q", img.Destination)
+	}
+}
+
 // TestEmbedImages_SymlinkEscape verifies that a symlink inside the workspace
 // pointing at a file outside the workspace is rejected. filepath.Abs alone
 // does NOT follow symlinks, so before the EvalSymlinks fix a symlink escape
