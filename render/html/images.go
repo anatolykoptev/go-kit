@@ -191,7 +191,11 @@ func readWorkspaceFile(path, workspace string, maxBytes int64) (string, error) {
 	if int64(len(data)) > maxBytes {
 		return "", fmt.Errorf("image exceeds %d bytes", maxBytes)
 	}
-	return encodeDataURL(data, sniffImageMIME(data, "")), nil
+	mime := sniffImageMIME(data, "")
+	if !strings.HasPrefix(mime, "image/") {
+		return "", fmt.Errorf("not an image: mime=%q", mime)
+	}
+	return encodeDataURL(data, mime), nil
 }
 
 // fetchHTTP downloads an image over http(s) with SSRF and size/timeout
@@ -253,8 +257,10 @@ func encodeDataURL(data []byte, mime string) string {
 
 // sniffImageMIME picks a MIME type for the payload. Prefers a trusted
 // Content-Type header when it starts with "image/"; otherwise falls back to
-// a first-4-bytes magic check. Defaults to "image/png" for unrecognized
-// payloads to keep embedding best-effort.
+// a first-4-bytes magic check. Returns "" for unrecognized payloads so the
+// caller's "not an image" guard actually fires — a previous version defaulted
+// to "image/png", which made that guard unreachable and allowed arbitrary
+// content (e.g. text/html) to be embedded as a data URL.
 func sniffImageMIME(data []byte, contentType string) string {
 	if contentType != "" {
 		ct := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
@@ -276,5 +282,5 @@ func sniffImageMIME(data []byte, contentType string) string {
 			return "image/svg+xml"
 		}
 	}
-	return "image/png"
+	return ""
 }
