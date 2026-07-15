@@ -176,6 +176,30 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+* **httputil:** `SecurityHeaders` no longer sets `Cache-Control: no-store` by default.
+  Cache policy is orthogonal to security headers — marketing pages, API endpoints,
+  and authed admin pages have fundamentally different caching requirements. Setting
+  a blanket `no-store` for every response forces cold round-trips on public pages
+  (observed: oxpulse-admin landing at partners.oxpulse.chat, 520–1025ms TTFB on
+  warm connections vs 44ms expected with browser caching).
+
+  **Migration:** callers that relied on the implicit `no-store` must add an explicit
+  declaration. Two options:
+
+  ```go
+  // Option A: via SecurityHeaders option (single call covers both concerns)
+  httputil.SecurityHeaders(w, httputil.WithCacheControl("no-store"))
+
+  // Option B: direct header set
+  w.Header().Set("Cache-Control", "no-store")
+  ```
+
+  **Known downstream consumers requiring migration:**
+  - `go-nerv/internal/admin/auth.go:67` — calls `httputil.SecurityHeaders(w)`; authed admin, add `WithCacheControl("no-store")`
+  - `oxpulse-admin/internal/admin/auth.go:120` — calls `httputil.SecurityHeaders(w, httputil.WithCSP(...))`; authed admin, add `WithCacheControl("no-store")`
+
 ### Fixed
 
 * **httputil:** `SecurityHeaders` default CSP now includes `'self'` in
