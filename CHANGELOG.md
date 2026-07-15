@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.1](https://github.com/anatolykoptev/go-kit/compare/v0.97.0...v0.97.1) (2026-07-15)
+
+
+### Added
+
+* **llm:** multi-proxy endpoint builder for proxy-level redundancy ([#177](https://github.com/anatolykoptev/go-kit/issues/177)) ([bb14a9d](https://github.com/anatolykoptev/go-kit/commit/bb14a9df21ecee8641fcfeb7bf470541580abc51))
+
 ## [0.97.0](https://github.com/anatolykoptev/go-kit/compare/v0.96.0...v0.97.0) (2026-07-15)
 
 
