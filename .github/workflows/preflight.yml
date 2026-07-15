@@ -26,6 +26,12 @@ permissions:
 
 env:
   GOWORK: "off"
+  # CGO_ENABLED=0: embed/onnx requires libtokenizers + libonnxruntime (C
+  # libs not available on ubuntu-latest). The package has a !cgo stub that
+  # returns ErrNoCGO — tests skip the cgo path. The race detector requires
+  # CGO, so -race is not used on this runner (the Makefile's RACE var
+  # auto-disables when CGO_ENABLED=0).
+  CGO_ENABLED: "0"
 
 jobs:
   preflight:
