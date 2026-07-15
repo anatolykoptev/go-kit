@@ -34,7 +34,12 @@ run_tests() {
   # the throwaway DB concurrently with other packages that might also pick up
   # TEST_DATABASE_URL. The FSM tests DROP TABLE in t.Cleanup, and parallel
   # package execution could race the DROP against a concurrent test's SELECT.
-  GOWORK=off go test -p 1 -race -count=1 ./...
+  # -race only when CGO is enabled (race detector requires cgo).
+  local race_flag=""
+  if [ "${CGO_ENABLED:-1}" = "1" ]; then
+    race_flag="-race"
+  fi
+  GOWORK=off go test -p 1 $race_flag -count=1 ./...
 }
 
 # If TEST_DATABASE_URL is already set (GitHub Actions services:, or manual
