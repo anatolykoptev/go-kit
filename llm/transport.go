@@ -279,12 +279,15 @@ func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatRespo
 			}
 			lastErr = err
 
-			// A per-attempt DeadlineExceeded where the outer ctx is still alive
-			// means this endpoint was slow (not a genuine give-up by the caller).
-			// Treat it as retryable-advance: continue to the next endpoint.
-			// If the outer ctx is also done, fall through to the asRetryable gate,
-			// which will return non-retryable → abort the chain (correct).
-			if c.perAttemptTimeout > 0 && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// A DeadlineExceeded where the outer ctx is still alive means this
+			// endpoint was slow (not a genuine give-up by the caller). The
+			// deadline could come from either the per-attempt timeout (when
+			// configured) or the HTTP client's own timeout (default 90s). In
+			// both cases the endpoint is too slow — treat it as retryable-
+			// advance: continue to the next endpoint.
+			// If the outer ctx is also done, fall through to the asRetryable
+			// gate, which will return non-retryable → abort the chain (correct).
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				continue
 			}
 

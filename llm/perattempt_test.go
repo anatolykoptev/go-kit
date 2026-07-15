@@ -224,3 +224,59 @@ func TestPerAttemptTimeout_OuterCtxStillCeiling(t *testing.T) {
 		t.Error("calls[0].err = nil, want deadline error")
 	}
 }
+
+// TestChainAdvanceOnHTTPClientTimeout verifies that when the HTTP client's own
+// timeout fires (not a per-attempt timeout) and the outer ctx is still alive,
+// the chain advances to the next endpoint. This is the fix for the issue where
+// go-wp (which does NOT set WithPerAttemptTimeout) would pay the full 90s HTTP
+// client timeout per model and then abort, instead of advancing to the next
+// model in the chain.
+func TestChainAdvanceOnHTTPClientTimeout(t *testing.T) {
+	const httpTimeout = 150 * time.Millisecond
+	const slowSleep = 600 * time.Millisecond
+
+	slowSrv, fastSrv := slowThenFastServers(t, slowSleep, "from-fast")
+	defer slowSrv.Close()
+	defer fastSrv.Close()
+
+	_, calls, obs := newObserver()
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: slowSrv.URL, Key: "k", Model: "slow-model"},
+			{URL: fastSrv.URL, Key: "k", Model: "fast-model"},
+		}),
+		llm.WithMaxRetries(1),
+		// NO WithPerAttemptTimeout — the HTTP client timeout is the only bound.
+		llm.WithHTTPClient(&http.Client{Timeout: httpTimeout}),
+		llm.WithEndpointAttemptObserver(obs),
+	)
+
+	outerCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	out, err := c.Complete(outerCtx, "", "test")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "from-fast" {
+		t.Errorf("output = %q, want %q (chain should have advanced to fast-model)", out, "from-fast")
+	}
+	// Should complete in roughly httpTimeout + fast latency, well under slowSleep.
+	if elapsed >= slowSleep {
+		t.Errorf("elapsed %v >= slow sleep %v — HTTP client timeout did not fire / chain did not advance", elapsed, slowSleep)
+	}
+
+	// Observer must have fired twice: slow-model (timeout) + fast-model (success).
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 observer calls (slow timeout + fast success), got %d: %+v", len(*calls), *calls)
+	}
+	if (*calls)[0].model != "slow-model" || (*calls)[0].err == nil {
+		t.Errorf("calls[0] = %+v, want {slow-model, non-nil err}", (*calls)[0])
+	}
+	if (*calls)[1].model != "fast-model" || (*calls)[1].err != nil {
+		t.Errorf("calls[1] = %+v, want {fast-model, nil err}", (*calls)[1])
+	}
+}
