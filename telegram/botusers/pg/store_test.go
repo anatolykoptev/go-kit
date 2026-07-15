@@ -26,9 +26,15 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("pgxpool.New: %v", err)
 	}
 	t.Cleanup(func() {
-		// Clean up tables so tests are repeatable.
-		pool.Exec(context.Background(), "DROP TABLE IF EXISTS bot_user_events") //nolint:errcheck
-		pool.Exec(context.Background(), "DROP TABLE IF EXISTS bot_users")       //nolint:errcheck
+		// Use a timeout context — context.Background() hangs indefinitely
+		// if the pool's background health-check connection holds a lock
+		// that blocks DROP TABLE. With a timeout, the worst case is the
+		// table isn't dropped (the next subtest's setup does its own
+		// DROP TABLE IF EXISTS anyway).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		pool.Exec(ctx, "DROP TABLE IF EXISTS bot_user_events") //nolint:errcheck
+		pool.Exec(ctx, "DROP TABLE IF EXISTS bot_users")       //nolint:errcheck
 		pool.Close()
 	})
 	return pool
@@ -53,9 +59,11 @@ func TestPgStore_Contract(t *testing.T) {
 		// Each sub-test gets a fresh store; Apply is idempotent so calling
 		// it again on an existing schema is safe.
 		// Drop and recreate for test isolation.
-		pool.Exec(context.Background(), "DROP TABLE IF EXISTS bot_user_events") //nolint:errcheck
-		pool.Exec(context.Background(), "DROP TABLE IF EXISTS bot_users")       //nolint:errcheck
-		s, err := pg.New(context.Background(), pool)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		pool.Exec(ctx, "DROP TABLE IF EXISTS bot_user_events") //nolint:errcheck
+		pool.Exec(ctx, "DROP TABLE IF EXISTS bot_users")       //nolint:errcheck
+		s, err := pg.New(ctx, pool)
 		if err != nil {
 			t.Fatalf("pg.New: %v", err)
 		}

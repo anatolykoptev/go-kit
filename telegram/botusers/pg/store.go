@@ -359,6 +359,11 @@ func (s *Store) Forget(ctx context.Context, botID string, tgID int64) error {
 		return fmt.Errorf("pg: forget user: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		// Rollback before returning — the defer only rolls back when
+		// err != nil, but err is nil here (tx.Exec succeeded). Without
+		// this rollback the transaction stays open, holding a lock and
+		// a pool connection that pool.Close() will wait on forever.
+		_ = tx.Rollback(ctx)
 		return botusers.ErrNotFound
 	}
 
