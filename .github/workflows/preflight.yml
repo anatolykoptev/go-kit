@@ -1,35 +1,22 @@
 name: preflight
 
-# Pre-merge build/test gate on the self-hosted runner on krolik — NOT paid
-# GitHub-hosted Actions (operator rule: only self-hosted; free minutes).
+# Pre-merge build/test gate for the public go-kit module.
+# Public repos get free GitHub-hosted Actions minutes — no self-hosted runner
+# needed. Postgres is provisioned as a `services:` container so the
+# telegram/fsm Postgres-backed guard tests — including the #155 regression
+# (VARCHAR-too-narrow → 0 rows persisted) — run FOR REAL instead of
+# t.Skip-ing (skip-to-green is forbidden: a DB test that t.Skips for a
+# missing dep gets the dep provisioned, not skipped).
 #
-# `make preflight` runs `make test-db`, which spins an ephemeral throwaway
-# Postgres 16 (scripts/test-db.sh, unique container per PID, torn down on
-# exit — never the live shared Postgres on :5432) and exports
-# TEST_DATABASE_URL, so the telegram/fsm Postgres-backed guard tests —
-# including the #155 regression (VARCHAR-too-narrow → 0 rows persisted) —
-# run FOR REAL instead of t.Skip-ing (skip-to-green is forbidden: a DB test
-# that t.Skips for a missing dep gets the dep provisioned, not skipped).
-#
-# golangci-lint runs with `cache clean` first: this runner is non-ephemeral
-# and shares $HOME/.cache/golangci-lint with ad-hoc local runs on the same
-# host/user; golangci's results cache is content-hash keyed and a hit
-# replays the ORIGINAL absolute file path, which --new-from-merge-base then
-# fails to match against the diff and silently drops the issue — a real
-# synthetic-green. --allow-parallel-runners is required because golangci's
-# lock is GLOBAL on this shared box (not per-cache), so a concurrent lint on
-# another repo's runner would otherwise false-red this job.
-# --new-from-merge-base is a ratchet: it tolerates any pre-existing backlog
-# but fails the moment a PR introduces a NEW issue. fetch-depth: 0 lets it
-# resolve origin/main's full history.
+# golangci-lint runs via the official action with only-new-issues (ratchet:
+# tolerates pre-existing backlog, fails the moment a PR introduces a NEW
+# issue). fetch-depth: 0 lets --new-from-merge-base resolve origin/main.
 
 on:
   push:
     branches: [main]
   pull_request:
 
-# One run per ref; cancel in-flight if a new push arrives. Keeps the shared
-# 4-core prod box free between runs.
 concurrency:
   group: preflight-${{ github.ref }}
   cancel-in-progress: true
@@ -42,23 +29,42 @@ env:
 
 jobs:
   preflight:
-    # Same-repo guard: stops a fork PR (if the repo ever goes private→public)
-    # from running arbitrary workflow code on the prod runner.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, krolik]
-    # Bound the shared 4-core prod runner's exposure to a hung `go test -race`
-    # (GH default is 360min). Steady-state is a few minutes; 40 covers the DB
-    # suite plus headroom on a loaded box, matching go-hully's value.
-    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -p 5432 -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgres://test:test@localhost:5432/testdb?sslmode=disable
+
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: make preflight
         run: make preflight
 
-      - name: golangci-lint (only new issues vs origin/main)
-        run: |
-          ~/.local/bin/golangci-lint cache clean
-          ~/.local/bin/golangci-lint run --allow-parallel-runners --timeout=30m --new-from-merge-base=origin/main ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=10m --new-from-merge-base=origin/main ./...
+          only-new-issues: true
