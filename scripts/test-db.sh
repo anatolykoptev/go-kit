@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # test-db.sh — run the DB-backed test suites against a THROWAWAY Postgres 16.
 #
-# Spins up an ephemeral postgres:16-alpine on 127.0.0.1:55434 (NOT the live
-# shared Postgres on :5432), exports TEST_DATABASE_URL to it, runs the full
-# test suite, and ALWAYS tears the container down (trap on EXIT — even on
-# test failure or Ctrl-C). The container name is unique per run so concurrent
-# invocations and stale leftovers never collide.
+# If TEST_DATABASE_URL is already set (e.g. by GitHub Actions `services:`),
+# uses it directly — no Docker container is started. This lets the same
+# `make preflight` work on both:
+#   - GitHub-hosted runners (ubuntu-latest + services: postgres)
+#   - Local/self-hosted runs (spins an ephemeral postgres:16-alpine)
+#
+# When TEST_DATABASE_URL is unset, spins up an ephemeral postgres:16-alpine
+# on 127.0.0.1:55434 (NOT the live shared Postgres on :5432), exports
+# TEST_DATABASE_URL to it, runs the full test suite, and ALWAYS tears the
+# container down (trap on EXIT — even on test failure or Ctrl-C). The
+# container name is unique per run so concurrent invocations and stale
+# leftovers never collide.
 #
 # This is the ONLY way the telegram/fsm Postgres-backed guard tests actually
 # run: they t.Skip when TEST_DATABASE_URL is unset, and skip-to-green is
@@ -20,6 +27,28 @@
 #
 # Usage: make test-db   (or: bash scripts/test-db.sh)
 set -euo pipefail
+
+run_tests() {
+  echo ">> running full test suite with TEST_DATABASE_URL"
+  # -p 1: run packages one at a time so the FSM Postgres suite does not share
+  # the throwaway DB concurrently with other packages that might also pick up
+  # TEST_DATABASE_URL. The FSM tests DROP TABLE in t.Cleanup, and parallel
+  # package execution could race the DROP against a concurrent test's SELECT.
+  # -race only when CGO is enabled (race detector requires cgo).
+  local race_flag=""
+  if [ "${CGO_ENABLED:-1}" = "1" ]; then
+    race_flag="-race"
+  fi
+  GOWORK=off go test -p 1 $race_flag -count=1 ./...
+}
+
+# If TEST_DATABASE_URL is already set (GitHub Actions services:, or manual
+# env), use it directly — no Docker needed.
+if [ -n "${TEST_DATABASE_URL:-}" ]; then
+  echo ">> TEST_DATABASE_URL already set — using external Postgres"
+  run_tests
+  exit 0
+fi
 
 PORT="${TEST_DB_PORT:-55434}"
 NAME="gokit-test-pg-$$"            # unique per process; $$ = PID
@@ -62,9 +91,4 @@ done
 export TEST_DATABASE_URL="postgres://${PGUSER}:${PGPASS}@127.0.0.1:${PORT}/${PGDB}?sslmode=disable"
 echo ">> TEST_DATABASE_URL set (ephemeral; NOT live shared Postgres)"
 
-echo ">> running full test suite with TEST_DATABASE_URL"
-# -p 1: run packages one at a time so the FSM Postgres suite does not share
-# the throwaway DB concurrently with other packages that might also pick up
-# TEST_DATABASE_URL. The FSM tests DROP TABLE in t.Cleanup, and parallel
-# package execution could race the DROP against a concurrent test's SELECT.
-GOWORK=off go test -p 1 -race -count=1 ./...
+run_tests
