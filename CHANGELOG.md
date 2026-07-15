@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.96.0](https://github.com/anatolykoptev/go-kit/compare/v0.95.2...v0.96.0) (2026-07-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **httputil:** Cache-Control is no longer set by default. Any handler relying on SecurityHeaders for implicit no-store must add an explicit WithCacheControl("no-store") or equivalent w.Header().Set call.
+
+### Fixed
+
+* **breaker:** recover-guard OnTrip/OnRecover callbacks — panic no longer crashes process ([#167](https://github.com/anatolykoptev/go-kit/issues/167)) ([352ab2d](https://github.com/anatolykoptev/go-kit/commit/352ab2df4432d83872bbb758c2684edc8548222c))
+* **httputil:** drop implicit Cache-Control: no-store from SecurityHeaders ([#56](https://github.com/anatolykoptev/go-kit/issues/56)) ([82110a3](https://github.com/anatolykoptev/go-kit/commit/82110a306f70d9da1cd6adb402ac807654ef1daf))
+* **llm:** Stream() now applies reasoning_effort gating + perAttemptTimeout ([#169](https://github.com/anatolykoptev/go-kit/issues/169)) ([c81acd1](https://github.com/anatolykoptev/go-kit/commit/c81acd111b646603a7f724a2f85729a1700f6e9f))
+* **render/html:** sniffImageMIME returns "" for unrecognized content — close content-type bypass ([#165](https://github.com/anatolykoptev/go-kit/issues/165)) ([cabcbd2](https://github.com/anatolykoptev/go-kit/commit/cabcbd2742fa04fdf48ce44d66f866c13c768938))
+* **session/redis:** log + count Redis persist failures instead of silent swallow ([#168](https://github.com/anatolykoptev/go-kit/issues/168)) ([38d1fe3](https://github.com/anatolykoptev/go-kit/commit/38d1fe307512dec3aa03a310cbf29b03f4c493ff))
+
 ## [0.95.2](https://github.com/anatolykoptev/go-kit/compare/v0.95.1...v0.95.2) (2026-07-13)
 
 
