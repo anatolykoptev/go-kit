@@ -80,19 +80,19 @@ func TestBreaker_ProbeSuccessClosesBreaker(t *testing.T) {
 func TestBreaker_ProbeFailureReopensWithHigherCooldown(t *testing.T) {
 	b := New(Options{
 		FailThreshold:     1,
-		OpenDuration:      50 * time.Millisecond,
+		OpenDuration:      200 * time.Millisecond,
 		BackoffMultiplier: 2.0,
-		MaxOpenDuration:   500 * time.Millisecond,
+		MaxOpenDuration:   2 * time.Second,
 	})
-	b.Record(false) // trip #1, cooldown = 50ms
-	time.Sleep(80 * time.Millisecond)
+	b.Record(false) // trip #1, cooldown = 200ms
+	time.Sleep(300 * time.Millisecond)
 	b.Allow()       // → half-open
-	b.Record(false) // probe failed → open trip #2, cooldown = 100ms
-	time.Sleep(60 * time.Millisecond)
+	b.Record(false) // probe failed → open trip #2, cooldown = 400ms
+	time.Sleep(200 * time.Millisecond)
 	if b.Allow() {
-		t.Fatal("should still be open (cooldown 100ms not yet elapsed)")
+		t.Fatal("should still be open (cooldown 400ms not yet elapsed)")
 	}
-	time.Sleep(60 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	if !b.Allow() {
 		t.Fatal("should allow probe after cooldown 2 elapses")
 	}
@@ -177,6 +177,39 @@ func TestOnRecover_FiresOnClose(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("OnRecover did not fire")
+	}
+}
+
+// TestBreaker_PanicInCallbackDoesNotCrash verifies that a panic in OnTrip or
+// OnRecover is recovered and does not crash the process. Before the fix,
+// callbacks were launched as bare goroutines with no recover — a panic
+// propagated and killed the entire program.
+func TestBreaker_PanicInCallbackDoesNotCrash(t *testing.T) {
+	// OnTrip panics; the breaker must not crash the test process.
+	b := New(Options{
+		Name:          "panic-svc",
+		FailThreshold: 1,
+		OpenDuration:  10 * time.Millisecond,
+		OnTrip:        func(name string) { panic("boom") },
+		OnRecover:     func(name string) { panic("recover-boom") },
+	})
+
+	// Trip the breaker — OnTrip fires (and panics).
+	b.Record(false)
+	if b.State() != StateOpen {
+		t.Fatalf("state = %s, want open after trip", b.State())
+	}
+
+	// Wait for cooldown, then recover — OnRecover fires (and panics).
+	time.Sleep(30 * time.Millisecond)
+	b.Allow()      // → half-open
+	b.Record(true) // → closed, OnRecover fires
+
+	// Give the goroutines time to run (and panic). If the recover guard is
+	// missing, the test process would have already crashed by now.
+	time.Sleep(50 * time.Millisecond)
+	if b.State() != StateClosed {
+		t.Fatalf("state = %s, want closed after recover", b.State())
 	}
 }
 

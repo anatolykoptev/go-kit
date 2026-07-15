@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	session "github.com/anatolykoptev/go-kit/session"
@@ -13,9 +15,9 @@ import (
 )
 
 const (
-	defaultPrefix       = "session:"
-	scanPageSize        = 100
-	contentTruncSuffix  = "\n... [truncated]"
+	defaultPrefix      = "session:"
+	scanPageSize       = 100
+	contentTruncSuffix = "\n... [truncated]"
 )
 
 // Store is a Redis-backed implementation of session.Store.
@@ -29,6 +31,14 @@ type Store struct {
 	maxContent int
 	maxFacts   int
 	mu         sync.Mutex // guards read-modify-write cycles
+
+	// persistErrors counts Redis SET failures during modify(). Incremented
+	// atomically so callers can inspect it for observability — modify()
+	// itself cannot return errors without breaking the session.Store
+	// interface (all write methods return void). A non-zero count means
+	// session data was mutated in memory but NOT persisted to Redis; the
+	// next load() will return stale or missing data.
+	persistErrors atomic.Int64
 }
 
 // Options configures the Redis store.
@@ -89,10 +99,31 @@ func (s *Store) modify(key string, fn func(*session.Session)) {
 	ctx := context.Background()
 	sess, err := s.load(ctx, key)
 	if err != nil {
+		s.persistErrors.Add(1)
+		slog.Warn("session/redis: load failed — session mutation NOT applied",
+			slog.String("key", key),
+			slog.Any("error", err),
+		)
 		return
 	}
 	fn(sess)
-	_ = s.persist(ctx, sess) //nolint:errcheck // best-effort persistence
+	if err := s.persist(ctx, sess); err != nil {
+		s.persistErrors.Add(1)
+		slog.Warn("session/redis: persist failed — session data NOT saved to Redis",
+			slog.String("key", key),
+			slog.Any("error", err),
+		)
+	}
+}
+
+// PersistErrors returns the number of Redis SET failures observed during
+// modify() calls since the store was created. A non-zero count indicates
+// session mutations that were applied in-memory but NOT persisted to Redis.
+// Use this for observability: the session.Store interface returns void from
+// write methods, so this counter is the only signal that persistence is
+// failing.
+func (s *Store) PersistErrors() int64 {
+	return s.persistErrors.Load()
 }
 
 func (s *Store) truncateContent(msg *session.Message) {

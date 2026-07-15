@@ -1,0 +1,249 @@
+/* Default report style. Many class selectors (.confidential, .cve, .severity-*) are opt-in hooks for CustomCSS callers; plain markdown only emits h1-h6, p, ul, ol, li, code, pre, table, tr, td, th. */
+:root {
+  --brand-primary: #8B1A1A;   /* report: signature red */
+  --brand-accent:  #C0392B;
+  --text-body:     #222;
+  --text-muted:    #666;
+  --text-strong:   #1a1a1a;
+  --bg-cream:      #FAF7F2;
+  --bg-card:       #F7F7F7;
+  --border-soft:   #E0E0E0;
+}
+@page {
+  size: letter;
+  margin: 50px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #222;
+  padding: 0;
+}
+.confidential {
+  text-align: right;
+  font-size: 8px;
+  color: #999;
+  margin-bottom: 20px;
+}
+
+/* Title */
+h1.report-title {
+  font-size: 28px;
+  color: #8B1A1A;
+  margin-bottom: 10px;
+  font-weight: bold;
+}
+.title-line {
+  border: none;
+  border-top: 3px solid #C0392B;
+  margin-bottom: 8px;
+}
+
+/* Meta block */
+.meta { margin-bottom: 24px; }
+.meta p { font-size: 10px; margin: 2px 0; }
+.meta strong { font-weight: bold; }
+
+/* Section headings */
+h2 {
+  font-size: 18px;
+  color: #8B1A1A;
+  margin-top: 28px;
+  margin-bottom: 4px;
+  font-weight: bold;
+}
+h2.section-title {
+  border-bottom: 1.5px solid #8B1A1A;
+  padding-bottom: 4px;
+  margin-bottom: 10px;
+}
+
+/* Subsection */
+h3 {
+  font-size: 13px;
+  color: #2C3E50;
+  margin-top: 14px;
+  margin-bottom: 6px;
+  font-weight: bold;
+}
+
+/* Finding title */
+h4 {
+  font-size: 11px;
+  font-weight: bold;
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
+/* CVE class */
+.cve {
+  font-size: 11px;
+  font-weight: bold;
+  color: #2C3E50;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+/* Body text */
+p { font-size: 10px; margin: 4px 0; line-height: 1.4; }
+.impact { margin-top: 4px; margin-bottom: 8px; }
+
+/* Bullet lists */
+ul { margin: 4px 0 4px 24px; }
+ul li { font-size: 10px; margin: 1px 0; line-height: 1.3; }
+
+/* Numbered lists */
+ol { margin: 4px 0 4px 24px; }
+ol li { font-size: 10px; margin: 2px 0; line-height: 1.3; }
+
+/* Code blocks */
+.code-light {
+  background: #F5F5F5;
+  font-family: Courier, monospace;
+  font-size: 9px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.code-dark {
+  background: #2D2D2D;
+  color: #E0E0E0;
+  font-family: Courier, monospace;
+  font-size: 9px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+code {
+  font-family: Courier, monospace;
+  font-size: 9px;
+  background: #F0F0F0;
+  padding: 1px 3px;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6px 0 10px 0;
+  font-size: 9px;
+}
+th {
+  background: #2C3E50;
+  color: white;
+  font-weight: bold;
+  text-align: left;
+  padding: 5px 6px;
+  font-size: 9px;
+}
+td {
+  padding: 5px 6px;
+  border: 0.5px solid #DDD;
+  vertical-align: top;
+  font-size: 9px;
+}
+tr:nth-child(even) td { background: #F5F5F5; }
+
+/* Dividers */
+hr.section-divider {
+  border: none;
+  border-top: 0.5px solid #CCC;
+  margin: 16px 0;
+}
+
+/* Page breaks */
+.page-break { page-break-before: always; }
+
+/* Risk colors */
+.risk-high { color: #C0392B; font-weight: bold; }
+.risk-medium { color: #E67E22; font-weight: bold; }
+.risk-low { color: #27AE60; font-weight: bold; }
+
+/* Severity badges */
+.severity-critical { color: #8B1A1A; font-weight: bold; text-transform: uppercase; }
+.severity-high { color: #C0392B; font-weight: bold; text-transform: uppercase; }
+.severity-medium { color: #E67E22; font-weight: bold; text-transform: uppercase; }
+.severity-low { color: #2980B9; font-weight: bold; text-transform: uppercase; }
+.severity-info { color: #7F8C8D; font-weight: bold; text-transform: uppercase; }
+
+/* Table of Contents */
+.toc {
+  margin-bottom: 24px;
+  padding: 10px 14px;
+  background: #F7F7F7;
+  border-left: 3px solid #8B1A1A;
+  font-size: 10px;
+}
+.toc h2 {
+  font-size: 13px;
+  color: #8B1A1A;
+  margin: 0 0 8px 0;
+  padding: 0;
+  border-bottom: none;
+}
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { line-height: 1.5; }
+.toc li.toc-h1 { font-weight: bold; margin-top: 4px; }
+.toc li.toc-h2 { padding-left: 14px; }
+.toc li.toc-h3 { padding-left: 28px; font-size: 9px; color: #444; }
+.toc li.toc-h4, .toc li.toc-h5, .toc li.toc-h6 { padding-left: 42px; font-size: 9px; color: #777; }
+.toc a { color: #2C3E50; text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+
+/* Footer */
+.footer {
+  font-style: italic;
+  font-size: 9px;
+  color: #666;
+  margin-top: 20px;
+}
+
+/* Cover Page */
+.cover-page {
+  page-break-after: always;
+  min-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+  text-align: center;
+}
+.cover-logo {
+  max-width: 200px;
+  max-height: 120px;
+  margin-bottom: 40px;
+}
+.cover-title {
+  font-size: 32px;
+  color: #8B1A1A;
+  margin: 0 0 16px 0;
+  border: none;
+  padding-bottom: 0;
+}
+.cover-subtitle {
+  font-size: 18px;
+  color: #444;
+  margin: 0 0 40px 0;
+  border: none;
+  font-weight: normal;
+  padding-bottom: 0;
+}
+.cover-meta {
+  font-size: 12px;
+  color: #666;
+  margin-top: 60px;
+}
+.cover-author {
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+.cover-date {
+  color: #888;
+}

@@ -221,7 +221,7 @@ func TestDo_MaxElapsedTime(t *testing.T) {
 	start := time.Now()
 	_, err := retry.Do(context.Background(), retry.Options{
 		MaxAttempts:    100,
-		InitialDelay:  10 * time.Millisecond,
+		InitialDelay:   10 * time.Millisecond,
 		MaxElapsedTime: 50 * time.Millisecond,
 	}, func() (string, error) {
 		calls++

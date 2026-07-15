@@ -1,0 +1,81 @@
+name: preflight
+
+# Pre-merge build/test gate for the public go-kit module.
+# Public repos get free GitHub-hosted Actions minutes — no self-hosted runner
+# needed. Postgres is provisioned as a `services:` container so the
+# telegram/fsm Postgres-backed guard tests — including the #155 regression
+# (VARCHAR-too-narrow → 0 rows persisted) — run FOR REAL instead of
+# t.Skip-ing (skip-to-green is forbidden: a DB test that t.Skips for a
+# missing dep gets the dep provisioned, not skipped).
+#
+# golangci-lint runs via the official action with only-new-issues (ratchet:
+# tolerates pre-existing backlog, fails the moment a PR introduces a NEW
+# issue). fetch-depth: 0 lets --new-from-merge-base resolve origin/main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: "off"
+  # CGO_ENABLED=0: embed/onnx requires libtokenizers + libonnxruntime (C
+  # libs not available on ubuntu-latest). The package has a !cgo stub that
+  # returns ErrNoCGO — tests skip the cgo path. The race detector requires
+  # CGO, so -race is not used on this runner (the Makefile's RACE var
+  # auto-disables when CGO_ENABLED=0).
+  CGO_ENABLED: "0"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -p 5432 -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgres://test:test@localhost:5432/testdb?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: make preflight
+        run: make preflight
+
+      # golangci-lint disabled on GH-hosted: golangci-lint-action@v6 ships
+      # v1.64.8 (built with go1.24), which can't load config for go1.26
+      # (go-kit's toolchain). Re-enable once golangci-lint ships a go1.26-
+      # compatible release. Lint runs on the self-hosted runner via
+      # ~/.local/bin/golangci-lint for now.
+      # - name: golangci-lint
+      #   uses: golangci/golangci-lint-action@v6
+      #   with:
+      #     version: latest
+      #     args: --timeout=10m --new-from-merge-base=origin/main ./...
+      #     only-new-issues: true

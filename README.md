@@ -166,6 +166,29 @@ client = llm.NewClient("", "", "",
     }),
 )
 
+// Health-aware fallback chains — skip models the proxy no longer serves.
+// BuildModelChainEndpointsFiltered checks each chain entry against the live
+// {baseURL}/v1/models set, so a model a provider silently removed is dropped
+// instead of burning a 503 round-trip on every request. The /v1/models set is
+// cached per baseURL (default 5m TTL). If /v1/models is unreachable/garbage, or
+// filtering would empty the chain, the FULL unfiltered chain is returned —
+// graceful degradation, never a new failure mode. Existing
+// BuildModelChainEndpoints is unchanged; this is opt-in.
+reg := llm.NewModelRegistry() // share one across a service; caches per baseURL
+eps := llm.BuildModelChainEndpointsFiltered(ctx, reg, baseURL, apiKey,
+    primary, fallbackChain,
+    func(ev llm.ModelFilterEvent) {
+        // observability: operator sees "N models skipped as absent from /v1/models"
+        if ev.Degraded {
+            llmChainDegraded.WithLabelValues(ev.Reason).Inc()
+        }
+        for _, dead := range ev.Dropped {
+            llmModelDropped.WithLabelValues(dead).Inc()
+        }
+    },
+)
+client = llm.NewClient("", "", "", llm.WithEndpoints(eps), llm.WithMaxRetries(1))
+
 // Request/response middleware
 client = llm.NewClient(baseURL, apiKey, model,
     llm.WithMiddleware(func(ctx context.Context, req *llm.ChatRequest,
@@ -187,6 +210,7 @@ client = llm.NewClient(baseURL, apiKey, model,
 - Extract with validation retry (Instructor-style, no Go library does this)
 - Union types via `ExtractOneOf` — LLM picks between response variants
 - Model-level endpoint fallback chains
+- Health-aware chain filtering via `BuildModelChainEndpointsFiltered` + `ModelRegistry` — drops models absent from the proxy's live `/v1/models`, with graceful degradation and a `ModelFilterObserver` counter hook
 - Request/response middleware for logging, metrics, caching
 - Token usage reporting in `ChatResponse`
 - Multimodal support via `CompleteMultimodal`

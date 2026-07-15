@@ -296,3 +296,53 @@ func TestResponseWriter_HijackDelegates(t *testing.T) {
 		t.Fatal("handler did not receive a Hijacker-capable ResponseWriter within 2s")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// WithStdlibPattern convenience option
+// ---------------------------------------------------------------------------
+
+// TestWithStdlibPattern_MatchedRoute verifies that r.Pattern from Go 1.22+
+// stdlib ServeMux is used as the path label for a matched route.
+func TestWithStdlibPattern_MatchedRoute(t *testing.T) {
+	reg := metrics.NewRegistry()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /things/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := httpmw.Middleware(reg, "test", httpmw.WithStdlibPattern())(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/things/42", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Go 1.22 ServeMux sets r.Pattern to the registered pattern string including
+	// the method prefix, e.g. "GET /things/{id}".
+	key := metrics.Label("test_requests_total",
+		"method", "GET",
+		"path", "GET /things/{id}",
+		"code", "200")
+	if got := reg.Value(key); got != 1 {
+		t.Fatalf("matched-pattern counter = %d, want 1", got)
+	}
+}
+
+// TestWithStdlibPattern_NotMatched verifies that an unregistered path falls back
+// to path="unknown" (r.Pattern stays "" for 404s).
+func TestWithStdlibPattern_NotMatched(t *testing.T) {
+	reg := metrics.NewRegistry()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /known", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := httpmw.Middleware(reg, "test", httpmw.WithStdlibPattern())(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/no-such-path", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	key := metrics.Label("test_requests_total",
+		"method", "GET",
+		"path", "unknown",
+		"code", "404")
+	if got := reg.Value(key); got != 1 {
+		t.Fatalf("unmatched-pattern counter = %d, want 1", got)
+	}
+}

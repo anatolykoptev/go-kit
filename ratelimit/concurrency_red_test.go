@@ -41,8 +41,8 @@ func TestConcurrencyLimiter_DoubleRelease_ExceedsLimit(t *testing.T) {
 	r1, _ := cl.Acquire(context.Background())
 	_, _ = cl.Acquire(context.Background()) // r2 — held, never released
 
-	r1()  // correct release — Available should be 1
-	r1()  // BUG: drains r2's slot — Available becomes 2
+	r1() // correct release — Available should be 1
+	r1() // BUG: drains r2's slot — Available becomes 2
 
 	// r2 is still logically held. Correct: Available = 1.
 	if avail := cl.Available(); avail != 1 {

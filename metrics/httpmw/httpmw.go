@@ -18,10 +18,10 @@ import (
 )
 
 type config struct {
-	responseSize  bool
-	pathLabel     func(*http.Request) string
+	responseSize   bool
+	pathLabel      func(*http.Request) string
 	histRegisterer prometheus.Registerer
-	histBuckets   []float64
+	histBuckets    []float64
 }
 
 // Option configures the middleware.
@@ -42,6 +42,32 @@ func WithResponseSize() Option {
 //	})
 func WithPathLabel(fn func(*http.Request) string) Option {
 	return func(c *config) { c.pathLabel = fn }
+}
+
+// WithStdlibPattern is a convenience shorthand for the common case where the
+// HTTP handler is dispatched via stdlib http.ServeMux (Go 1.22+). It returns
+// an Option equivalent to:
+//
+//	WithPathLabel(func(r *http.Request) string {
+//	    if r.Pattern == "" {
+//	        return "unknown"
+//	    }
+//	    return r.Pattern
+//	})
+//
+// r.Pattern is populated by ServeMux before the matched handler runs, so the
+// metrics middleware reads a meaningful pattern after next.ServeHTTP returns
+// - provided the middleware is invoked from inside ServeMux dispatch chain
+// (i.e. it wraps the mux output, not the mux itself).
+//
+// For chi or gorilla/mux pass a custom function via WithPathLabel.
+func WithStdlibPattern() Option {
+	return WithPathLabel(func(r *http.Request) string {
+		if r.Pattern == "" {
+			return "unknown"
+		}
+		return r.Pattern
+	})
 }
 
 // WithDurationHistogram enables an opt-in Prometheus histogram at
@@ -68,8 +94,8 @@ func WithDurationHistogram(reg prometheus.Registerer, buckets ...float64) Option
 // histogramCache caches registered HistogramVec per subsystem name to avoid
 // double-registration across multiple calls to Middleware with the same args.
 type histogramCache struct {
-	mu    sync.Mutex
-	vecs  map[string]*prometheus.HistogramVec // keyed by "<registerer-addr>/<name>"
+	mu   sync.Mutex
+	vecs map[string]*prometheus.HistogramVec // keyed by "<registerer-addr>/<name>"
 }
 
 var globalHistCache = &histogramCache{vecs: make(map[string]*prometheus.HistogramVec)}

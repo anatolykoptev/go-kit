@@ -48,15 +48,16 @@ const httpSparseRespBodyLimit = 8 * 1024 * 1024
 // Concurrent-safe: no mutable state beyond the http.Client which is itself
 // safe for concurrent use.
 type HTTPSparseEmbedder struct {
-	baseURL   string
-	model     string
-	vocabSize int
-	topK      int     // 0 = omit field; server default applies
-	minWeight float32 // 0 = omit field; server default applies
-	client    *http.Client
-	logger    *slog.Logger
-	observer  Observer    // noopObserver{} when not set
-	retry     RetryConfig // initialised to defaultRetry; overridable via WithHTTPRetry
+	baseURL     string
+	model       string
+	vocabSize   int
+	topK        int     // 0 = omit field; server default applies
+	minWeight   float32 // 0 = omit field; server default applies
+	client      *http.Client
+	logger      *slog.Logger
+	observer    Observer    // noopObserver{} when not set
+	retry       RetryConfig // initialised to defaultRetry; overridable via WithHTTPRetry
+	bearerToken string
 }
 
 // HTTPSparseOption is a functional option for NewHTTPSparseEmbedder.
@@ -69,6 +70,15 @@ func WithHTTPTimeout(d time.Duration) HTTPSparseOption {
 		if d > 0 {
 			h.client.Timeout = d
 		}
+	}
+}
+
+// WithBearerToken sets a static Authorization: Bearer <token> header on
+// every request. Empty token disables the header (no-op). Mirror of
+// embed.WithBearerToken.
+func WithBearerToken(token string) HTTPSparseOption {
+	return func(h *HTTPSparseEmbedder) {
+		h.bearerToken = token
 	}
 }
 
@@ -250,6 +260,9 @@ func (h *HTTPSparseEmbedder) EmbedSparse(ctx context.Context, texts []string) ([
 			return nil, 0, fmt.Errorf("http sparse: create request: %w", reqErr)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if h.bearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+h.bearerToken)
+		}
 
 		resp, doErr := h.client.Do(req)
 		if doErr != nil {

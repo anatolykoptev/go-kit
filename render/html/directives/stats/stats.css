@@ -1,0 +1,33 @@
+.vaelor-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+.vaelor-stat {
+  padding: 14px 18px;
+  background: var(--bg-card, #F8F9FA);
+  border-radius: 6px;
+  border-left: 3px solid var(--text-muted, #6C757D);
+}
+.vaelor-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-strong, #1A1A1A);
+  line-height: 1.2;
+}
+.vaelor-stat-label {
+  font-size: 11px;
+  color: var(--text-muted, #6C757D);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+.vaelor-stat-delta {
+  font-size: 12px;
+  margin-top: 6px;
+  font-weight: 600;
+}
+.vaelor-stat-delta--up { color: #10B981; }
+.vaelor-stat-delta--down { color: #DC2626; }
+.vaelor-stat-delta--neutral { color: #6C757D; }
