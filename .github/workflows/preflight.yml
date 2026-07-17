@@ -65,6 +65,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # #53: gostall — static analysis for lock-order inversions, missing
+      # unlocks, WaitGroup misuse, channel deadlocks, livelocks, starvation.
+      - name: Ensure gostall v1.0.0 (pinned)
+        run: |
+          GOBIN="$(go env GOPATH)/bin"
+          if ! go version -m "$GOBIN/gostall" 2>/dev/null | grep -q "erfanmomeniii/gostall.*v1.0.0"; then
+            go install github.com/erfanmomeniii/gostall/cmd/gostall@v1.0.0
+          fi
+
       - name: make preflight
         run: make preflight
 
