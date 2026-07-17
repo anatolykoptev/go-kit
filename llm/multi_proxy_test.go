@@ -14,10 +14,10 @@ func TestBuildMultiProxyEndpoints(t *testing.T) {
 		expected []Endpoint
 	}{
 		{
-			name:    "empty proxies returns nil",
-			proxies: nil,
-			primary: "a",
-			chain:   []string{"b", "c"},
+			name:     "empty proxies returns nil",
+			proxies:  nil,
+			primary:  "a",
+			chain:    []string{"b", "c"},
 			expected: nil,
 		},
 		{
