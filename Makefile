@@ -5,7 +5,10 @@
 # skip -race when CGO_ENABLED is 0.
 RACE := $(if $(filter 1,$(shell GOWORK=off go env CGO_ENABLED)),-race,)
 
-.PHONY: test test-db lint cover preflight
+GOSTALL_VERSION := v1.0.0
+GOSTALL := $(shell command -v gostall 2>/dev/null || echo $$(go env GOPATH)/bin/gostall)
+
+.PHONY: test test-db lint cover gostall preflight
 
 test:
 > @GOWORK=off go test ./...
@@ -31,7 +34,17 @@ cover:
 # throwaway Postgres), NOT a bare `go test`, so the telegram/fsm Postgres
 # guard tests — including the #155 regression (VARCHAR-too-narrow → 0 rows
 # persisted) — actually RUN instead of t.Skip-ing (skip-to-green is forbidden).
-preflight:
+.PHONY: gostall
+
+# Uses -lockorder -missingunlock -starvation only; -waitgroup -channel -livelock
+# excluded (intra-procedural false positives on defer wg.Done() in goroutines,
+# signal.Notify channels, and test spin loops).
+gostall:
+> @[ -x "$(GOSTALL)" ] || { echo "gostall not installed: go install github.com/erfanmomeniii/gostall/cmd/gostall@$(GOSTALL_VERSION)"; exit 1; }
+> @echo "==> gostall"
+> @GOWORK=off "$(GOSTALL)" -lockorder -missingunlock -starvation ./...
+
+preflight: gostall
 > @echo "==> gofmt -l"
 > @out=$$(GOWORK=off gofmt -l .); \
 > if [ -n "$$out" ]; then \
