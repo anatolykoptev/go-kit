@@ -175,7 +175,7 @@ func TestPostgresStore_Sweep(t *testing.T) {
 
 // TestPostgresStore_Get_ContextCancelled_PropagatesError verifies that a
 // cancelled context returns an error (not nil, nil).
-// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md M1
+// Ref: internal v0.56 quality review (M1)
 func TestPostgresStore_Get_ContextCancelled_PropagatesError(t *testing.T) {
 	pool := newTestPool(t)
 

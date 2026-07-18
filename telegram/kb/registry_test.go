@@ -84,7 +84,7 @@ func TestRegistryPrefixCollisionPanics(t *testing.T) {
 }
 
 // --- Test H1: Registry is safe under concurrent Register and Dispatch ---
-// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md H1
+// Ref: internal v0.56 quality review (H1)
 
 func TestRegistry_ConcurrentRegisterAndDispatch(t *testing.T) {
 	reg := kb.NewRegistry()
