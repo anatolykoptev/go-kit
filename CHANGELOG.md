@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.2](https://github.com/anatolykoptev/go-kit/compare/v0.97.1...v0.97.2) (2026-07-19)
+
+
+### Added
+
+* add langdetect package — trigram-based language detection ([#182](https://github.com/anatolykoptev/go-kit/issues/182)) ([deb2518](https://github.com/anatolykoptev/go-kit/commit/deb2518ab823bf5e0d408a24ee9d5c3cc2430747))
+
 ## [0.97.1](https://github.com/anatolykoptev/go-kit/compare/v0.97.0...v0.97.1) (2026-07-15)
 
 
