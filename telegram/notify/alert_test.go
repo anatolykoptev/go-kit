@@ -61,7 +61,7 @@ func TestAlertSink_V4PayloadShape(t *testing.T) {
 		Name:     "disk_almost_full",
 		Severity: notify.Critical,
 		Service:  "node",
-		Instance: "krolik-box",
+		Instance: "example-host",
 		Summary:  "/ is at 92%",
 	}
 
@@ -99,8 +99,8 @@ func TestAlertSink_V4PayloadShape(t *testing.T) {
 	if item.Labels["service"] != "node" {
 		t.Errorf("service=%q, want %q", item.Labels["service"], "node")
 	}
-	if item.Labels["instance"] != "krolik-box" {
-		t.Errorf("instance=%q, want %q", item.Labels["instance"], "krolik-box")
+	if item.Labels["instance"] != "example-host" {
+		t.Errorf("instance=%q, want %q", item.Labels["instance"], "example-host")
 	}
 	if item.Annotations["summary"] != "/ is at 92%" {
 		t.Errorf("summary=%q, want %q", item.Annotations["summary"], "/ is at 92%")

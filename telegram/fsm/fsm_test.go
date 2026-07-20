@@ -327,7 +327,7 @@ func TestMachine_StateFnReturnsError(t *testing.T) {
 }
 
 // --- Test H2: Concurrent Feed on same chatID serializes properly ---
-// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md H2
+// Ref: internal v0.56 quality review (H2)
 
 func TestMachine_ConcurrentFeed_SameChat_SerializesProperly(t *testing.T) {
 	store := fsm.NewMemoryStore()
@@ -371,7 +371,7 @@ func TestMachine_ConcurrentFeed_SameChat_SerializesProperly(t *testing.T) {
 }
 
 // --- Test M3: funcName returns stable, non-empty, distinct strings ---
-// Ref: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-v0.56-quality-review.md M3
+// Ref: internal v0.56 quality review (M3)
 
 func TestFuncName_StableAcrossInvocations(t *testing.T) {
 	store := fsm.NewMemoryStore()

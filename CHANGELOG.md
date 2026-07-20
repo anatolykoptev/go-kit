@@ -431,8 +431,8 @@
 
 ### Reference
 
-* Spec: ~/deploy/krolik-server/reports/go-kit/architecture/2026-05-16-telegram-bot-pkg-v0.1.md
-* Research: ~/deploy/krolik-server/reports/go-kit/research/2026-05-16-tg-bot-lib-landscape.md
+* Spec: internal design spec (telegram bot pkg v0.1)
+* Research: internal research (tg bot lib landscape)
 
 ## [0.37.0](https://github.com/anatolykoptev/go-kit/compare/v0.36.0...v0.37.0) (2026-05-01)
 
