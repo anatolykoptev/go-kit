@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.3](https://github.com/anatolykoptev/go-kit/compare/v0.97.2...v0.97.3) (2026-07-20)
+
+
+### Added
+
+* **cli,watcher:** restore generic CLI cobra scaffold + file-watcher packages ([#184](https://github.com/anatolykoptev/go-kit/issues/184)) ([e22fa13](https://github.com/anatolykoptev/go-kit/commit/e22fa1339771ebef51766bf23b8f993a2065c6b5))
+
 ## [0.97.2](https://github.com/anatolykoptev/go-kit/compare/v0.97.1...v0.97.2) (2026-07-19)
 
 
