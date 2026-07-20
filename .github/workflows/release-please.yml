@@ -11,7 +11,7 @@ permissions: {}
 jobs:
   release-please:
     name: Release PR / tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
       pull-requests: write
@@ -23,10 +23,21 @@ jobs:
       minor: ${{ steps.release.outputs.minor }}
       patch: ${{ steps.release.outputs.patch }}
     steps:
+      # Mint a krolik-release-bot (App 4335933) installation token. Unlike the
+      # default GITHUB_TOKEN, App-created release PRs DO get CI runs (no
+      # action_required manual approval) and App-created tags trigger downstream
+      # `on: push: tags` workflows. Fleet standard — see release-please-setup skill.
+      - name: Mint krolik-release-bot token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - name: Run release-please
         uses: googleapis/release-please-action@v5.0.0
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
