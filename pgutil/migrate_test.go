@@ -621,6 +621,152 @@ func TestMigrate_ConcurrentBaseline(t *testing.T) {
 	}
 }
 
+// TestIsSoftMigration — pure unit test for the "-- soft" first-line detector.
+// No DB required. Mirrors go-job's hand-rolled runMigrations detection:
+// strings.HasPrefix(strings.TrimSpace(string(data)), "-- soft").
+func TestIsSoftMigration(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"plain first line", "-- soft\nCREATE EXTENSION age;\n", true},
+		{"first line no trailing newline", "-- soft", true},
+		{"leading whitespace before marker", "   \t\n  -- soft\nSELECT 1;\n", true},
+		{"leading blank lines then marker", "\n\n-- soft\nSELECT 1;\n", true},
+		{"marker with trailing content on same line", "-- soft: optional AGE extension\nCREATE EXTENSION age;\n", true},
+		{"no space after dashes", "--soft\nSELECT 1;\n", false},
+		{"soft not on first line", "SELECT 1;\n-- soft\n", false},
+		{"empty file", "", false},
+		{"only whitespace", "   \n\t\n", false},
+		// "-- softer" matches the literal fleet convention
+		// (strings.HasPrefix(..., "-- soft")) — it IS treated as soft.
+		// A real file is vanishingly unlikely to start with that exact
+		// string, and matching it is the documented go-job behaviour.
+		{"longer word starting with soft", "-- softer\nSELECT 1;\n", true},
+		{"case sensitive", "-- Soft\nSELECT 1;\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSoftMigration([]byte(tc.data)); got != tc.want {
+				t.Fatalf("isSoftMigration(%q) = %v, want %v", tc.data, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMigrate_SoftFailsContinues — a "-- soft" migration whose SQL fails
+// (e.g. references a guaranteed-absent extension) must NOT abort the run:
+// RunMigrations returns nil, later normal files apply, the soft file is NOT
+// recorded (so a later run retries it — self-healing once the extension lands).
+func TestMigrate_SoftFailsContinues(t *testing.T) {
+	pool := openPool(t, scratchDB(t))
+	ctx := context.Background()
+
+	wc := &warnCapture{}
+	fsys := simpleFS(map[string]string{
+		// Soft file that will fail: extension name guaranteed absent.
+		"0001_soft_missing_ext.sql": "-- soft\nCREATE EXTENSION \"definitely_not_installed_xyz\";\n",
+		// Normal file AFTER the failing soft one — must still apply.
+		"0002_create_anchor.sql":    "CREATE TABLE soft_anchor (id SERIAL PRIMARY KEY);",
+	})
+
+	if err := RunMigrations(ctx, pool, fsys, MigrateOptions{Logger: wc.logger()}); err != nil {
+		t.Fatalf("soft failure must NOT abort the run: %v", err)
+	}
+
+	// The normal file after the soft failure must have applied.
+	if !tableExists(t, pool, "soft_anchor") {
+		t.Fatal("normal migration after a failed soft migration must still apply")
+	}
+	if n := countApplied(t, pool, "schema_migrations"); n != 1 {
+		t.Fatalf("expected 1 tracking row (only the normal file), got %d", n)
+	}
+
+	// The soft file must NOT be recorded — so a later run retries it.
+	var hasSoft bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM schema_migrations WHERE name = '0001_soft_missing_ext.sql'
+		)`).Scan(&hasSoft); err != nil {
+		t.Fatalf("check soft tracking row: %v", err)
+	}
+	if hasSoft {
+		t.Fatal("failed soft migration must NOT be recorded — it must retry on the next run")
+	}
+
+	// A WARN must have been emitted naming the file.
+	wc.mu.Lock()
+	warns := wc.msgs
+	wc.mu.Unlock()
+	found := false
+	for _, m := range warns {
+		if strings.Contains(m, "0001_soft_missing_ext.sql") && strings.Contains(m, "soft") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a WARN log for the failed soft migration, got: %v", warns)
+	}
+
+	// Retry behaviour: a second RunMigrations re-attempts the soft file
+	// (still absent extension → still fails softly, still no row, no abort).
+	if err := RunMigrations(ctx, pool, fsys, MigrateOptions{Logger: wc.logger()}); err != nil {
+		t.Fatalf("retry run must not abort: %v", err)
+	}
+	if n := countApplied(t, pool, "schema_migrations"); n != 1 {
+		t.Fatalf("expected tracking row count to stay 1 after retry, got %d", n)
+	}
+}
+
+// TestMigrate_SoftSucceedsRecorded — a "-- soft" migration whose SQL applies
+// successfully is recorded in the tracking table exactly like any normal file.
+func TestMigrate_SoftSucceedsRecorded(t *testing.T) {
+	pool := openPool(t, scratchDB(t))
+	ctx := context.Background()
+
+	fsys := simpleFS(map[string]string{
+		"0001_soft_ok.sql": "-- soft\nCREATE TABLE soft_ok_table (id SERIAL PRIMARY KEY);\n",
+	})
+
+	if err := RunMigrations(ctx, pool, fsys, MigrateOptions{}); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	if !tableExists(t, pool, "soft_ok_table") {
+		t.Fatal("soft migration body must execute when it succeeds")
+	}
+	if n := countApplied(t, pool, "schema_migrations"); n != 1 {
+		t.Fatalf("successful soft migration must be recorded; expected 1 row, got %d", n)
+	}
+}
+
+// TestMigrate_NonSoftFailsAborts — a non-soft migration that fails still
+// aborts the run (regression guard for the soft-skip change).
+func TestMigrate_NonSoftFailsAborts(t *testing.T) {
+	pool := openPool(t, scratchDB(t))
+	ctx := context.Background()
+
+	fsys := simpleFS(map[string]string{
+		"0001_ok.sql":     "CREATE TABLE nonsf_anchor (id SERIAL PRIMARY KEY);",
+		"0002_bad.sql":    "THIS IS NOT VALID SQL;",
+		"0003_after.sql":  "CREATE TABLE nonsf_after (id SERIAL PRIMARY KEY);",
+	})
+
+	err := RunMigrations(ctx, pool, fsys, MigrateOptions{})
+	if err == nil {
+		t.Fatal("non-soft failure must abort the run with an error")
+	}
+
+	if n := countApplied(t, pool, "schema_migrations"); n != 1 {
+		t.Fatalf("expected only 0001_ok.sql recorded (1 row), got %d", n)
+	}
+	if tableExists(t, pool, "nonsf_after") {
+		t.Fatal("migration after a non-soft failure must NOT run")
+	}
+}
+
 // TestMigrate_AtomicRollback — a migration whose SQL body fails mid-way:
 // RunMigrations returns an error AND the tracking table has no row for it
 // (no half-applied record, body + tracking row commit/rollback atomically).
