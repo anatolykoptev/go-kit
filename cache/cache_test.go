@@ -2,12 +2,14 @@ package cache_test
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/anatolykoptev/go-kit/cache"
+	"go.uber.org/goleak"
 )
 
 func TestCache_SetGet(t *testing.T) {
@@ -326,7 +328,7 @@ func TestJitter_Varies(t *testing.T) {
 	c := cache.New(cache.Config{
 		L1MaxItems:    100,
 		L1TTL:         time.Second,
-		JitterPercent: 0.5, // ±50% — extreme to make variation obvious
+		JitterPercent: 0.8, // ±80% — extreme to make variation obvious and reliable
 	})
 	defer c.Close()
 	ctx := context.Background()
@@ -336,7 +338,8 @@ func TestJitter_Varies(t *testing.T) {
 		c.Set(ctx, cache.Key("jitter", string(rune('a'+i))), []byte("data"))
 	}
 
-	// Sleep for half TTL — with ±50% jitter, some should expire, some shouldn't.
+	// Sleep for half TTL — with ±80% jitter, TTL range is [200ms, 1800ms].
+	// After 600ms, entries with TTL < 600ms should have expired.
 	time.Sleep(600 * time.Millisecond)
 
 	alive := 0
@@ -346,9 +349,10 @@ func TestJitter_Varies(t *testing.T) {
 		}
 	}
 
-	// With ±50% jitter on 1s TTL, after 600ms:
-	// - Entries with TTL < 600ms (TTL range 500ms-1500ms) should have expired
-	// - Not all should be alive, not all should be dead
+	// With ±80% jitter on 1s TTL, after 600ms:
+	// - P(single entry alive) = (1800-600)/(1800-200) = 0.75
+	// - P(all 20 alive) = 0.75^20 ≈ 0.003 — reliably not all alive
+	// - P(all 20 dead) = 0.25^20 ≈ 1e-12 — reliably not all dead
 	if alive == 0 || alive == 20 {
 		t.Errorf("alive = %d, jitter should produce varying expiry", alive)
 	}
@@ -716,4 +720,46 @@ func TestClear(t *testing.T) {
 	if !ok || string(got) != "ok" {
 		t.Errorf("post-clear get: ok=%v, got=%q", ok, got)
 	}
+}
+
+func TestMain(m *testing.M) {
+	// go-redis's connection pool may leave a brief dial goroutine after
+	// rdb.Close() when the target is unreachable (TestNew_NilRedisL2_NoSIGSEGV
+	// dials an RFC 5737 TEST-NET address). That goroutine exits once the
+	// dial times out; ignore it so goleak focuses on OUR goroutine leaks.
+	goleak.VerifyTestMain(m,
+		goleak.IgnoreAnyFunction("github.com/redis/go-redis/v9/internal/pool.(*ConnPool).queuedNewConn.func2"),
+	)
+}
+
+// TestCacheGoroutineLeakOnNoClose verifies that a Cache whose Close() is
+// never explicitly called does not leak its background cleanup goroutine.
+// New() registers a runtime.SetFinalizer that calls Close() when the Cache
+// is garbage-collected, stopping the goroutine. Without the finalizer the
+// goroutine would leak for the process lifetime.
+func TestCacheGoroutineLeakOnNoClose(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	// Create a Cache in a nested scope so it becomes unreachable as soon
+	// as the scope exits. The finalizer registered by New() must call
+	// Close() to stop the background cleanup goroutine. Without the
+	// finalizer the goroutine would leak for the process lifetime.
+	func() {
+		c := cache.New(cache.Config{L1MaxItems: 100, L1TTL: time.Minute})
+		_ = c
+	}()
+
+	// Finalizers run asynchronously in a dedicated goroutine after GC, so
+	// we poll: trigger GC repeatedly until the finalizer has run and the
+	// cleanup goroutine has exited.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		runtime.GC()
+		time.Sleep(50 * time.Millisecond)
+		if err := goleak.Find(); err == nil {
+			return
+		}
+	}
+	// Final deferred VerifyNone will surface the failure detail.
 }
