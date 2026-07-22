@@ -763,3 +763,50 @@ func TestCacheGoroutineLeakOnNoClose(t *testing.T) {
 	}
 	// Final deferred VerifyNone will surface the failure detail.
 }
+
+// TestCacheL2UnavailableNotExposed verifies that when Redis is unreachable,
+// the Cache exposes L2 unavailability programmatically via L2Available().
+// Regression guard for the silent-downgrade bug: previously a Redis outage
+// only produced a slog.Warn log with no programmatic signal.
+func TestCacheL2UnavailableNotExposed(t *testing.T) {
+	c := cache.New(cache.Config{
+		L1MaxItems: 100,
+		L1TTL:      time.Minute,
+		RedisURL:   "redis://192.0.2.1:6379", // RFC 5737 TEST-NET-1, unreachable
+	})
+	defer c.Close()
+
+	if c.L2Available() {
+		t.Fatal("L2 should be unavailable with unreachable Redis URL")
+	}
+}
+
+// TestCacheL2Available_WithL2 confirms L2Available() is true when an L2 is
+// explicitly wired (covers the connected-Redis case without needing a live
+// Redis instance).
+func TestCacheL2Available_WithL2(t *testing.T) {
+	c := cache.New(cache.Config{
+		L1MaxItems: 100,
+		L1TTL:      time.Minute,
+		L2:         newMapL2(),
+	})
+	defer c.Close()
+
+	if !c.L2Available() {
+		t.Fatal("L2 should be available when an L2 store is wired")
+	}
+}
+
+// TestCacheL2Available_EmptyRedisURL confirms L2Available() is false when
+// no RedisURL is configured (L1-only by design).
+func TestCacheL2Available_EmptyRedisURL(t *testing.T) {
+	c := cache.New(cache.Config{
+		L1MaxItems: 100,
+		L1TTL:      time.Minute,
+	})
+	defer c.Close()
+
+	if c.L2Available() {
+		t.Fatal("L2 should be unavailable when RedisURL is empty (L1-only)")
+	}
+}
