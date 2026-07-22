@@ -2,7 +2,9 @@ package rerank
 
 import (
 	"context"
+	"log/slog"
 	"os"
+	"strings"
 )
 
 // NewClient is the v2 constructor. Use functional options to configure.
@@ -26,6 +28,13 @@ func NewClient(url string, opts ...Opt) *Client {
 		if tok := os.Getenv("EMBED_TOKEN"); tok != "" {
 			cfg.apiKey = tok
 		}
+	}
+	// Log at construction time when no token is configured and auth is not
+	// required, so misconfiguration is observable. With WithRequireAuth the
+	// check (and ErrNoToken) is deferred to the first call because NewClient
+	// returns *Client, not (*Client, error).
+	if strings.TrimSpace(cfg.apiKey) == "" && !cfg.requireAuth {
+		slog.Info("rerank: no auth token configured — assuming self-hosted backend without auth")
 	}
 	return newFromInternal(cfg)
 }
