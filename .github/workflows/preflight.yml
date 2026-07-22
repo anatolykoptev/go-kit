@@ -55,6 +55,9 @@ jobs:
 
     env:
       TEST_DATABASE_URL: postgres://test:test@localhost:5432/testdb?sslmode=disable
+      # pgutil migration tests read MIGRATE_TEST_DSN (or PGHOST/...) — point it
+      # at the same service container so they RUN in CI instead of t.Skip.
+      MIGRATE_TEST_DSN: postgres://test:test@localhost:5432/testdb?sslmode=disable
 
     steps:
       - uses: actions/checkout@v5
