@@ -122,6 +122,12 @@ func (o *MigrateOptions) applyDefaults() error {
 //	//go:embed migrations/*.sql
 //	var migrationsFS embed.FS
 //	pgutil.RunMigrations(ctx, pool, migrationsFS, pgutil.MigrateOptions{...})
+//
+// Soft migrations: a file whose first non-whitespace line is "-- soft" may
+// fail without aborting the run. The failure is logged and the file is NOT
+// recorded as applied, so a later run retries it — self-healing once an
+// optional extension it needs (e.g. Apache AGE or pgvector) is installed.
+// Non-soft failures abort the run as usual.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, opts MigrateOptions) error {
 	if err := opts.applyDefaults(); err != nil {
 		return err
