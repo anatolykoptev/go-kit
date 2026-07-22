@@ -6,9 +6,11 @@ package cache
 import (
 	"container/list"
 	"math/rand/v2"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+	"weak"
 )
 
 // maxFreq is the S3-FIFO frequency counter ceiling (0-3).
@@ -99,7 +101,38 @@ func New(cfg Config) *Cache {
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
 	}
-	go c.cleanupLoop(interval)
+	// Launch the background cleanup goroutine. The goroutine holds only
+	// the done channel (a separate heap object) and a weak pointer to the
+	// Cache, so it does NOT prevent the Cache from being garbage-collected.
+	// This allows the finalizer below to fire even if Close() is never
+	// called, breaking the reference cycle that would otherwise keep the
+	// Cache (and its goroutine) alive forever.
+	done := c.done
+	wp := weak.Make(c)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if cc := wp.Value(); cc != nil {
+					cc.cleanupTick()
+				} else {
+					// Cache was garbage-collected; exit to avoid a leak.
+					return
+				}
+			}
+		}
+	}()
+
+	// Register a finalizer so that if the caller forgets Close(), the
+	// background cleanup goroutine is still stopped when the Cache is
+	// garbage-collected. This prevents goroutine leaks in long-running
+	// services that create transient caches (per-request / per-tenant).
+	// Close() clears the finalizer to avoid a double-close.
+	runtime.SetFinalizer(c, func(c *Cache) { c.Close() })
 
 	// Opt-in Prometheus metrics — registered lazily via CounterFunc, so no
 	// background goroutine and no per-Get/Set overhead. Skipped entirely when
@@ -138,7 +171,17 @@ func (c *Cache) Clear() int {
 }
 
 // Close stops the background cleanup goroutine and closes L2 if set.
+// Callers MUST call Close when finished with the Cache to stop the
+// background cleanup goroutine; otherwise it leaks for the Cache's
+// lifetime. As a safety net, New registers a runtime finalizer that
+// calls Close when the Cache is garbage-collected, but explicit Close
+// is strongly preferred — finalizers are not guaranteed to run promptly.
+//
+//go:noinline
 func (c *Cache) Close() {
+	// Clear the finalizer first so a GC-triggered Close cannot double-close.
+	runtime.SetFinalizer(c, nil)
+
 	select {
 	case <-c.done:
 	default:
