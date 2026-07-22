@@ -191,3 +191,17 @@ func (c *Cache) Close() {
 		c.l2.Close()
 	}
 }
+
+// L2Available reports whether a second-tier (L2) store is configured and
+// active on this Cache. It returns true when an L2 was successfully wired
+// (either via Config.L2 or a reachable Config.RedisURL) and false when the
+// Cache is operating in L1-only mode — including the silent-downgrade case
+// where RedisURL was requested but Redis was unreachable at construction
+// time (NewRedisL2 returns nil on connection failure and logs a warning).
+//
+// This gives callers a programmatic way to detect the silent-downgrade that
+// previously surfaced only as a slog.Warn log line, enabling metrics/alerts
+// on cache tier availability. Non-breaking: it is a new read-only method.
+func (c *Cache) L2Available() bool {
+	return c.l2 != nil
+}
