@@ -668,7 +668,7 @@ func TestMigrate_SoftFailsContinues(t *testing.T) {
 		// Soft file that will fail: extension name guaranteed absent.
 		"0001_soft_missing_ext.sql": "-- soft\nCREATE EXTENSION \"definitely_not_installed_xyz\";\n",
 		// Normal file AFTER the failing soft one — must still apply.
-		"0002_create_anchor.sql":    "CREATE TABLE soft_anchor (id SERIAL PRIMARY KEY);",
+		"0002_create_anchor.sql": "CREATE TABLE soft_anchor (id SERIAL PRIMARY KEY);",
 	})
 
 	if err := RunMigrations(ctx, pool, fsys, MigrateOptions{Logger: wc.logger()}); err != nil {
@@ -749,9 +749,9 @@ func TestMigrate_NonSoftFailsAborts(t *testing.T) {
 	ctx := context.Background()
 
 	fsys := simpleFS(map[string]string{
-		"0001_ok.sql":     "CREATE TABLE nonsf_anchor (id SERIAL PRIMARY KEY);",
-		"0002_bad.sql":    "THIS IS NOT VALID SQL;",
-		"0003_after.sql":  "CREATE TABLE nonsf_after (id SERIAL PRIMARY KEY);",
+		"0001_ok.sql":    "CREATE TABLE nonsf_anchor (id SERIAL PRIMARY KEY);",
+		"0002_bad.sql":   "THIS IS NOT VALID SQL;",
+		"0003_after.sql": "CREATE TABLE nonsf_after (id SERIAL PRIMARY KEY);",
 	})
 
 	err := RunMigrations(ctx, pool, fsys, MigrateOptions{})
