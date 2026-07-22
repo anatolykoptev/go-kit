@@ -200,13 +200,14 @@ func (c *Client) attemptEndpoint(ctx context.Context, ep Endpoint, req *ChatRequ
 	var cancelAttempt context.CancelFunc
 	if c.perAttemptTimeout > 0 {
 		attemptCtx, cancelAttempt = context.WithTimeout(ctx, c.perAttemptTimeout)
+		// Deferred cancel guarantees the child context (and its timer goroutine)
+		// is released even if doWithRetry panics — a non-deferred call would be
+		// skipped during a panic unwind, leaking the context.WithTimeout timer.
+		defer cancelAttempt()
 	}
 
 	result, err := c.doWithRetry(attemptCtx, ep.URL, ep.Key, &epReq)
 
-	if cancelAttempt != nil {
-		cancelAttempt()
-	}
 	// Served-model attribution: the model that returned the 200 is this
 	// endpoint's effective model. Set here (the single "try one endpoint"
 	// authority) so BOTH the chain loop and the never-fail-closed race guard

@@ -280,3 +280,64 @@ func TestChainAdvanceOnHTTPClientTimeout(t *testing.T) {
 		t.Errorf("calls[1] = %+v, want {fast-model, nil err}", (*calls)[1])
 	}
 }
+
+// panicTransport is an http.RoundTripper that captures the request's context
+// (the per-attempt child context created by attemptEndpoint) and then panics,
+// simulating a panic originating inside doWithRetry's HTTP path.
+type panicTransport struct {
+	captured *context.Context
+}
+
+func (p *panicTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	*p.captured = req.Context()
+	panic("simulated doWithRetry panic")
+}
+
+// TestAttemptEndpointCancelOnPanic verifies that a panic originating inside
+// doWithRetry (here, via a panicking http.RoundTripper) does not leak the
+// per-attempt child context: attemptEndpoint must cancel the context even when
+// doWithRetry never returns normally. The per-attempt timeout is set long
+// enough that the timer would NOT fire on its own during the assertion window,
+// so the only way the child context can be cancelled immediately after the
+// panic is if attemptEndpoint's cancel ran (via defer) during the unwind.
+//
+// This test goes RED if the manual (non-deferred) cancelAttempt call is
+// restored: a panic skips it, the child context stays alive, and
+// capturedCtx.Err() returns nil.
+func TestAttemptEndpointCancelOnPanic(t *testing.T) {
+	const perAttemptD = 2 * time.Second // long: timer must NOT fire on its own here
+
+	var capturedCtx context.Context
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints([]llm.Endpoint{
+			{URL: "http://panic.invalid/chat/completions", Key: "k", Model: "panic-model"},
+		}),
+		llm.WithMaxRetries(1),
+		llm.WithPerAttemptTimeout(perAttemptD),
+		llm.WithHTTPClient(&http.Client{Transport: &panicTransport{captured: &capturedCtx}}),
+	)
+
+	ctx := context.Background()
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		_, _ = c.Complete(ctx, "", "test")
+	}()
+	if !panicked {
+		t.Fatal("expected panic from doWithRetry (via panicking RoundTripper), got none")
+	}
+	if capturedCtx == nil {
+		t.Fatal("panicking RoundTripper was never invoked — request did not reach transport")
+	}
+	// The child context MUST be cancelled by attemptEndpoint's deferred
+	// cancelAttempt. With the long perAttemptD, the timer has not fired yet,
+	// so a nil err here means cancel was never called → context leak.
+	if err := capturedCtx.Err(); err == nil {
+		t.Errorf("per-attempt child context was NOT cancelled after panic (err=nil); " +
+			"cancelAttempt was skipped — context/timer leak")
+	}
+}
