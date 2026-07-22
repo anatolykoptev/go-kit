@@ -224,7 +224,28 @@ func (c *Client) attemptEndpoint(ctx context.Context, ep Endpoint, req *ChatRequ
 	return result, err
 }
 
+// hasNonEmptyFallbackKey reports whether any of the fallback keys is non-empty.
+func hasNonEmptyFallbackKey(keys []string) bool {
+	for _, k := range keys {
+		if k != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) executeInner(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	// No-endpoint path guard: when no endpoint chain is configured (each
+	// endpoint carries its own key), the only keys available are c.apiKey and
+	// c.fallbackKeys. If ALL of them are empty, every doWithRetry attempt would
+	// fire with an empty Bearer token → an opaque 401/403, and the fallback loop
+	// silently skips empty keys via `if key == "" { continue }`, leaving the
+	// caller with that opaque auth error. Fail fast with a clear sentinel
+	// instead. The endpoint-chain path is unaffected: each endpoint has its own
+	// ep.Key validated separately.
+	if len(c.endpoints) == 0 && c.apiKey == "" && !hasNonEmptyFallbackKey(c.fallbackKeys) {
+		return nil, ErrNoValidAPIKey
+	}
 	if len(c.endpoints) > 0 {
 		var lastErr error
 		attempted := false
