@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -69,7 +70,14 @@ func (c *Client) doRequest(ctx context.Context, baseURL, apiKey string, req *Cha
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("llm: response body close failed",
+				slog.String("url", baseURL+"/chat/completions"),
+				slog.Any("error", err),
+			)
+		}
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
