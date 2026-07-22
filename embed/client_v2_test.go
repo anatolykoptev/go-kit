@@ -673,3 +673,72 @@ func TestEmbedWithResult_PartialResponseSameErr(t *testing.T) {
 		t.Errorf("Status: want StatusDegraded, got %s", res.Status)
 	}
 }
+
+// --- WithRequireAuth tests (pf-5: EMBED_TOKEN validation) ---
+
+// TestNewClient_RequireAuth_EmptyToken verifies that WithRequireAuth makes
+// NewClient fail fast at construction when EMBED_TOKEN is unset/empty.
+// This test goes RED if the ErrNoToken guard in newClientFromInternal is
+// removed (NewClient would then succeed and return a non-nil Client).
+func TestNewClient_RequireAuth_EmptyToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "")
+	_, err := NewClient("http://embed:8082",
+		WithBackend("http"),
+		WithModel("m"),
+		WithDim(1),
+		WithRequireAuth(),
+	)
+	if !errors.Is(err, ErrNoToken) {
+		t.Fatalf("want ErrNoToken, got %v", err)
+	}
+}
+
+// TestNewClient_RequireAuth_WhitespaceToken verifies whitespace-only
+// EMBED_TOKEN is treated as "no token" under WithRequireAuth.
+func TestNewClient_RequireAuth_WhitespaceToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "   ")
+	_, err := NewClient("http://embed:8082",
+		WithBackend("http"),
+		WithModel("m"),
+		WithDim(1),
+		WithRequireAuth(),
+	)
+	if !errors.Is(err, ErrNoToken) {
+		t.Fatalf("want ErrNoToken for whitespace-only token, got %v", err)
+	}
+}
+
+// TestNewClient_RequireAuth_ValidToken verifies a non-empty EMBED_TOKEN
+// passes the WithRequireAuth check (no ErrNoToken).
+func TestNewClient_RequireAuth_ValidToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "real-token")
+	c, err := NewClient("http://embed:8082",
+		WithBackend("http"),
+		WithModel("m"),
+		WithDim(1),
+		WithRequireAuth(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error with valid token: %v", err)
+	}
+	if c == nil {
+		t.Fatal("nil client with valid token")
+	}
+}
+
+// TestNewClient_NoRequireAuth_EmptyToken verifies backward compatibility:
+// without WithRequireAuth, an empty EMBED_TOKEN is silently accepted.
+func TestNewClient_NoRequireAuth_EmptyToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "")
+	c, err := NewClient("http://embed:8082",
+		WithBackend("http"),
+		WithModel("m"),
+		WithDim(1),
+	)
+	if err != nil {
+		t.Fatalf("empty token without WithRequireAuth should not error: %v", err)
+	}
+	if c == nil {
+		t.Fatal("nil client")
+	}
+}

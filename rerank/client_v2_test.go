@@ -3,6 +3,7 @@ package rerank
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -161,5 +162,118 @@ func TestNewClient_Available(t *testing.T) {
 	}
 	if NewClient("").Available() {
 		t.Error("NewClient with empty URL must not be Available")
+	}
+}
+
+// --- WithRequireAuth tests (pf-5: EMBED_TOKEN validation, deferred to call) ---
+
+// TestRerank_RequireAuth_EmptyToken verifies that WithRequireAuth makes
+// RerankWithResult return ErrNoToken on the first call when no token is
+// configured. Goes RED if the deferred guard in rerankInternal is removed
+// (the call would instead hit the stub server and return StatusOk).
+func TestRerank_RequireAuth_EmptyToken(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cohereResponse{
+			Model: "test-model",
+			Results: []cohereResult{
+				{Index: 0, RelevanceScore: 0.9},
+			},
+		})
+	})
+	t.Setenv("EMBED_TOKEN", "")
+	c := NewClient(srv.URL,
+		WithModel("test-model"),
+		WithRequireAuth(),
+	)
+	docs := []Doc{{ID: "a", Text: "alpha"}}
+	res, err := c.RerankWithResult(context.Background(), "q", docs)
+	if !errors.Is(err, ErrNoToken) {
+		t.Fatalf("want ErrNoToken, got err=%v", err)
+	}
+	if res == nil || res.Status != StatusDegraded {
+		t.Fatalf("want StatusDegraded result, got %+v", res)
+	}
+}
+
+// TestRerank_RequireAuth_WhitespaceToken verifies whitespace-only EMBED_TOKEN
+// is treated as "no token" under WithRequireAuth.
+func TestRerank_RequireAuth_WhitespaceToken(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(cohereResponse{
+			Model:   "test-model",
+			Results: []cohereResult{{Index: 0, RelevanceScore: 0.9}},
+		})
+	})
+	t.Setenv("EMBED_TOKEN", "   ")
+	c := NewClient(srv.URL,
+		WithModel("test-model"),
+		WithRequireAuth(),
+	)
+	_, err := c.RerankWithResult(context.Background(), "q", []Doc{{ID: "a", Text: "alpha"}})
+	if !errors.Is(err, ErrNoToken) {
+		t.Fatalf("want ErrNoToken for whitespace-only token, got %v", err)
+	}
+}
+
+// TestRerank_RequireAuth_ValidToken verifies a non-empty EMBED_TOKEN passes
+// the deferred guard and reaches the backend.
+func TestRerank_RequireAuth_ValidToken(t *testing.T) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cohereResponse{
+			Model: "test-model",
+			Results: []cohereResult{
+				{Index: 0, RelevanceScore: 0.9},
+			},
+		})
+	})
+	t.Setenv("EMBED_TOKEN", "real-token")
+	c := NewClient(srv.URL,
+		WithModel("test-model"),
+		WithRequireAuth(),
+	)
+	res, err := c.RerankWithResult(context.Background(), "q", []Doc{{ID: "a", Text: "alpha"}})
+	if err != nil {
+		t.Fatalf("unexpected error with valid token: %v", err)
+	}
+	if res.Status != StatusOk {
+		t.Fatalf("want StatusOk, got %s", res.Status)
+	}
+}
+
+// TestRerank_NoRequireAuth_EmptyToken verifies backward compatibility:
+// without WithRequireAuth, an empty EMBED_TOKEN does NOT produce ErrNoToken
+// (DryRun path returns StatusSkipped without touching auth).
+func TestRerank_NoRequireAuth_EmptyToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "")
+	c := NewClient("http://embed:8082",
+		WithModel("test-model"),
+	)
+	res, err := c.RerankWithResult(context.Background(), "q",
+		[]Doc{{ID: "a", Text: "alpha"}}, WithDryRun())
+	if err != nil {
+		t.Fatalf("DryRun without WithRequireAuth should not error: %v", err)
+	}
+	if res.Status != StatusSkipped {
+		t.Fatalf("want StatusSkipped, got %s", res.Status)
+	}
+}
+
+// TestRerank_RequireAuth_DryRunExempt verifies DryRun is exempt from the
+// deferred auth check (wiring tests without a server should still work).
+func TestRerank_RequireAuth_DryRunExempt(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "")
+	c := NewClient("http://embed:8082",
+		WithModel("test-model"),
+		WithRequireAuth(),
+	)
+	res, err := c.RerankWithResult(context.Background(), "q",
+		[]Doc{{ID: "a", Text: "alpha"}}, WithDryRun())
+	if err != nil {
+		t.Fatalf("DryRun should be exempt from auth check: %v", err)
+	}
+	if res.Status != StatusSkipped {
+		t.Fatalf("want StatusSkipped, got %s", res.Status)
 	}
 }

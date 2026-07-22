@@ -310,3 +310,63 @@ func TestNewClient_EmbedSparseEmptyReturnsNil(t *testing.T) {
 		})
 	}
 }
+
+// --- WithRequireAuth tests (pf-5: EMBED_TOKEN validation) ---
+
+// TestNewClient_RequireAuth_EmptyToken verifies that WithRequireAuth makes
+// sparse.NewClient fail fast at construction when EMBED_TOKEN is unset/empty.
+// Goes RED if the ErrNoToken guard in NewClient is removed.
+func TestNewClient_RequireAuth_EmptyToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "")
+	_, err := NewClient("http://embed:8082",
+		WithModel("m"),
+		WithRequireAuth(),
+	)
+	if !errors.Is(err, ErrNoToken) {
+		t.Fatalf("want ErrNoToken, got %v", err)
+	}
+}
+
+// TestNewClient_RequireAuth_WhitespaceToken verifies whitespace-only
+// EMBED_TOKEN is treated as "no token" under WithRequireAuth.
+func TestNewClient_RequireAuth_WhitespaceToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "   ")
+	_, err := NewClient("http://embed:8082",
+		WithModel("m"),
+		WithRequireAuth(),
+	)
+	if !errors.Is(err, ErrNoToken) {
+		t.Fatalf("want ErrNoToken for whitespace-only token, got %v", err)
+	}
+}
+
+// TestNewClient_RequireAuth_ValidToken verifies a non-empty EMBED_TOKEN
+// passes the WithRequireAuth check.
+func TestNewClient_RequireAuth_ValidToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "real-token")
+	c, err := NewClient("http://embed:8082",
+		WithModel("m"),
+		WithRequireAuth(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error with valid token: %v", err)
+	}
+	if c == nil {
+		t.Fatal("nil client with valid token")
+	}
+}
+
+// TestNewClient_NoRequireAuth_EmptyToken verifies backward compatibility:
+// without WithRequireAuth, an empty EMBED_TOKEN is silently accepted.
+func TestNewClient_NoRequireAuth_EmptyToken(t *testing.T) {
+	t.Setenv("EMBED_TOKEN", "")
+	c, err := NewClient("http://embed:8082",
+		WithModel("m"),
+	)
+	if err != nil {
+		t.Fatalf("empty token without WithRequireAuth should not error: %v", err)
+	}
+	if c == nil {
+		t.Fatal("nil client")
+	}
+}
