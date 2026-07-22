@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.4](https://github.com/anatolykoptev/go-kit/compare/v0.97.3...v0.97.4) (2026-07-22)
+
+
+### Documentation
+
+* **pgutil:** document the -- soft migration marker on RunMigrations ([#190](https://github.com/anatolykoptev/go-kit/issues/190)) ([b6073d4](https://github.com/anatolykoptev/go-kit/commit/b6073d4888d24ebe52b36ca52cb38653d64e81c0))
+
 ## [0.97.3](https://github.com/anatolykoptev/go-kit/compare/v0.97.2...v0.97.3) (2026-07-20)
 
 
