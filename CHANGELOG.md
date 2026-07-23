@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.97.5](https://github.com/anatolykoptev/go-kit/compare/v0.97.4...v0.97.5) (2026-07-23)
+
+
+### Added
+
+* **embed/sparse/rerank:** add WithRequireAuth to validate EMBED_TOKEN at startup ([fdedee9](https://github.com/anatolykoptev/go-kit/commit/fdedee9334adf752be789271cb0569994d8f6ccb))
+* **embed/sparse/rerank:** add WithRequireAuth to validate EMBED_TOKEN at startup ([94d10b1](https://github.com/anatolykoptev/go-kit/commit/94d10b192f9dbc0968d5eb55df5f7b6eac133f61))
+* **telegram:** add reusable Glossary primitive (STT name-correction + bolding) ([#225](https://github.com/anatolykoptev/go-kit/issues/225)) ([4933207](https://github.com/anatolykoptev/go-kit/commit/493320707aa67f8b48c32f6483e5eece7ded1da0))
+
+
+### Fixed
+
+* **breaker:** add panic guard to Execute to prevent half-open wedge ([9988199](https://github.com/anatolykoptev/go-kit/commit/998819979639abafb994a7eee55cae816ea0877e))
+* **breaker:** add panic guard to Execute to prevent half-open wedge ([4102e75](https://github.com/anatolykoptev/go-kit/commit/4102e751e29f842ac2620ef723b2d7628e6bd86c))
+* **cache:** expose L2Available() to detect silent Redis downgrade ([83831cc](https://github.com/anatolykoptev/go-kit/commit/83831cc5c3a5c76b9bbc33db1dae415e4fd7e5e1))
+* **cache:** expose L2Available() to detect silent Redis downgrade ([27f8ffc](https://github.com/anatolykoptev/go-kit/commit/27f8ffc7bb82c1b5853eb13896d831eb3133aea0))
+* **cache:** log L2 Set/Del failures at Warn and count them in l2errors ([373d901](https://github.com/anatolykoptev/go-kit/commit/373d9015e94194065fad9d42d4f627f2a5725d8b))
+* **cache:** log L2 Set/Del failures at Warn and count them in l2errors ([64bac8a](https://github.com/anatolykoptev/go-kit/commit/64bac8ad83ddaac85cfc4ff6997e6d34c1f558ac))
+* **cache:** prevent goroutine leak when Close() is never called ([a34715f](https://github.com/anatolykoptev/go-kit/commit/a34715fe470377ac768a8caf19b80ba358cac909))
+* **cache:** prevent goroutine leak when Close() is never called ([edaebee](https://github.com/anatolykoptev/go-kit/commit/edaebeead5f4f79cef48a18f0a5b171e263a9abd))
+* **llm:** defer cancelAttempt to guarantee context cancel on panic ([9017251](https://github.com/anatolykoptev/go-kit/commit/9017251ae1435f9c2cec27c11a480ce13cb58c16))
+* **llm:** defer cancelAttempt to guarantee context cancel on panic in attemptEndpoint ([9f7f492](https://github.com/anatolykoptev/go-kit/commit/9f7f492eb2a96fbd3c0c70502d1c397178400366))
+* **llm:** return ErrNoValidAPIKey when no key is configured ([ac6f153](https://github.com/anatolykoptev/go-kit/commit/ac6f1535e5b3c5d648d15d02334cfe96bba7813e))
+* **llm:** return ErrNoValidAPIKey when no key is configured ([2f77a3c](https://github.com/anatolykoptev/go-kit/commit/2f77a3c87a5112a4a0ecb759ac3f87e6d97b37c3))
+* log resp.Body.Close() errors instead of silently ignoring ([e41678c](https://github.com/anatolykoptev/go-kit/commit/e41678cd2a4678e051e854f30cad6ab497b183d4))
+* **ratelimit:** prevent goroutine leak + bound map growth in KeyLimiter ([3c9c89b](https://github.com/anatolykoptev/go-kit/commit/3c9c89b165ba5c41493d9d76a3b183f2f6421629))
+* **ratelimit:** prevent goroutine leak + bound map growth in KeyLimiter ([c54e396](https://github.com/anatolykoptev/go-kit/commit/c54e396ef6dbf896064c3576a6db7dbcc27e242b))
+* replace nolint:errcheck on Body.Close() with slog.Warn across 9 files ([e6cd6c4](https://github.com/anatolykoptev/go-kit/commit/e6cd6c4f8a358771d7034e0d54544138f3becc94))
+
 ## [0.97.4](https://github.com/anatolykoptev/go-kit/compare/v0.97.3...v0.97.4) (2026-07-22)
 
 
