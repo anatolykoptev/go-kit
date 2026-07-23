@@ -16,8 +16,9 @@ type Term struct {
 // glossaryEntry is a compiled alias: its lowercased words (for case-insensitive
 // matching) and the term to emit on a match.
 type glossaryEntry struct {
-	words []string // alias split into lowercase words
-	term  Term
+	words     []string // alias split into lowercase words
+	wordRunes [][]rune // precomputed []rune of each word (hot-path: avoids re-splitting per match)
+	term      Term
 }
 
 // Glossary normalizes STT-garbled brand/service/person names to their canonical
@@ -52,7 +53,11 @@ func NewGlossary(terms []Term) *Glossary {
 				return
 			}
 			seen[key] = true
-			g.entries = append(g.entries, glossaryEntry{words: words, term: t})
+			wr := make([][]rune, len(words))
+			for k, w := range words {
+				wr[k] = []rune(w)
+			}
+			g.entries = append(g.entries, glossaryEntry{words: words, wordRunes: wr, term: t})
 		}
 		for _, a := range t.Aliases {
 			add(a)
@@ -93,11 +98,16 @@ func (g *Glossary) Apply(text string) string {
 	for i < len(runes) {
 		r := runes[i]
 		// Pass HTML tags through verbatim; track <b>/</b> for double-wrap guard.
-		if r == '<' {
+		// Only treat '<' as a tag start when the next rune is a letter or '/'
+		// (i.e. <b>, </b>, <a …>). A stray '<' (e.g. "темп < 5", a lone trailing
+		// '<') is emitted literally and the normal walk continues — it must NOT
+		// swallow following text as a fake tag or break the loop.
+		if r == '<' && i+1 < len(runes) && (unicode.IsLetter(runes[i+1]) || runes[i+1] == '/') {
 			end := indexRune(runes, i, '>')
 			if end < 0 {
-				b.WriteString(string(runes[i:]))
-				break
+				b.WriteRune('<')
+				i++
+				continue
 			}
 			end++ // include '>'
 			tag := strings.ToLower(strings.TrimSpace(string(runes[i+1 : end-1])))
@@ -115,6 +125,13 @@ func (g *Glossary) Apply(text string) string {
 			}
 			b.WriteString(string(runes[i:end]))
 			i = end
+			continue
+		}
+		if r == '<' {
+			// Stray '<' (not followed by letter/'/', or trailing with no next
+			// rune): emit literally and continue the normal walk.
+			b.WriteRune('<')
+			i++
 			continue
 		}
 		// Only attempt a match at a word start.
@@ -143,7 +160,7 @@ func (g *Glossary) Apply(text string) string {
 // be a word start. Returns the end position (exclusive) and the winning term.
 func (g *Glossary) matchAt(runes []rune, pos int) (int, Term, bool) {
 	for _, e := range g.entries {
-		if end, ok := matchAlias(runes, pos, e.words); ok {
+		if end, ok := matchAlias(runes, pos, e.wordRunes); ok {
 			return end, e.term, true
 		}
 	}
@@ -153,14 +170,14 @@ func (g *Glossary) matchAt(runes []rune, pos int) (int, Term, bool) {
 // matchAlias reports whether the input at pos matches the alias word sequence,
 // tolerating any non-empty run of whitespace between alias words. The match
 // must be followed by a word boundary (non-word rune or end of input).
-func matchAlias(runes []rune, pos int, words []string) (int, bool) {
+// words is the precomputed [][]rune of each alias word (lowercased).
+func matchAlias(runes []rune, pos int, words [][]rune) (int, bool) {
 	i := pos
-	for k, w := range words {
+	for k, wr := range words {
 		// Must be at a word rune.
 		if i >= len(runes) || !isWordRune(runes[i]) {
 			return 0, false
 		}
-		wr := []rune(w)
 		if i+len(wr) > len(runes) {
 			return 0, false
 		}
@@ -242,6 +259,8 @@ func indexRune(runes []rune, start int, c rune) int {
 
 // tagName extracts the tag name from a normalized (lowercased, trimmed) tag
 // content string, handling a leading "/" for closing tags.
+// NOTE: parallels html.go's parseTagName but operates on already-normalized
+// content; intentionally not unified to keep glossary self-contained.
 func tagName(tag string) string {
 	s := strings.TrimPrefix(tag, "/")
 	if sp := strings.IndexByte(s, ' '); sp > 0 {

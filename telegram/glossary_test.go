@@ -181,3 +181,91 @@ func TestGlossary_MultipleTermsInOnePass(t *testing.T) {
 		t.Errorf("multi-term: got %q, want %q", got, want)
 	}
 }
+
+// A stray '<' (not followed by a letter or '/') must be treated as a literal
+// character, not a tag start. Otherwise a lone '<' with no '>' drops all later
+// terms (the loop breaks), and '< ютуб >' swallows ютуб as a fake tag.
+func TestGlossary_StrayAngleBracket(t *testing.T) {
+	g := NewGlossary([]Term{
+		{Canonical: "YouTube", Aliases: []string{"ютуб"}},
+	})
+	tests := []struct{ name, in, want string }{
+		{"stray lt before gt", "темп < 5 > ютуб", "темп < 5 > YouTube"},
+		{"stray lt swallows term", "темп < ютуб >", "темп < YouTube >"},
+		{"lone lt no gt drops later", "ютуб < ютуб", "YouTube < YouTube"},
+		{"trailing lone lt", "ютуб <", "YouTube <"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := g.Apply(tc.in); got != tc.want {
+				t.Errorf("Apply(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// Apply is idempotent: applying twice yields the same result as applying once.
+// Guards against double-<b> wrapping and re-mangling of already-normalized text.
+func TestGlossary_SecondApplyIdempotent(t *testing.T) {
+	g := NewGlossary([]Term{
+		{Canonical: "HeadHunter", Aliases: []string{"хэт хантер"}, Bold: true},
+		{Canonical: "YouTube", Aliases: []string{"ютуб"}, Bold: false},
+	})
+	in := "хэт хантер ютуб"
+	once := g.Apply(in)
+	twice := g.Apply(once)
+	if once != twice {
+		t.Errorf("not idempotent:\n once  = %q\n twice = %q", once, twice)
+	}
+}
+
+// When two aliases start at the same position, the longer one is tried first.
+// If it fails the trailing word-boundary, the shorter one must still match at
+// that same position — it must not be skipped.
+func TestGlossary_ShorterWinsAtSamePosition(t *testing.T) {
+	g := NewGlossary([]Term{
+		{Canonical: "Chat", Aliases: []string{"чат", "чат бот"}},
+	})
+	if got := g.Apply("чат ботинок"); got != "Chat ботинок" {
+		t.Errorf("shorter wins: got %q, want %q", got, "Chat ботинок")
+	}
+}
+
+// isWordRune includes digits, so a digit alias matches as a whole token but
+// must NOT match inside a longer alphanumeric word (word-boundary aware).
+func TestGlossary_DigitBoundary(t *testing.T) {
+	g := NewGlossary([]Term{
+		{Canonical: "Three", Aliases: []string{"3"}},
+	})
+	if got := g.Apply("3"); got != "Three" {
+		t.Errorf("bare digit: got %q, want %q", got, "Three")
+	}
+	if got := g.Apply("в3"); got != "в3" {
+		t.Errorf("digit inside word: got %q, want %q", got, "в3")
+	}
+	if got := g.Apply("3d"); got != "3d" {
+		t.Errorf("letter after digit: got %q, want %q", got, "3d")
+	}
+}
+
+// Empty canonical and blank/whitespace-only aliases are silently ignored — no
+// panic, no spurious match.
+func TestGlossary_EmptyAndBlankNoOp(t *testing.T) {
+	// Empty canonical: the whole term (including its aliases) is skipped.
+	g := NewGlossary([]Term{
+		{Canonical: "", Aliases: []string{"ютуб"}},
+	})
+	if got := g.Apply("ютуб here"); got != "ютуб here" {
+		t.Errorf("empty canonical: got %q, want no match", got)
+	}
+	// Whitespace-only / empty aliases are ignored; canonical still registered.
+	g2 := NewGlossary([]Term{
+		{Canonical: "YouTube", Aliases: []string{"  ", "\t", ""}},
+	})
+	if got := g2.Apply("   "); got != "   " {
+		t.Errorf("blank alias on blank input: got %q", got)
+	}
+	if got := g2.Apply("youtube"); got != "YouTube" {
+		t.Errorf("canonical still works: got %q, want %q", got, "YouTube")
+	}
+}
