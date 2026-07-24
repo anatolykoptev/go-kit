@@ -101,6 +101,22 @@ func New(cfg Config) *Cache {
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
 	}
+	// Opt-in Prometheus metrics — registered lazily via CounterFunc, so no
+	// background goroutine and no per-Get/Set overhead. Skipped entirely when
+	// cfg.Metrics is nil (default).
+	//
+	// Registered BEFORE the cleanup goroutine + finalizer are started so that
+	// a panic during registration (e.g. duplicate metric name on a shared
+	// Registerer) cannot leak the cleanup goroutine: registerCacheMetrics
+	// builds CounterFunc/GaugeFunc closures that capture c, which keeps c
+	// reachable via the Registerer and defeats the runtime finalizer — so a
+	// goroutine started before a registration panic would never be reclaimed
+	// (neither Close nor the finalizer can run). Starting the goroutine only
+	// after registration succeeds makes construction panic-safe.
+	if cfg.Metrics != nil {
+		registerCacheMetrics(c, cfg.Metrics)
+	}
+
 	// Launch the background cleanup goroutine. The goroutine holds only
 	// the done channel (a separate heap object) and a weak pointer to the
 	// Cache, so it does NOT prevent the Cache from being garbage-collected.
@@ -133,13 +149,6 @@ func New(cfg Config) *Cache {
 	// services that create transient caches (per-request / per-tenant).
 	// Close() clears the finalizer to avoid a double-close.
 	runtime.SetFinalizer(c, func(c *Cache) { c.Close() })
-
-	// Opt-in Prometheus metrics — registered lazily via CounterFunc, so no
-	// background goroutine and no per-Get/Set overhead. Skipped entirely when
-	// cfg.Metrics is nil (default).
-	if cfg.Metrics != nil {
-		registerCacheMetrics(c, cfg.Metrics)
-	}
 
 	return c
 }

@@ -196,6 +196,13 @@ func TestWithMetrics_DuplicateNameSameRegPanics(t *testing.T) {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic on duplicate metric name")
 		}
+		// No goroutine-leak cleanup needed here: cache.New registers metrics
+		// BEFORE starting the background cleanup goroutine (see cache.go New),
+		// so a registration panic never launches the goroutine in the first
+		// place. Previously the goroutine was started before registration and
+		// the panic left it parked forever (the finalizer could not reclaim it
+		// because the prometheus closures keep c reachable via the Registerer),
+		// which flaked goleak.VerifyTestMain intermittently in CI.
 	}()
 
 	// Same name on the same registry: prometheus.MustRegister panics.
