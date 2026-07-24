@@ -33,9 +33,12 @@ var reHTMLTag = regexp.MustCompile(
 )
 
 // reMDHeuristics holds individual markdown signals, each sufficient for detection.
+// \w in Go regex is ASCII-only ([0-9A-Za-z_]); we use [\p{L}\p{N}_] to also
+// match non-ASCII letters (Cyrillic, CJK, etc.) so that **Жирный** and __жирный__
+// are detected as markdown, not misclassified as plain text.
 var reMDHeuristics = []*regexp.Regexp{
-	regexp.MustCompile(`\*\*\w`),              // **word
-	regexp.MustCompile(`__\w`),                // __word
+	regexp.MustCompile(`\*\*[\p{L}\p{N}_]`),   // **word (Unicode-aware)
+	regexp.MustCompile(`__[\p{L}\p{N}_]`),     // __word (Unicode-aware)
 	regexp.MustCompile(`\[[^\]]+\]\([^)]+\)`), // [text](url)
 	regexp.MustCompile("(?m)^```"),            // fenced code block
 	regexp.MustCompile(`(?m)^# `),             // ATX heading
