@@ -125,6 +125,23 @@ func TestPrepareForTelegram_MarkdownHTMLEntitySafe(t *testing.T) {
 	}
 }
 
+func TestPrepareForTelegram_CyrillicBoldRoundTrip(t *testing.T) {
+	// End-to-end: Cyrillic **bold** must be detected as markdown and converted
+	// to <b>…</b> HTML. Proves the Detect→MarkdownToHTML path formats
+	// non-ASCII bold instead of leaking literal "**" as plain text.
+	in := "**Жирный** текст"
+	out, mode := PrepareForTelegram(in)
+	if mode != "HTML" {
+		t.Errorf("mode = %q, want HTML", mode)
+	}
+	if !strings.Contains(out, "<b>Жирный</b>") {
+		t.Errorf("Cyrillic bold not converted: %q", out)
+	}
+	if strings.Contains(out, "**") {
+		t.Errorf("literal ** leaked into output: %q", out)
+	}
+}
+
 func TestPrepareForTelegram_PlainEntityEscaped(t *testing.T) {
 	// Plain text with < > & must be escaped so Telegram HTML mode is safe.
 	in := "price < 10 & cost > 5"
