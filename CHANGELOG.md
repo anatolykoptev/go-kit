@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.97.6](https://github.com/anatolykoptev/go-kit/compare/v0.97.5...v0.97.6) (2026-07-24)
+
+
+### Fixed
+
+* **cache:** register metrics before launching cleanup goroutine (fix flaky goleak CI) ([#229](https://github.com/anatolykoptev/go-kit/issues/229)) ([7700d8f](https://github.com/anatolykoptev/go-kit/commit/7700d8f085a515a20544eaae13fc8d378fdc1050))
+* **telegram:** Unicode-aware markdown detection for non-ASCII scripts ([#227](https://github.com/anatolykoptev/go-kit/issues/227)) ([5599b85](https://github.com/anatolykoptev/go-kit/commit/5599b852ef3d8d31cde739526a20e4978587327a))
+
 ## [0.97.5](https://github.com/anatolykoptev/go-kit/compare/v0.97.4...v0.97.5) (2026-07-23)
 
 
