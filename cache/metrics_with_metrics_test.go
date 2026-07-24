@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,15 @@ import (
 	"github.com/anatolykoptev/go-kit/cache"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"go.uber.org/goleak"
 )
+
+// cacheNewGoroutineFrame is the stack frame of the background cleanup
+// goroutine launched by cache.New (the `go func() { ... }()` at cache.go:~128).
+// It is the goroutine that gets orphaned when construction is reordered to
+// start it before registerCacheMetrics and a duplicate-name panic then aborts
+// New before it returns the *Cache to the caller.
+const cacheNewGoroutineFrame = "github.com/anatolykoptev/go-kit/cache.New.func1"
 
 // gather returns the metric families currently registered on reg, indexed by
 // metric family name. Helper for the WithMetrics tests below.
@@ -184,6 +193,35 @@ func TestWithMetrics_DistinctNamesNoConflict(t *testing.T) {
 }
 
 func TestWithMetrics_DuplicateNameSameRegPanics(t *testing.T) {
+	// Deterministic guard for the cache.New construction-order fix
+	// (registerCacheMetrics BEFORE the cleanup goroutine + finalizer).
+	//
+	// On the BROKEN order (goroutine started before registration), a
+	// duplicate-name panic during registerCacheMetrics orphans the just-
+	// launched cleanup goroutine: the second *Cache is never returned to
+	// the caller, so only the runtime finalizer can reclaim it. The
+	// finalizer is GC-driven, so under CI's default GOGC it may fire
+	// before goleak's end-of-package check and close the orphaned
+	// goroutine — masking the leak and leaving the regression GREEN even
+	// on reverted code (synthetic-green). Two measures make this guard
+	// deterministic under the plain preflight command (no GOGC=off):
+	//
+	//   1. debug.SetGCPercent(-1) for the test window stops the finalizer
+	//      from running inside this test, so the orphaned goroutine stays
+	//      alive and detectable regardless of the caller's GOGC.
+	//   2. goleak.IgnoreCurrent() snapshots every goroutine alive right
+	//      before the second cache.New (including c1's cleanup goroutine
+	//      and any lingering goroutines from prior -count iterations),
+	//      so goleak.Find flags ONLY a goroutine newly launched by the
+	//      panicking cache.New. The error is then scoped to the
+	//      cache.New.func1 frame so foreign runtime/parallel-test
+	//      goroutines never cause a false failure.
+	//
+	// On the FIXED order no goroutine is launched on the panic path, so
+	// goleak.Find returns nil and the assertion holds.
+	prev := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(prev)
+
 	reg := prometheus.NewRegistry()
 	c1 := cache.New(cache.Config{
 		L1MaxItems: 10,
@@ -192,10 +230,28 @@ func TestWithMetrics_DuplicateNameSameRegPanics(t *testing.T) {
 	})
 	defer c1.Close()
 
+	// Snapshot every goroutine alive right now (c1's cleanup goroutine,
+	// runtime goroutines, any leftovers from prior -count iterations) so
+	// goleak.Find below reports ONLY a goroutine newly started by the
+	// panicking second cache.New.
+	ignore := goleak.IgnoreCurrent()
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic on duplicate metric name")
 		}
+		err := goleak.Find(ignore)
+		if err == nil {
+			return
+		}
+		if !strings.Contains(err.Error(), cacheNewGoroutineFrame) {
+			// A non-cache.New goroutine appeared (foreign runtime / parallel
+			// test noise) — not the regression we are guarding; ignore it.
+			return
+		}
+		t.Fatalf("cleanup goroutine leaked on duplicate-name panic "+
+			"(construction order regressed — registerCacheMetrics must "+
+			"run BEFORE the cleanup goroutine is launched):\n%v", err)
 	}()
 
 	// Same name on the same registry: prometheus.MustRegister panics.
