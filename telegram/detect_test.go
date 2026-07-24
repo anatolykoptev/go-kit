@@ -64,6 +64,23 @@ func TestDetect(t *testing.T) {
 			in:   "__hello__ world",
 			want: FormatMarkdown,
 		},
+		// Unicode-aware bold detection: \w is ASCII-only in Go regex, so
+		// non-ASCII scripts (Cyrillic, CJK) must still be detected as markdown.
+		{
+			name: "bold asterisks cyrillic",
+			in:   "**Жирный** текст",
+			want: FormatMarkdown,
+		},
+		{
+			name: "bold underscores cyrillic",
+			in:   "__жирный__ текст",
+			want: FormatMarkdown,
+		},
+		{
+			name: "bold asterisks cjk",
+			in:   "**日本語** text",
+			want: FormatMarkdown,
+		},
 		{
 			name: "markdown link",
 			in:   "[Google](https://google.com)",
