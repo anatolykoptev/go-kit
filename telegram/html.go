@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/anatolykoptev/go-kit/strutil"
 )
 
 // MaxMessageLen is the Telegram Bot API limit for a single message.
@@ -212,15 +214,21 @@ func runeOffset(s string, n int) int {
 	return off
 }
 
-// SplitMessage splits text into chunks respecting maxLen (in runes, not bytes),
-// preferring newline boundaries. Second pass fixes HTML tags across chunk
-// boundaries by closing open tags at end of each chunk and reopening them at
-// start of next chunk.
+// SplitMessage splits text into chunks respecting maxLen (in UTF-16 code
+// units, the unit Telegram measures message length in — not runes, not
+// bytes), preferring newline boundaries. A non-BMP rune (2 UTF-16 units,
+// e.g. an emoji) is never halved across a boundary. Second pass fixes
+// HTML tags across chunk boundaries by closing open tags at end of each
+// chunk and reopening them at start of next chunk, and trims any chunk
+// that exceeds maxLen after tag repair.
+//
+// For pure-BMP text (ASCII, Cyrillic, etc.) UTF-16 units == runes, so
+// behaviour is identical to the previous rune-based implementation.
 func SplitMessage(text string, maxLen int) []string {
 	if maxLen <= 0 {
 		return []string{text}
 	}
-	if utf8.RuneCountInString(text) <= maxLen {
+	if strutil.UTF16Len(text) <= maxLen {
 		return []string{text}
 	}
 
@@ -230,16 +238,17 @@ func SplitMessage(text string, maxLen int) []string {
 	return filterEmptyChunks(result, originalText)
 }
 
-// splitRawChunks splits text on newline boundaries respecting maxLen,
-// avoiding splits inside HTML tags.
+// splitRawChunks splits text on newline boundaries respecting maxLen
+// (in UTF-16 code units), avoiding splits inside HTML tags and never
+// halving a surrogate pair.
 func splitRawChunks(text string, maxLen int) []string {
 	var chunks []string
 	for len(text) > 0 {
-		if utf8.RuneCountInString(text) <= maxLen {
+		if strutil.UTF16Len(text) <= maxLen {
 			chunks = append(chunks, text)
 			break
 		}
-		byteOff := runeOffset(text, maxLen)
+		byteOff := strutil.UTF16ByteCut(text, maxLen)
 		splitAt := strings.LastIndex(text[:byteOff], "\n")
 		if splitAt <= 0 {
 			splitAt = byteOff
@@ -281,7 +290,7 @@ func fixChunkTags(rawChunks []string, maxLen int) []string {
 		}
 		openTags = unclosedTags(chunk)
 		chunk += buildClosers(openTags)
-		if utf8.RuneCountInString(chunk) > maxLen {
+		if strutil.UTF16Len(chunk) > maxLen {
 			chunk = trimChunkToLimit(chunk, maxLen)
 		}
 		result = append(result, chunk)
@@ -315,25 +324,26 @@ func filterEmptyChunks(chunks []string, fallback string) []string {
 	return filtered
 }
 
-// trimChunkToLimit trims an HTML chunk to fit within maxLen runes.
-// Iteratively cuts the raw content (before tag repair) until the repaired
-// result fits. Uses a shrinking byte budget to guarantee convergence.
+// trimChunkToLimit trims an HTML chunk to fit within maxLen UTF-16 code
+// units. Iteratively cuts the raw content (before tag repair) until the
+// repaired result fits. Uses a shrinking unit budget to guarantee
+// convergence. Never halves a surrogate pair.
 func trimChunkToLimit(chunk string, maxLen int) string {
 	if maxLen <= 0 {
 		return chunk
 	}
-	if utf8.RuneCountInString(chunk) <= maxLen {
+	if strutil.UTF16Len(chunk) <= maxLen {
 		return chunk
 	}
 
-	// Start with a byte budget equal to maxLen runes, then shrink.
+	// Start with a unit budget equal to maxLen, then shrink.
 	budget := maxLen
 	const maxIter = 30
 	for i := 0; i < maxIter; i++ {
 		if budget < 1 {
 			budget = 1
 		}
-		cutOff := runeOffset(chunk, budget)
+		cutOff := strutil.UTF16ByteCut(chunk, budget)
 		if cutOff > len(chunk) {
 			cutOff = len(chunk)
 		}
@@ -347,16 +357,16 @@ func trimChunkToLimit(chunk string, maxLen int) string {
 		}
 
 		repaired := RepairHTMLNesting(cut)
-		if utf8.RuneCountInString(repaired) <= maxLen {
+		if strutil.UTF16Len(repaired) <= maxLen {
 			return repaired
 		}
 		// Shrink budget: remove more content to leave room for closing tags.
-		budget -= utf8.RuneCountInString(repaired) - maxLen + 1
+		budget -= strutil.UTF16Len(repaired) - maxLen + 1
 	}
 	// Final fallback: strip all HTML tags and hard-truncate.
 	plain := StripHTMLTags(chunk)
-	if utf8.RuneCountInString(plain) > maxLen {
-		off := runeOffset(plain, maxLen)
+	if strutil.UTF16Len(plain) > maxLen {
+		off := strutil.UTF16ByteCut(plain, maxLen)
 		plain = plain[:off]
 	}
 	return plain
