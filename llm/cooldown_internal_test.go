@@ -2,8 +2,10 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -275,4 +277,91 @@ func TestModelCooldown_NilSafe(t *testing.T) {
 	}
 	mc.recordFailure("m", 0) // must not panic
 	mc.recordSuccess("m")    // must not panic
+}
+
+// TestModelCooldown_ConcurrentObserver_NoRace is the regression guard for the
+// issue #231 race class: the async observer dispatch (fireCooldownObserver) and
+// the mutex-guarded cooldown state machine must stay race-free under concurrent
+// pressure from many goroutines. The original failure was a TEST race in a
+// downstream consumer (go-engine's TestCooldown_ObserverFires read an
+// unsynchronised slice concurrently with the async observer goroutine — see the
+// issue #231 race report); this test proves the PRODUCTION state machine itself
+// is clean when a consumer synchronises correctly, and catches any future
+// regression that introduces an unsynchronised access to modelCooldown fields
+// (until, fails, onChange, clock) or fires the observer under a held lock.
+//
+// Why concurrent exercise: a race that only surfaces under timing pressure
+// (observer goroutine landing while a reader reads) needs many goroutines
+// hammering recordFailure/recordSuccess/cooling simultaneously so the race
+// detector sees every interleaving. A single sequential call cannot exercise
+// the contended window. The observer sink is mutex-guarded (modelling a
+// CORRECT consumer); under -race any unsynchronised PRODUCTION access trips
+// the detector regardless of the consumer's sync.
+func TestModelCooldown_ConcurrentObserver_NoRace(t *testing.T) {
+	mc := newModelCooldown(CooldownConfig{FailThreshold: 1, Default: 50 * time.Millisecond})
+
+	// Observer sink guarded by obsMu — a correct consumer synchronises its own
+	// state. The production contract is "observer is dispatched async; the
+	// consumer must synchronise" (cooldown.go:78-83). This test models that.
+	var obsMu sync.Mutex
+	var obsEvents []obsEvent
+	mc.onChange = func(model string, cooling bool, d time.Duration) {
+		obsMu.Lock()
+		obsEvents = append(obsEvents, obsEvent{model: model, cooling: cooling, d: d})
+		obsMu.Unlock()
+	}
+
+	const goroutines, iterations = 16, 200
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	start := make(chan struct{})
+
+	for i := range goroutines {
+		go func(idx int) {
+			defer wg.Done()
+			model := fmt.Sprintf("m%d", idx%4)
+			<-start
+			for j := range iterations {
+				switch j % 3 {
+				case 0:
+					mc.recordFailure(model, 0)
+				case 1:
+					mc.recordSuccess(model)
+				case 2:
+					mc.cooling(model)
+				}
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	// Drain the observer sink under the lock and assert at least one entry edge
+	// fired (with 16 goroutines × 200 iterations and FailThreshold=2, cooldown
+	// entries are guaranteed). The assertion guards against a regression that
+	// silently drops observer dispatch.
+	obsMu.Lock()
+	n := len(obsEvents)
+	entries := 0
+	for _, e := range obsEvents {
+		if e.cooling {
+			entries++
+		}
+	}
+	obsMu.Unlock()
+
+	if n == 0 {
+		t.Fatal("observer never fired under concurrent exercise — dispatch regressed")
+	}
+	if entries == 0 {
+		t.Errorf("no cooling=true entry events among %d observer events — entry-edge regressed", n)
+	}
+}
+
+// obsEvent is the synchronised observer sink record for
+// TestModelCooldown_ConcurrentObserver_NoRace.
+type obsEvent struct {
+	model   string
+	cooling bool
+	d       time.Duration
 }
