@@ -224,6 +224,14 @@ func runeOffset(s string, n int) int {
 //
 // For pure-BMP text (ASCII, Cyrillic, etc.) UTF-16 units == runes, so
 // behaviour is identical to the previous rune-based implementation.
+//
+// Unsatisfiable budget: if maxLen is smaller than the UTF-16 unit width of
+// the leading rune (e.g. maxLen==1 with a leading non-BMP emoji, which is
+// 2 units), that rune cannot fit in any legal chunk. Rather than hang or
+// drop it, the rune is emitted as its own chunk, exceeding maxLen by its
+// unit width. The caller's real budgets (Telegram 4096) never hit this;
+// it only matters for adversarially small maxLen values where no correct
+// chunk exists for that rune.
 func SplitMessage(text string, maxLen int) []string {
 	if maxLen <= 0 {
 		return []string{text}
@@ -240,7 +248,9 @@ func SplitMessage(text string, maxLen int) []string {
 
 // splitRawChunks splits text on newline boundaries respecting maxLen
 // (in UTF-16 code units), avoiding splits inside HTML tags and never
-// halving a surrogate pair.
+// halving a surrogate pair. Guarantees forward progress: every iteration
+// consumes at least one whole rune, even when maxLen is too small to fit
+// the leading rune (in which case that rune is emitted exceeding maxLen).
 func splitRawChunks(text string, maxLen int) []string {
 	var chunks []string
 	for len(text) > 0 {
@@ -249,6 +259,15 @@ func splitRawChunks(text string, maxLen int) []string {
 			break
 		}
 		byteOff := strutil.UTF16ByteCut(text, maxLen)
+		// Forward-progress guarantee: when the leading rune's UTF-16 unit
+		// width exceeds maxLen (e.g. maxLen==1, leading non-BMP emoji = 2
+		// units), UTF16ByteCut returns 0 and the loop would never advance.
+		// Emit the first rune as its own chunk, exceeding maxLen — the
+		// only alternative is to hang or drop it. See SplitMessage's doc
+		// comment (Unsatisfiable budget).
+		if byteOff == 0 {
+			_, byteOff = utf8.DecodeRuneInString(text)
+		}
 		splitAt := strings.LastIndex(text[:byteOff], "\n")
 		if splitAt <= 0 {
 			splitAt = byteOff
@@ -327,7 +346,13 @@ func filterEmptyChunks(chunks []string, fallback string) []string {
 // trimChunkToLimit trims an HTML chunk to fit within maxLen UTF-16 code
 // units. Iteratively cuts the raw content (before tag repair) until the
 // repaired result fits. Uses a shrinking unit budget to guarantee
-// convergence. Never halves a surrogate pair.
+// convergence: the budget strictly decreases each iteration, and when it
+// shrinks below the leading rune's width the cut is empty, RepairHTMLNesting
+// returns "", and "" (0 units <= maxLen) is returned — the empty chunk is
+// later dropped by filterEmptyChunks. Never halves a surrogate pair.
+// Unsatisfiable budgets (maxLen smaller than the leading rune) are handled
+// by splitRawChunks's forward-progress guard before this function is ever
+// reached; see SplitMessage's doc comment.
 func trimChunkToLimit(chunk string, maxLen int) string {
 	if maxLen <= 0 {
 		return chunk
@@ -357,6 +382,27 @@ func trimChunkToLimit(chunk string, maxLen int) string {
 		}
 
 		repaired := RepairHTMLNesting(cut)
+		if repaired == "" {
+			// Empty cut. Two causes:
+			// 1. The leading rune's UTF-16 width exceeds maxLen (e.g. a
+			//    non-BMP emoji, 2 units, at maxLen==1) — the budget is
+			//    unsatisfiable for that rune. Emit it as its own chunk
+			//    exceeding maxLen rather than drop it silently. See
+			//    SplitMessage's doc comment (Unsatisfiable budget).
+			// 2. Tag backup emptied the cut (leading rune fits maxLen but
+			//    an unclosed '<' forced the cut back to 0) — return "";
+			//    filterEmptyChunks drops the empty chunk. This is the
+			//    tag-overhead case, not unsatisfiable-leading-rune.
+			r, sz := utf8.DecodeRuneInString(chunk)
+			ru := 1
+			if r >= 0x10000 {
+				ru = 2
+			}
+			if ru > maxLen {
+				return chunk[:sz]
+			}
+			return ""
+		}
 		if strutil.UTF16Len(repaired) <= maxLen {
 			return repaired
 		}

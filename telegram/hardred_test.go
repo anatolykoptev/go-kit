@@ -443,19 +443,31 @@ func TestHardRed_Split_AllNewlines(t *testing.T) {
 }
 
 func TestHardRed_Split_MaxLenOne(t *testing.T) {
-	// maxLen=1 — should not panic, should produce single-rune chunks.
+	// maxLen=1 — should not panic or hang, and must preserve every rune.
+	// Previously used "hello" (pure BMP), which never exercised the
+	// non-BMP termination bug: a leading emoji (2 UTF-16 units) doesn't
+	// fit in maxLen=1, UTF16ByteCut returned 0, and splitRawChunks hung
+	// forever. Now uses a leading emoji so the case is actually covered.
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("SplitMessage panicked with maxLen=1: %v", r)
 		}
 	}()
 
-	msg := "hello"
+	msg := "🔥hello"
 	chunks := SplitMessage(msg, 1)
-	if len(chunks) < 5 {
-		t.Errorf("expected at least 5 chunks for 'hello' with maxLen=1, got %d: %v", len(chunks), chunks)
+	// Every input rune must appear in the output — nothing dropped.
+	got := strings.Join(chunks, "")
+	if got != msg {
+		t.Errorf("rune loss with maxLen=1: in=%q out=%q chunks=%v", msg, got, chunks)
 	}
 	for i, ch := range chunks {
+		if ch == "" {
+			t.Errorf("chunk %d is empty", i)
+		}
+		// Each chunk is at most one rune (BMP = 1 unit, non-BMP = 2 units
+		// but a single rune — exceeds maxLen=1 by design, see SplitMessage
+		// doc comment "Unsatisfiable budget").
 		rc := utf8.RuneCountInString(ch)
 		if rc > 1 {
 			t.Errorf("chunk %d has %d runes, want <=1: %q", i, rc, ch)
