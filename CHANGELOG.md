@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.97.7](https://github.com/anatolykoptev/go-kit/compare/v0.97.6...v0.97.7) (2026-07-26)
+
+
+### Fixed
+
+* **llm:** add concurrent regression guard for cooldown observer race ([#235](https://github.com/anatolykoptev/go-kit/issues/235)) ([1e668eb](https://github.com/anatolykoptev/go-kit/commit/1e668eb5c2f7f64b4a641eb528e098b3a0990ebc))
+* **telegram:** SplitMessage measures in UTF-16 units, not runes ([#232](https://github.com/anatolykoptev/go-kit/issues/232)) ([1ae5178](https://github.com/anatolykoptev/go-kit/commit/1ae5178008dd5631e3cc2cc2f63357c199672cb0))
+
 ## [0.97.6](https://github.com/anatolykoptev/go-kit/compare/v0.97.5...v0.97.6) (2026-07-24)
 
 
