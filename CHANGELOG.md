@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.8](https://github.com/anatolykoptev/go-kit/compare/v0.97.7...v0.97.8) (2026-07-27)
+
+
+### Added
+
+* **pacing:** central anti-fingerprint jitter + per-key pacing package ([#236](https://github.com/anatolykoptev/go-kit/issues/236)) ([3d380c2](https://github.com/anatolykoptev/go-kit/commit/3d380c27a034a393843e0991e567838ce64c4d60))
+
 ## [0.97.7](https://github.com/anatolykoptev/go-kit/compare/v0.97.6...v0.97.7) (2026-07-26)
 
 
