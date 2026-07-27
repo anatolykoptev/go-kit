@@ -126,7 +126,10 @@ func TestHardRed_Unicode_OnlySpaces(t *testing.T) {
 
 func TestHardRed_Unicode_4ByteEmojiAtMaxLenBoundary(t *testing.T) {
 	// Single 4-byte emoji exactly at maxLen boundary.
-	emoji := "🔥" // 1 rune, 4 bytes
+	// 4095 'a' + 1 emoji = 4096 runes but 4097 UTF-16 code units (the emoji
+	// is 2 units). Telegram measures in UTF-16 units, so this MUST split —
+	// a single 4097-unit chunk would be rejected by the API.
+	emoji := "🔥" // 1 rune, 4 bytes, 2 UTF-16 units
 	msg := strings.Repeat("a", 4095) + emoji
 	runeCount := utf8.RuneCountInString(msg)
 	if runeCount != 4096 {
@@ -134,11 +137,23 @@ func TestHardRed_Unicode_4ByteEmojiAtMaxLenBoundary(t *testing.T) {
 	}
 
 	chunks := SplitMessage(msg, 4096)
-	if len(chunks) != 1 {
-		t.Errorf("4096-rune message with emoji at end should be 1 chunk, got %d", len(chunks))
+	if len(chunks) < 2 {
+		t.Fatalf("4097 UTF-16 units at maxLen=4096 must split, got %d chunks", len(chunks))
 	}
-	if !strings.HasSuffix(chunks[0], emoji) {
-		t.Errorf("emoji at boundary lost: last chars = %q", chunks[0][len(chunks[0])-10:])
+	for i, ch := range chunks {
+		if !utf8.ValidString(ch) {
+			t.Errorf("chunk %d invalid UTF-8: %q", i, ch)
+		}
+	}
+	// The emoji must appear intact in exactly one chunk (never halved).
+	emojiChunks := 0
+	for _, ch := range chunks {
+		if strings.Contains(ch, emoji) {
+			emojiChunks++
+		}
+	}
+	if emojiChunks != 1 {
+		t.Errorf("emoji should appear intact in exactly 1 chunk, found in %d", emojiChunks)
 	}
 }
 
@@ -428,19 +443,31 @@ func TestHardRed_Split_AllNewlines(t *testing.T) {
 }
 
 func TestHardRed_Split_MaxLenOne(t *testing.T) {
-	// maxLen=1 — should not panic, should produce single-rune chunks.
+	// maxLen=1 — should not panic or hang, and must preserve every rune.
+	// Previously used "hello" (pure BMP), which never exercised the
+	// non-BMP termination bug: a leading emoji (2 UTF-16 units) doesn't
+	// fit in maxLen=1, UTF16ByteCut returned 0, and splitRawChunks hung
+	// forever. Now uses a leading emoji so the case is actually covered.
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("SplitMessage panicked with maxLen=1: %v", r)
 		}
 	}()
 
-	msg := "hello"
+	msg := "🔥hello"
 	chunks := SplitMessage(msg, 1)
-	if len(chunks) < 5 {
-		t.Errorf("expected at least 5 chunks for 'hello' with maxLen=1, got %d: %v", len(chunks), chunks)
+	// Every input rune must appear in the output — nothing dropped.
+	got := strings.Join(chunks, "")
+	if got != msg {
+		t.Errorf("rune loss with maxLen=1: in=%q out=%q chunks=%v", msg, got, chunks)
 	}
 	for i, ch := range chunks {
+		if ch == "" {
+			t.Errorf("chunk %d is empty", i)
+		}
+		// Each chunk is at most one rune (BMP = 1 unit, non-BMP = 2 units
+		// but a single rune — exceeds maxLen=1 by design, see SplitMessage
+		// doc comment "Unsatisfiable budget").
 		rc := utf8.RuneCountInString(ch)
 		if rc > 1 {
 			t.Errorf("chunk %d has %d runes, want <=1: %q", i, rc, ch)

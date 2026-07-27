@@ -33,9 +33,11 @@ var reHTMLTag = regexp.MustCompile(
 )
 
 // reMDHeuristics holds individual markdown signals, each sufficient for detection.
-// \w in Go regex is ASCII-only ([0-9A-Za-z_]); we use [\p{L}\p{N}_] to also
-// match non-ASCII letters (Cyrillic, CJK, etc.) so that **Жирный** and __жирный__
-// are detected as markdown, not misclassified as plain text.
+//
+// Note: in Go regex \w is ASCII-only ([0-9A-Za-z_]), so the bold heuristics use
+// [\p{L}\p{N}_] instead — this also matches non-ASCII letters (Cyrillic, CJK, …)
+// so that **Жирный** / __жирный__ / **日本語** are detected as markdown rather
+// than misclassified as plain text and sent unformatted with literal ** / __.
 var reMDHeuristics = []*regexp.Regexp{
 	regexp.MustCompile(`\*\*[\p{L}\p{N}_]`),   // **word (Unicode-aware)
 	regexp.MustCompile(`__[\p{L}\p{N}_]`),     // __word (Unicode-aware)
