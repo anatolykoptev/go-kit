@@ -99,6 +99,47 @@ func (b *Breaker) Record(success bool) {
 	}
 }
 
+// ReleaseProbe resolves an Allow() slot without asserting anything about the
+// health of the guarded call. It pairs with Allow() in place of Record(bool)
+// for the case where the outcome of a gated call is attributable to one
+// breaker and not another.
+//
+// Semantics by state:
+//
+//   - StateHalfOpen: the probe slot is released (halfOpenInFlight is
+//     decremented, floored at 0). The breaker stays half-open — neither
+//     reset() nor tripToOpen() is called, so the next attributable outcome
+//     resolves it. OnTrip and OnRecover are NOT fired.
+//   - StateClosed: no-op. consecutiveFails is left untouched. This is the
+//     load-bearing case: when the outcome is not this breaker's to judge,
+//     fabricating health (as Record(true) would) would zero a failure streak
+//     and make the breaker untrippable under an alternating failure pattern.
+//     Leaving the streak intact is the correct answer.
+//   - StateOpen: no-op, mirroring Record's existing behaviour in that state.
+//
+// Mutex discipline and panic-safety match Record exactly.
+//
+// WARNING: a breaker whose probes are ONLY ever released neutrally will remain
+// half-open indefinitely rather than recover — ReleaseProbe asserts neither
+// success nor failure, so no transition ever fires. At least one probe per
+// recovery cycle must be resolved with Record (or RecordCycle) for the breaker
+// to close again. Intended use: paired-breaker gating where one breaker's
+// outcome (e.g. a transport timeout) is recorded normally and the other
+// breaker's slot (e.g. a rate-limit breaker that never got to judge the call)
+// is released neutrally.
+func (b *Breaker) ReleaseProbe() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch b.state {
+	case StateHalfOpen:
+		if b.halfOpenInFlight > 0 {
+			b.halfOpenInFlight--
+		}
+	case StateClosed, StateOpen:
+		// No-op: assert nothing about health, touch no counters.
+	}
+}
+
 // RecordCycle records aggregate outcomes from a scan cycle. Requires
 // Options.FailRateThreshold to be > 0 — no-op otherwise (use Record for
 // count-based trip). Ignored if total <= 0.
