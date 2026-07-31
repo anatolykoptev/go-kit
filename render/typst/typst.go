@@ -52,9 +52,11 @@ type TypstRenderer struct {
 	// compiles, silently changes what every caller gets — a PDF loses its TOC
 	// and, on card/dark, its title — and no test fails.
 	//
-	// Set once by NewTypstRenderer and never mutated, so concurrent use is
-	// still safe. Nil is tolerated: TypstRenderer is exported and a consumer
-	// may build it as a literal.
+	// Set by NewTypstRenderer and never mutated after construction, so
+	// concurrent use is still safe; tests inject before first use. Nil is
+	// tolerated because TypstRenderer is exported and a consumer may build it
+	// as a literal — no consumer does today, so the fallback is API hygiene
+	// rather than a live dependency.
 	compile func(ctx context.Context, source string, out typstOutput) ([]byte, error)
 }
 

@@ -15,7 +15,10 @@ import (
 //
 // Observes the composed source through the injected compile step rather than
 // re-deriving it, so the assertion is about what Render actually handed to
-// typst. No typst binary needed; pandoc is, hence skipIfNoPandoc.
+// typst. pandoc is needed, hence skipIfNoPandoc; typst is not, PROVIDED the
+// wiring is correct. A mutant that bypasses the injected step shells out to the
+// real binary and reds with a typst error about page-number templates — still
+// RED, but pointing at a bogus cause, so the stub records that it was reached.
 //
 // The discriminators are the two decisions that observably differ:
 //   - title block: Render always injects, RenderImage obeys the theme's
@@ -33,28 +36,37 @@ func TestEntryPointSourceWiring(t *testing.T) {
 	const title = "Quarterly Review"
 	const body = "# Body Heading\n\nBody text.\n\n## Second\n\nMore.\n"
 
-	capture := func(t *testing.T) (*TypstRenderer, *string) {
+	capture := func(t *testing.T) (*TypstRenderer, *string, *bool) {
 		t.Helper()
 		var got string
+		var reached bool
 		r := NewTypstRenderer()
 		r.compile = func(_ context.Context, source string, _ typstOutput) ([]byte, error) {
+			reached = true
 			got = source
 			// Bytes are irrelevant here; only the source is under test. PNG
 			// magic keeps any future caller-side sniffing honest.
 			return []byte{0x89, 'P', 'N', 'G'}, nil
 		}
-		return r, &got
+		return r, &got, &reached
 	}
 
 	opts := render.Options{Title: title, Theme: themeCard, TOC: true, Width: 600, Height: 400, PPI: 144}
 
-	rPDF, pdfSrc := capture(t)
+	rPDF, pdfSrc, pdfReached := capture(t)
 	if _, err := rPDF.Render(context.Background(), body, "markdown", opts); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	rIMG, imgSrc := capture(t)
+	rIMG, imgSrc, imgReached := capture(t)
 	if _, err := rIMG.RenderImage(context.Background(), body, "markdown", opts); err != nil {
 		t.Fatalf("RenderImage: %v", err)
+	}
+
+	if !*pdfReached {
+		t.Fatal("Render never called the injected compile step — it bypassed r.compiler(); every assertion below would be about an empty string")
+	}
+	if !*imgReached {
+		t.Fatal("RenderImage never called the injected compile step — it bypassed r.compiler()")
 	}
 
 	if !strings.Contains(*pdfSrc, "= "+title) {
