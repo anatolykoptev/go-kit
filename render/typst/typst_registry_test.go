@@ -2,6 +2,7 @@ package typst
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -27,6 +28,16 @@ func snapshotThemes(t *testing.T) {
 		themeReg = saved
 		themeMu.Unlock()
 	})
+}
+
+// skipIfNoPandoc gates the source-assembly tests. They stop at the .typ string
+// and never invoke typst, so requiring it too would silently drop the guard on a
+// box that has pandoc only.
+func skipIfNoPandoc(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("pandoc"); err != nil {
+		t.Skip("pandoc binary not on PATH")
+	}
 }
 
 const houseMarker = "PRODUCT_OWNED_PREAMBLE"
@@ -166,28 +177,30 @@ func TestBuiltInThemes_DoNotSelfTitle(t *testing.T) {
 }
 
 // The image path suppresses the injected title only for themes declaring it; the
-// PDF path never does. Mirrors the arguments of the two production call sites.
-func TestBuildTypstSource_TitleBlockPerPath(t *testing.T) {
-	skipIfNoTypstPandoc(t)
+// PDF path never does.
+//
+// Drives pdfSource/imageSource — the functions Render and RenderImage actually
+// call — rather than restating their arguments. An earlier version of this test
+// re-typed them, which made it a mirror: reintroducing the regression left the
+// whole suite green because the test asserted on arguments it supplied itself.
+func TestSource_TitleBlockPerPath(t *testing.T) {
+	skipIfNoPandoc(t)
 
 	r := NewTypstRenderer()
-	th := resolveTypstTheme(themeCard)
 	const title = "Quarterly Review"
 	opts := render.Options{Title: title, Theme: themeCard}
 
-	// Render's arguments: omitTitle false unconditionally.
-	pdfSrc, err := r.buildTypstSource(context.Background(), "Body text.\n", "markdown", opts, th, "", false)
+	pdfSrc, err := r.pdfSource(context.Background(), "Body text.\n", "markdown", opts)
 	if err != nil {
-		t.Fatalf("buildTypstSource (pdf path): %v", err)
+		t.Fatalf("pdfSource: %v", err)
 	}
 	if !strings.Contains(pdfSrc, "= "+title) {
 		t.Errorf("card: title missing on the PDF path, and the preamble emits none either:\n%s", pdfSrc)
 	}
 
-	// RenderImage's arguments: omitTitle comes from the theme.
-	imgSrc, err := r.buildTypstSource(context.Background(), "Body text.\n", "markdown", opts, th, "", th.OmitsTitleBlockOnImage)
+	imgSrc, err := r.imageSource(context.Background(), "Body text.\n", "markdown", opts)
 	if err != nil {
-		t.Fatalf("buildTypstSource (image path): %v", err)
+		t.Fatalf("imageSource: %v", err)
 	}
 	if strings.Contains(imgSrc, "= "+title) {
 		t.Errorf("card: title injected on the image path despite OmitsTitleBlockOnImage:\n%s", imgSrc)
@@ -197,7 +210,7 @@ func TestBuildTypstSource_TitleBlockPerPath(t *testing.T) {
 // End to end: a registered theme reaches the assembled document, and the
 // built-in it displaced does not.
 func TestBuildTypstSource_UsesRegisteredTheme(t *testing.T) {
-	skipIfNoTypstPandoc(t)
+	skipIfNoPandoc(t)
 	snapshotThemes(t)
 
 	RegisterTheme(Theme{

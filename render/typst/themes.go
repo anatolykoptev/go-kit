@@ -3,7 +3,9 @@ package typst
 import "sync"
 
 // Theme is a named Typst preamble plus the two document-level decisions that
-// belong to a look rather than to a call site. Mirrors render/html.Theme.
+// belong to a look rather than to a call site. Modelled on render/html.Theme,
+// which carries only {Name, CSS} — the two extra fields here are decisions the
+// Typst pipeline makes per document that CSS expresses inline.
 //
 // Preamble is parsed as a text/template with {{.Title}} available; write a
 // literal brace pair as {{"{{"}}. There is no {{.Body}} placeholder — the
@@ -31,8 +33,11 @@ type Theme struct {
 	// content does not, so suppressing there loses the title outright with no
 	// error.
 	//
-	// A consumer theme that genuinely emits its own masthead should leave this
-	// false and be selected with an empty Options.Title.
+	// There is deliberately no PDF-path equivalent yet. A consumer theme that
+	// emits its own masthead from {{.Title}} currently has no way to avoid the
+	// injected heading on a PDF: with Title set it gets both, with Title empty
+	// the masthead renders blank. Suppressing there needs its own opt-in rather
+	// than reusing this flag, whose built-in users emit no title at all.
 	OmitsTitleBlockOnImage bool
 }
 
@@ -71,7 +76,11 @@ func RegisterTheme(t Theme) {
 
 // LookupTheme returns the registered theme for a name and whether it was found.
 // Use it to build a variant on top of a built-in instead of copying its preamble
-// out of this package and owning the drift. Mirrors render/html.LookupTheme.
+// out of this package and owning the drift.
+//
+// Unlike render/html.LookupTheme, which silently substitutes "report" on a miss,
+// this reports the miss — a caller composing on top of a theme needs to know it
+// got a different one. resolveTypstTheme is where the render-time fallback lives.
 func LookupTheme(name string) (Theme, bool) {
 	themeMu.RLock()
 	defer themeMu.RUnlock()

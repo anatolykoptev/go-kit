@@ -87,20 +87,28 @@ func (r *TypstRenderer) Render(ctx context.Context, content, inputFmt string, op
 		return nil, errors.New("typst: content is empty")
 	}
 
-	// Resolve once: the registry is writable at runtime, and reading it per
-	// decision would let a registration land between the preamble and the
-	// title-block choice.
-	//
-	// omitTitle is false unconditionally on this path. No built-in preamble emits
-	// a title of its own — card and dark only STYLE a level-1 heading the body is
-	// expected to supply — so honoring OmitsTitleBlockOnImage here would drop the
-	// title from a PDF with nothing replacing it and no error.
-	th := resolveTypstTheme(opts.Theme)
-	doc, err := r.buildTypstSource(ctx, content, inputFmt, opts, th, "", false)
+	doc, err := r.pdfSource(ctx, content, inputFmt, opts)
 	if err != nil {
 		return nil, err
 	}
 	return compileTypst(ctx, doc, typstOutput{Format: typstFormatPDF})
+}
+
+// pdfSource assembles the .typ source Render compiles. Split out so the path's
+// decisions are reachable by a test WITHOUT re-typing them at the call site — a
+// test that restates the arguments mirrors the code instead of guarding it, and
+// stays green when the caller changes.
+//
+// omitTitle is false unconditionally here. No built-in preamble emits a title of
+// its own — card and dark only STYLE a level-1 heading the body is expected to
+// supply — so honoring OmitsTitleBlockOnImage would drop the title from a PDF
+// with nothing replacing it and no error.
+func (r *TypstRenderer) pdfSource(ctx context.Context, content, inputFmt string, opts render.Options) (string, error) {
+	// Resolve once: the registry is writable at runtime, and reading it per
+	// decision would let a registration land between the preamble and the
+	// title-block choice.
+	th := resolveTypstTheme(opts.Theme)
+	return r.buildTypstSource(ctx, content, inputFmt, opts, th, "", false)
 }
 
 // RenderImage converts content to a PNG using the same Typst pipeline as
@@ -114,16 +122,23 @@ func (r *TypstRenderer) RenderImage(ctx context.Context, content, inputFmt strin
 		return nil, errors.New("typst: content is empty")
 	}
 
+	doc, err := r.imageSource(ctx, content, inputFmt, opts)
+	if err != nil {
+		return nil, err
+	}
+	return compileTypst(ctx, doc, typstOutput{Format: typstFormatPNG, PPI: opts.PPI})
+}
+
+// imageSource assembles the .typ source RenderImage compiles. Split out for the
+// same reason as pdfSource: the path's decisions must be testable where they are
+// made, not restated in a test.
+func (r *TypstRenderer) imageSource(ctx context.Context, content, inputFmt string, opts render.Options) (string, error) {
 	th := resolveTypstTheme(opts.Theme)
 	override := pageSizeOverride(opts.Width, opts.Height, opts.PPI, th.PageMarginPt)
 	// TOC is forced off for image output — a table of contents inside a single-page raster is meaningless.
 	imgOpts := opts
 	imgOpts.TOC = false
-	doc, err := r.buildTypstSource(ctx, content, inputFmt, imgOpts, th, override, th.OmitsTitleBlockOnImage)
-	if err != nil {
-		return nil, err
-	}
-	return compileTypst(ctx, doc, typstOutput{Format: typstFormatPNG, PPI: opts.PPI})
+	return r.buildTypstSource(ctx, content, inputFmt, imgOpts, th, override, th.OmitsTitleBlockOnImage)
 }
 
 // buildTypstSource produces the .typ source string consumed by compileTypst.
