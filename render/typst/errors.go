@@ -40,11 +40,14 @@ func (e *CompileError) Unwrap() error { return e.Inner }
 //	error: <message>
 //	  ┌─ <path>:<line>:<column>
 //
-// The message may span multiple lines (hence (?s) and lazy .+?). The path line
-// is optional — some errors (e.g. panics) omit it. The error group is anchored
-// to "error:" or "warning:" so non-diagnostic noise (e.g. a bare panic trace
-// without the prefix) is not mis-parsed as a CompileError.
-var stderrRegex = regexp.MustCompile(`(?s)^(?P<error>(?:error|warning): .*?)` +
+// The message may span multiple lines (hence (?s) and lazy .+?), e.g. warnings
+// carry "= hint:" continuation lines. The path line is optional — some
+// diagnostics (e.g. CLI argument errors) omit it. The error group is anchored
+// to "error:", "warning:", or "help:" so non-diagnostic noise (e.g. a bare
+// panic trace without the prefix) is not mis-parsed as a CompileError. The
+// "help:" prefix covers stacked diagnostics where typst reports the import
+// source that triggered an error in a separate block.
+var stderrRegex = regexp.MustCompile(`(?s)^(?P<error>(?:error|warning|help): .*?)` +
 	`(?:(?:\n\s+┌─ (?P<path>.+?):(?P<line>\d+):(?P<column>\d+)\n)|(?:$))`)
 
 // ParseStderr parses typst stderr (diagnostic-format human) into a CompileError.

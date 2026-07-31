@@ -104,6 +104,115 @@ func TestParseStderr_Empty(t *testing.T) {
 	}
 }
 
+// stderrWarningPlusError is a multi-block stderr with a warning (multi-line
+// with hints) followed by an error with location. Ported from Dadido3/go-typst
+// TestErrorParsing "Typst 0.13.0 HTML warning + error".
+const stderrWarningPlusError = "warning: html export is under active development and incomplete\n" +
+	" = hint: its behaviour may change at any time\n" +
+	" = hint: do not rely on this feature for production use cases\n" +
+	" = hint: see https://github.com/typst/typst/issues/5512 for more information\n\n" +
+	"error: page configuration is not allowed inside of containers\n" +
+	"  ┌─ <stdin>:1:1\n" +
+	"  │\n" +
+	"1 │ #set page(width: 100mm, height: auto, margin: 5mm)\n" +
+	"  │  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+
+// stderrMultipleErrors has two error blocks with locations. Ported from
+// Dadido3/go-typst TestErrorParsing "Typst 0.13.0 multiple errors with paths".
+const stderrMultipleErrors = "error: expected expression\n" +
+	"  ┌─ <stdin>:11:53\n" +
+	"  │\n" +
+	"11 │ - Uses stdio; No temporary files need to be created.#\n" +
+	"  │                                                      ^\n\n" +
+	"error: expected expression\n" +
+	"  ┌─ <stdin>:12:34\n" +
+	"  │\n" +
+	"12 │ - Test coverage of most features.#\n" +
+	"  │                                   ^\n\n"
+
+// stderrStackedHelp has an error block followed by a help: block with its own
+// location. Ported from Dadido3/go-typst TestErrorParsing "Typst 0.13.0 stacked
+// errors with paths". Tests that the help: prefix is parsed (not just error:).
+const stderrStackedHelp = "error: expected expression\n" +
+	"  ┌─ test.typ:1:4\n" +
+	"  │\n" +
+	"1 │ hey#\n" +
+	"  │     ^\n\n" +
+	"help: error occurred while importing this module\n" +
+	"  ┌─ <stdin>:14:9\n" +
+	"  │\n" +
+	"14 │ #include \"test.typ\"\n" +
+	"  │          ^^^^^^^^^^\n\n"
+
+func TestParseStderr_WarningPlusError(t *testing.T) {
+	ce := ParseStderr(stderrWarningPlusError, nil)
+	if ce == nil {
+		t.Fatal("ParseStderr returned nil for multi-block stderr")
+	}
+	if len(ce.Details) != 2 {
+		t.Fatalf("expected 2 details (warning + error), got %d", len(ce.Details))
+	}
+	// First block: warning with multi-line message (hints).
+	w := ce.Details[0]
+	if !strings.HasPrefix(w.Message, "warning: html export") {
+		t.Errorf("detail[0] Message: got %q", w.Message)
+	}
+	if !strings.Contains(w.Message, "= hint:") {
+		t.Errorf("detail[0] should include hint lines in Message, got %q", w.Message)
+	}
+	if w.Path != "" || w.Line != 0 || w.Column != 0 {
+		t.Errorf("warning has no location, got path=%q line=%d col=%d", w.Path, w.Line, w.Column)
+	}
+	// Second block: error with location.
+	e := ce.Details[1]
+	if !strings.HasPrefix(e.Message, "error: page configuration") {
+		t.Errorf("detail[1] Message: got %q", e.Message)
+	}
+	if e.Path != "<stdin>" || e.Line != 1 || e.Column != 1 {
+		t.Errorf("detail[1] location: got path=%q line=%d col=%d, want <stdin>/1/1", e.Path, e.Line, e.Column)
+	}
+}
+
+func TestParseStderr_MultipleErrors(t *testing.T) {
+	ce := ParseStderr(stderrMultipleErrors, nil)
+	if ce == nil {
+		t.Fatal("ParseStderr returned nil")
+	}
+	if len(ce.Details) != 2 {
+		t.Fatalf("expected 2 details, got %d", len(ce.Details))
+	}
+	if ce.Details[0].Line != 11 || ce.Details[0].Column != 53 {
+		t.Errorf("detail[0]: got line=%d col=%d, want 11/53", ce.Details[0].Line, ce.Details[0].Column)
+	}
+	if ce.Details[1].Line != 12 || ce.Details[1].Column != 34 {
+		t.Errorf("detail[1]: got line=%d col=%d, want 12/34", ce.Details[1].Line, ce.Details[1].Column)
+	}
+}
+
+func TestParseStderr_StackedHelp(t *testing.T) {
+	ce := ParseStderr(stderrStackedHelp, nil)
+	if ce == nil {
+		t.Fatal("ParseStderr returned nil")
+	}
+	if len(ce.Details) != 2 {
+		t.Fatalf("expected 2 details (error + help), got %d", len(ce.Details))
+	}
+	// First block: error.
+	if ce.Details[0].Path != "test.typ" || ce.Details[0].Line != 1 || ce.Details[0].Column != 4 {
+		t.Errorf("detail[0] (error): got path=%q line=%d col=%d, want test.typ/1/4",
+			ce.Details[0].Path, ce.Details[0].Line, ce.Details[0].Column)
+	}
+	// Second block: help with its own location.
+	h := ce.Details[1]
+	if !strings.HasPrefix(h.Message, "help:") {
+		t.Errorf("detail[1] should be a help: block, got Message %q", h.Message)
+	}
+	if h.Path != "<stdin>" || h.Line != 14 || h.Column != 9 {
+		t.Errorf("detail[1] (help) location: got path=%q line=%d col=%d, want <stdin>/14/9",
+			h.Path, h.Line, h.Column)
+	}
+}
+
 // TestCompileTypst_StructuredError is an integration test (requires typst on
 // PATH) that compiles invalid source and asserts the returned error is a
 // *CompileError with parsed Line/Column, accessible via errors.As.
