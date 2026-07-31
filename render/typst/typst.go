@@ -131,13 +131,8 @@ func (r *TypstRenderer) buildTypstSource(
 		return "", fmt.Errorf("typst: pandoc %s→typst: %w", inputFmt, err)
 	}
 
-	// A caller-supplied preamble replaces the named theme's entirely. It is parsed
-	// as the same template, so {{.Title}} behaves identically either way.
-	preamble := opts.TypstPreamble
-	if preamble == "" {
-		preamble = resolveTypstTheme(opts.Theme).preamble
-	}
-	preambleTmpl, err := template.New("preamble").Parse(preamble)
+	theme := resolveTypstTheme(opts.Theme)
+	preambleTmpl, err := template.New("preamble").Parse(theme.Preamble)
 	if err != nil {
 		return "", fmt.Errorf("typst: parse preamble template: %w", err)
 	}

@@ -1,13 +1,30 @@
 package typst
 
-// typstTheme holds the full Typst preamble for a named theme.
-// The placeholder {{.Body}} is replaced at render time with the
-// pandoc-converted content; {{.Title}} with the document title.
+import "sync"
+
+// TypstTheme is a named Typst preamble plus the two document-level decisions
+// that belong to a look rather than to a call site.
 //
-// All themes use IBM Plex Sans (installed on the server via fonts-ibm-plex).
-// Letter dimensions are left to Typst's built-in "a4" paper preset.
-type typstTheme struct {
-	preamble string // everything before the body content
+// Preamble is parsed as a text/template with {{.Title}} available; write a
+// literal brace pair as {{"{{"}}. There is no {{.Body}} placeholder — the
+// converted body is concatenated after the preamble, not substituted into it.
+//
+// The built-in themes use IBM Plex Sans, which must be present wherever typst
+// runs: a missing family is substituted silently, so the document renders in
+// whatever typst falls back to rather than failing.
+type TypstTheme struct {
+	Name string
+	// Preamble is everything before the body content.
+	Preamble string
+	// PageMarginPt is the margin used when a caller supplies Width/Height pixel
+	// geometry for image output. Zero is meaningful (edge-to-edge), so a theme
+	// that wants the shared default states 24 explicitly.
+	PageMarginPt float64
+	// OmitsTitleBlock suppresses the Go-side title heading on the image path,
+	// for themes that render their own heading and would otherwise get two.
+	// Note this is honored by RenderImage only; Render always emits the title
+	// block when Title is non-empty.
+	OmitsTitleBlock bool
 }
 
 const (
@@ -15,51 +32,63 @@ const (
 	themeDark = "dark"
 )
 
-// resolveTypstTheme returns the theme preamble for the given name.
-// Unknown names fall back to "report".
-func resolveTypstTheme(name string) typstTheme {
-	switch name {
-	case "minimal":
-		return typstThemeMinimal
-	case "corporate":
-		return typstThemeCorporate
-	case themeCard:
-		return typstThemeCard
-	case themeDark:
-		return typstThemeDark
-	case "resume":
-		return typstThemeResume
-	default: // "report" and anything else
-		return typstThemeReport
+var (
+	themeMu  sync.RWMutex
+	themeReg = map[string]TypstTheme{}
+)
+
+// RegisterTypstTheme adds a theme to the registry. Safe to call from init
+// functions. A later call with the same name overwrites the earlier one, so a
+// consumer may replace a built-in as well as add its own.
+//
+// This is how a product owns a house style without it living in the shared
+// theme set: register from the product's init, then select it by name exactly
+// like a built-in. Mirrors render/html.RegisterTheme.
+func RegisterTypstTheme(t TypstTheme) {
+	themeMu.Lock()
+	themeReg[t.Name] = t
+	themeMu.Unlock()
+}
+
+// resolveTypstTheme returns the theme for the given name, falling back to
+// "report" when the name is unknown or empty.
+func resolveTypstTheme(name string) TypstTheme {
+	themeMu.RLock()
+	defer themeMu.RUnlock()
+	if name == "" {
+		name = "report"
 	}
+	if t, ok := themeReg[name]; ok {
+		return t
+	}
+	return themeReg["report"]
 }
 
 // themePageMarginPt returns the margin (in pt) used when a caller supplies
-// Width/Height pixel geometry. Card uses zero margin so the background
-// fills edge-to-edge; dark gets a roomier 32pt; the rest match the
-// 24pt body inset of the document themes.
-func themePageMarginPt(theme string) float64 {
-	switch theme {
-	case themeCard:
-		return 0
-	case themeDark:
-		return 32
-	default:
-		return 24
-	}
-}
+// Width/Height pixel geometry.
+func themePageMarginPt(theme string) float64 { return resolveTypstTheme(theme).PageMarginPt }
 
 // themeOmitsTitleBlock reports whether the Go-side title heading should be
-// suppressed for a theme — card and dark render their own heading styling
-// against the colored background and don't want a duplicate H1.
-func themeOmitsTitleBlock(theme string) bool {
-	return theme == themeCard || theme == themeDark
+// suppressed for a theme.
+func themeOmitsTitleBlock(theme string) bool { return resolveTypstTheme(theme).OmitsTitleBlock }
+
+// Card uses zero margin so its background fills edge-to-edge; dark gets a
+// roomier 32pt; the document themes match their 24pt body inset. Card and dark
+// style their own heading against a colored background, so they suppress the
+// Go-side title block.
+func init() {
+	RegisterTypstTheme(TypstTheme{Name: "report", Preamble: typstThemeReport, PageMarginPt: 24})
+	RegisterTypstTheme(TypstTheme{Name: "minimal", Preamble: typstThemeMinimal, PageMarginPt: 24})
+	RegisterTypstTheme(TypstTheme{Name: "corporate", Preamble: typstThemeCorporate, PageMarginPt: 24})
+	RegisterTypstTheme(TypstTheme{Name: themeCard, Preamble: typstThemeCard, PageMarginPt: 0, OmitsTitleBlock: true})
+	RegisterTypstTheme(TypstTheme{Name: themeDark, Preamble: typstThemeDark, PageMarginPt: 32, OmitsTitleBlock: true})
+	RegisterTypstTheme(TypstTheme{Name: "resume", Preamble: typstThemeResume, PageMarginPt: 24})
 }
 
 // ── report ────────────────────────────────────────────────
 // Clean professional light theme.  Good for strategy memos, research
 // briefs, and client deliverables.
-var typstThemeReport = typstTheme{preamble: `
+var typstThemeReport = `
 #set page(
   paper:  "a4",
   margin: (x: 24mm, top: 22mm, bottom: 26mm),
@@ -119,10 +148,10 @@ var typstThemeReport = typstTheme{preamble: `
 #set table(inset: (x: 8pt, y: 6pt))
 
 // ── cover (title page) injected by Go before body ────────
-`}
+`
 
 // ── minimal ───────────────────────────────────────────────
-var typstThemeMinimal = typstTheme{preamble: `
+var typstThemeMinimal = `
 #set page(paper: "a4", margin: (x: 32mm, top: 28mm, bottom: 28mm))
 #set text(font: "IBM Plex Sans", size: 11pt, fill: rgb("#18181b"))
 #set par(leading: 0.8em, spacing: 1.3em, justify: true)
@@ -142,10 +171,10 @@ var typstThemeMinimal = typstTheme{preamble: `
   radius: 4pt, inset: (x: 12pt, y: 10pt), width: 100%,
   text(font: "IBM Plex Mono", size: 9pt, it),
 )
-`}
+`
 
 // ── corporate ─────────────────────────────────────────────
-var typstThemeCorporate = typstTheme{preamble: `
+var typstThemeCorporate = `
 #let navy   = rgb("#1e3a5f")
 #let accent = rgb("#2563eb")
 #let border = rgb("#bfdbfe")
@@ -187,12 +216,12 @@ var typstThemeCorporate = typstTheme{preamble: `
   radius: 4pt, inset: (x: 12pt, y: 10pt), width: 100%,
   text(font: "IBM Plex Mono", size: 9pt, fill: navy, it),
 )
-`}
+`
 
 // ── card ──────────────────────────────────────────────────
 // High-contrast white social-card aesthetic. No own page geometry —
 // the Go-side override supplies width/height/margin in pixels.
-var typstThemeCard = typstTheme{preamble: `
+var typstThemeCard = `
 #set text(font: "IBM Plex Sans", size: 22pt, fill: rgb("#0F172A"))
 #set par(leading: 0.9em, spacing: 1.4em)
 #set align(center + horizon)
@@ -206,13 +235,13 @@ var typstThemeCard = typstTheme{preamble: `
   set text(size: 32pt, weight: "semibold", fill: rgb("#1E293B"))
   block(width: 100%, it.body)
 }
-`}
+`
 
 // ── dark ──────────────────────────────────────────────────
 // Dark social-story aesthetic. Same shape as card but inverted palette.
 // Requires non-zero Width+Height in Options; otherwise output falls back
 // to default A4 page size with theme styling.
-var typstThemeDark = typstTheme{preamble: `
+var typstThemeDark = `
 #set page(fill: rgb("#0E1117"))
 #set text(font: "IBM Plex Sans", size: 22pt, fill: rgb("#F0F6FC"))
 #set par(leading: 0.9em, spacing: 1.4em)
@@ -227,7 +256,7 @@ var typstThemeDark = typstTheme{preamble: `
   set text(size: 32pt, weight: "semibold", fill: rgb("#C9D1D9"))
   block(width: 100%, it.body)
 }
-`}
+`
 
 // ── resume ────────────────────────────────────────────────
 // Compact single-page resume theme tuned for US job applications.
@@ -236,7 +265,7 @@ var typstThemeDark = typstTheme{preamble: `
 // rivers that read as template tells.  Tighter margins, leading, and heading
 // vspace than "report" so content-rich one-page CVs don't spill to a second
 // page.  All show-rules for code blocks and tables are identical to "report".
-var typstThemeResume = typstTheme{preamble: `
+var typstThemeResume = `
 #set page(
   paper:  "us-letter",
   margin: (x: 16mm, top: 14mm, bottom: 14mm),
@@ -289,4 +318,4 @@ var typstThemeResume = typstTheme{preamble: `
 #set table(inset: (x: 8pt, y: 6pt))
 
 // ── cover (title page) injected by Go before body ────────
-`}
+`

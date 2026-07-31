@@ -303,7 +303,7 @@ func TestResolveTypstTheme_Resume(t *testing.T) {
 // US-resume-specific design decisions (Letter paper, left-align, no footer)
 // cannot be accidentally reverted.
 func TestResumeThemePreamble_TightValues(t *testing.T) {
-	p := typstThemeResume.preamble
+	p := typstThemeResume
 
 	// Values that MUST be present.
 	must := []struct {
@@ -351,7 +351,7 @@ func TestResumeThemePreamble_TightValues(t *testing.T) {
 // never accidentally mutates the report theme.
 func TestResumeTheme_ReportUnchanged(t *testing.T) {
 	const wantReportMargin = "margin: (x: 24mm"
-	if !strings.Contains(typstThemeReport.preamble, wantReportMargin) {
+	if !strings.Contains(typstThemeReport, wantReportMargin) {
 		t.Errorf("report theme margin changed — expected %q", wantReportMargin)
 	}
 }

@@ -68,6 +68,23 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # render/typst shells out to pandoc and typst; without them every test in
+      # that package t.Skips, so the gate deciding the merge runs none of the
+      # code under review. Same rule as the Postgres service above — provision
+      # the dep, never skip to green. typst ships no apt package, so the
+      # release binary is pinned to the version the fleet runs.
+      - name: Install pandoc and typst
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc
+          TYPST_VERSION=v0.14.2
+          TYPST_TARBALL=typst-x86_64-unknown-linux-musl
+          curl -fsSL "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/${TYPST_TARBALL}.tar.xz" \
+            | tar -xJ -C /tmp
+          sudo install -m 0755 "/tmp/${TYPST_TARBALL}/typst" /usr/local/bin/typst
+          pandoc --version | head -1
+          typst --version
+
       # #53: gostall — static analysis for lock-order inversions, missing
       # unlocks, WaitGroup misuse, channel deadlocks, livelocks, starvation.
       - name: Ensure gostall v1.0.0 (pinned)
