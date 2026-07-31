@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.10](https://github.com/anatolykoptev/go-kit/compare/v0.97.9...v0.97.10) (2026-07-31)
+
+
+### Added
+
+* **render/typst:** theme registry so a product can own its look ([#248](https://github.com/anatolykoptev/go-kit/issues/248)) ([b3bb3e9](https://github.com/anatolykoptev/go-kit/commit/b3bb3e9efb888d01e59d012d259d12fc9c76f560))
+
 ## [0.97.9](https://github.com/anatolykoptev/go-kit/compare/v0.97.8...v0.97.9) (2026-07-31)
 
 
