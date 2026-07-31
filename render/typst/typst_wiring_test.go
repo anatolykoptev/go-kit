@@ -59,6 +59,14 @@ func TestEntryPointSourceWiring(t *testing.T) {
 	}
 	rIMG, imgSrc, imgReached := capture(t)
 	if _, err := rIMG.RenderImage(context.Background(), body, "markdown", opts); err != nil {
+		// The bypass check has to live in the ERROR branch, not after it. A
+		// bypassed PDF compile succeeds (PDFs are multi-page), so Render reaches
+		// the guard below with err == nil; a bypassed PNG compile shells out to
+		// the real typst and fails first with a page-number-template error —
+		// RED, but naming a cause that is not the defect.
+		if !*imgReached {
+			t.Fatalf("RenderImage never called the injected compile step — it bypassed r.compiler() (underlying: %v)", err)
+		}
 		t.Fatalf("RenderImage: %v", err)
 	}
 
