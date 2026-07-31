@@ -73,10 +73,17 @@ jobs:
       # code under review. Same rule as the Postgres service above — provision
       # the dep, never skip to green. typst ships no apt package, so the
       # release binary is pinned to the version the fleet runs.
-      - name: Install pandoc and typst
+      #
+      # fonts-ibm-plex is not optional decoration: every built-in theme sets
+      # `font: "IBM Plex Sans"`, and typst SUBSTITUTES a missing family in
+      # silence rather than failing. Without it the render tests pass while
+      # exercising a fallback face — they assert on output the fleet never
+      # produces. The golden image test measured it: 130039 bytes without the
+      # font against a 137427-byte golden rendered with it.
+      - name: Install pandoc, typst and IBM Plex
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends pandoc
+          sudo apt-get install -y --no-install-recommends pandoc fonts-ibm-plex
           TYPST_VERSION=v0.14.2
           TYPST_TARBALL=typst-x86_64-unknown-linux-musl
           curl -fsSL "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/${TYPST_TARBALL}.tar.xz" \
@@ -84,6 +91,8 @@ jobs:
           sudo install -m 0755 "/tmp/${TYPST_TARBALL}/typst" /usr/local/bin/typst
           pandoc --version | head -1
           typst --version
+          typst fonts | grep -q '^IBM Plex Sans$' \
+            || { echo "IBM Plex Sans not visible to typst — renders would silently fall back"; exit 1; }
 
       # #53: gostall — static analysis for lock-order inversions, missing
       # unlocks, WaitGroup misuse, channel deadlocks, livelocks, starvation.
