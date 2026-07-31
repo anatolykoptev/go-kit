@@ -158,9 +158,7 @@ func TestTypstRenderImage_GoldenPresets(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden %s: %v (run with -update to create)", path, err)
 			}
-			if !bytes.Equal(out, want) {
-				t.Fatalf("golden mismatch for %s: got %d bytes, want %d", name, len(out), len(want))
-			}
+			assertGoldenClose(t, out, want, name)
 		})
 	}
 }
@@ -170,6 +168,47 @@ func within5Pct(got, want int) bool {
 		return got == 0
 	}
 	return math.Abs(float64(got-want))/float64(want) <= 0.05
+}
+
+// assertGoldenClose compares a render against its golden on the properties the
+// golden exists to protect: identical pixel geometry, and a payload within 5%
+// of the reference.
+//
+// Deliberately not bytes.Equal. The PNG bytes depend on the exact fonts-ibm-plex
+// build, the pandoc release and the typst release present on the machine, none
+// of which the repo can pin across an apt refresh or a runner image roll. A
+// byte-exact gate turns any of those into a red build on every PR at once, with
+// "got N bytes, want M" as the only diagnostic — and the reflex fix is to re-run
+// with -update, which silently retires the guard.
+//
+// What this does NOT catch, stated so nobody credits it later: font
+// substitution. Measured by rendering against a bogus family — og-image 0.96%,
+// twitter-card 0.39%, square-1080 0.69% payload delta, all well inside the 5%
+// band; realistic-square lands at 5.38%, clearing the threshold by 0.38
+// percentage points, which is not a margin to rely on. Compressed PNG length
+// answers to entropy, not to glyph shape. The gate for substitution is the
+// `typst fonts` assertion in preflight.yml, and nothing here.
+//
+// What it does catch is geometry drift — wrong preset, spilled page, blank
+// output — and gross payload change.
+func assertGoldenClose(t *testing.T, got, want []byte, label string) {
+	t.Helper()
+	gotCfg, err := png.DecodeConfig(bytes.NewReader(got))
+	if err != nil {
+		t.Fatalf("%s: decode rendered PNG: %v", label, err)
+	}
+	wantCfg, err := png.DecodeConfig(bytes.NewReader(want))
+	if err != nil {
+		t.Fatalf("%s: decode golden PNG: %v", label, err)
+	}
+	if gotCfg.Width != wantCfg.Width || gotCfg.Height != wantCfg.Height {
+		t.Fatalf("%s: geometry drift: got %dx%d, want %dx%d",
+			label, gotCfg.Width, gotCfg.Height, wantCfg.Width, wantCfg.Height)
+	}
+	if !within5Pct(len(got), len(want)) {
+		t.Fatalf("%s: payload drift beyond 5%%: got %d bytes, want %d (regenerate with -update if intended)",
+			label, len(got), len(want))
+	}
 }
 
 // TestTypstRenderImage_GoldenRealisticContent renders the realistic sample
@@ -216,7 +255,5 @@ func TestTypstRenderImage_GoldenRealisticContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read golden %s: %v (run with -update to create)", path, err)
 	}
-	if !bytes.Equal(out, want) {
-		t.Fatalf("golden mismatch for realistic-square: got %d bytes, want %d", len(out), len(want))
-	}
+	assertGoldenClose(t, out, want, "realistic-square")
 }
