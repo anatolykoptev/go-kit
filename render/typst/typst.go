@@ -172,7 +172,7 @@ func pandocConvert(ctx context.Context, content, inputFmt string, toc bool) (str
 
 	bin := resolveEnvOrPath(resolveBinaryEnvPandoc, legacyEnvPandoc, "pandoc")
 	if bin == "" {
-		return "", fmt.Errorf("pandoc binary not found (set %s or ensure pandoc is on PATH)", resolveBinaryEnvPandoc)
+		return "", fmt.Errorf("typst: %w (set %s or ensure pandoc is on PATH)", ErrBinaryNotFound, resolveBinaryEnvPandoc)
 	}
 
 	pCtx, cancel := context.WithTimeout(ctx, pandocTimeout)
@@ -292,7 +292,7 @@ func sanitizeTypstFromPandoc(in string) string {
 func compileTypst(ctx context.Context, source string, out typstOutput) ([]byte, error) {
 	bin := resolveEnvOrPath(resolveBinaryEnvTypst, legacyEnvTypst, "typst")
 	if bin == "" {
-		return nil, fmt.Errorf("typst binary not found (set %s or ensure typst is on PATH)", resolveBinaryEnvTypst)
+		return nil, fmt.Errorf("typst: %w (set %s or ensure typst is on PATH)", ErrBinaryNotFound, resolveBinaryEnvTypst)
 	}
 
 	format := out.Format
@@ -316,7 +316,7 @@ func compileTypst(ctx context.Context, source string, out typstOutput) ([]byte, 
 		return nil, fmt.Errorf("typst: write source: %w", err)
 	}
 
-	args := []string{"compile", "-f", format, src, dst}
+	args := []string{"compile", "-f", format, "--diagnostic-format", "human", src, dst}
 	if format == typstFormatPNG {
 		ppi := out.PPI
 		if ppi <= 0 {
@@ -333,11 +333,18 @@ func compileTypst(ctx context.Context, source string, out typstOutput) ([]byte, 
 	cmd := exec.CommandContext(tCtx, bin, args...)
 	stderr, err := cmd.CombinedOutput()
 	if err != nil {
+		s := string(stderr)
 		// PNG output cannot represent multi-page documents — surface a
 		// caller-actionable hint instead of typst's internal wording.
-		s := string(stderr)
 		if format == typstFormatPNG && strings.Contains(s, "multiple images without a page number template") {
 			return nil, fmt.Errorf("typst rendered multiple pages but image output supports 1 — reduce content or render as PDF (typst stderr: %s)", strings.TrimSpace(s))
+		}
+		// Structured path: parse typst diagnostics into CompileError so
+		// callers can access Line/Column/Path via errors.As. Falls back to
+		// the raw stderr wrap when parsing yields nothing (e.g. timeout,
+		// signal, non-diagnostic panic output).
+		if ce := ParseStderr(s, err); ce != nil {
+			return nil, ce
 		}
 		return nil, fmt.Errorf("typst compile: %w\nstderr: %s", err, stderr)
 	}
