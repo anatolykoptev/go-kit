@@ -261,3 +261,52 @@ func TestCompileTypst_ErrBinaryNotFound(t *testing.T) {
 		t.Errorf("expected errors.Is(err, ErrBinaryNotFound), got: %v", err)
 	}
 }
+
+// stderrPanicWithCallStack is a real typst 0.14.2 stderr for a panic with a
+// recursive call stack. The error block is followed by multiple help: blocks,
+// each with its own source location. Empirically captured — typst 0.14.2 uses
+// "help:" prefix for call-stack traces, NOT "while calling" (which the reviewer
+// claimed from an unmerged typst PR).
+const stderrPanicWithCallStack = "error: panicked with: \"boom\"\n" +
+	"  ┌─ <stdin>:1:26\n" +
+	"  │\n" +
+	"1 │ #let f(n) = { if n == 0 { panic(\"boom\") } else { f(n - 1) } }\n" +
+	"  │                           ^^^^^^^^^^^^^\n\n" +
+	"help: error occurred in this call of function `f`\n" +
+	"  ┌─ <stdin>:1:49\n" +
+	"  │\n" +
+	"1 │ #let f(n) = { if n == 0 { panic(\"boom\") } else { f(n - 1) } }\n" +
+	"  │                                                  ^^^^^^^^\n\n" +
+	"help: error occurred in this call of function `f`\n" +
+	"  ┌─ <stdin>:2:1\n" +
+	"  │\n" +
+	"2 │ #f(5)\n" +
+	"  │  ^^^^\n\n"
+
+func TestParseStderr_PanicWithCallStack(t *testing.T) {
+	ce := ParseStderr(stderrPanicWithCallStack, nil)
+	if ce == nil {
+		t.Fatal("ParseStderr returned nil for panic + call stack")
+	}
+	if len(ce.Details) != 3 {
+		t.Fatalf("expected 3 details (1 error + 2 help), got %d", len(ce.Details))
+	}
+	// Error block.
+	if !strings.HasPrefix(ce.Details[0].Message, "error: panicked with") {
+		t.Errorf("detail[0] should be the panic error, got %q", ce.Details[0].Message)
+	}
+	if ce.Details[0].Line != 1 || ce.Details[0].Column != 26 {
+		t.Errorf("detail[0] location: got line=%d col=%d, want 1/26", ce.Details[0].Line, ce.Details[0].Column)
+	}
+	// First help: block (recursive call).
+	if !strings.HasPrefix(ce.Details[1].Message, "help:") {
+		t.Errorf("detail[1] should be a help: block, got %q", ce.Details[1].Message)
+	}
+	if ce.Details[1].Line != 1 || ce.Details[1].Column != 49 {
+		t.Errorf("detail[1] location: got line=%d col=%d, want 1/49", ce.Details[1].Line, ce.Details[1].Column)
+	}
+	// Second help: block (top-level call).
+	if ce.Details[2].Line != 2 || ce.Details[2].Column != 1 {
+		t.Errorf("detail[2] location: got line=%d col=%d, want 2/1", ce.Details[2].Line, ce.Details[2].Column)
+	}
+}
