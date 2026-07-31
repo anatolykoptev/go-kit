@@ -2,8 +2,8 @@ package typst
 
 import "sync"
 
-// TypstTheme is a named Typst preamble plus the two document-level decisions
-// that belong to a look rather than to a call site.
+// Theme is a named Typst preamble plus the two document-level decisions that
+// belong to a look rather than to a call site. Mirrors render/html.Theme.
 //
 // Preamble is parsed as a text/template with {{.Title}} available; write a
 // literal brace pair as {{"{{"}}. There is no {{.Body}} placeholder — the
@@ -12,7 +12,10 @@ import "sync"
 // The built-in themes use IBM Plex Sans, which must be present wherever typst
 // runs: a missing family is substituted silently, so the document renders in
 // whatever typst falls back to rather than failing.
-type TypstTheme struct {
+type Theme struct {
+	// Name selects the theme via render.Options.Theme. Must be non-empty:
+	// RegisterTheme panics on a blank name, because the resolver treats a blank
+	// request as "report" and such an entry would be permanently unreachable.
 	Name string
 	// Preamble is everything before the body content.
 	Preamble string
@@ -20,69 +23,80 @@ type TypstTheme struct {
 	// geometry for image output. Zero is meaningful (edge-to-edge), so a theme
 	// that wants the shared default states 24 explicitly.
 	PageMarginPt float64
-	// OmitsTitleBlock suppresses the Go-side title heading on the image path,
-	// for themes that render their own heading and would otherwise get two.
-	// Note this is honored by RenderImage only; Render always emits the title
-	// block when Title is non-empty.
+	// OmitsTitleBlock suppresses the Go-side title heading, for themes that
+	// render their own heading and would otherwise get two. Honored on both the
+	// PDF and image paths.
 	OmitsTitleBlock bool
 }
 
 const (
-	themeCard = "card"
-	themeDark = "dark"
+	themeCard    = "card"
+	themeDark    = "dark"
+	themeDefault = "report"
 )
 
 var (
 	themeMu  sync.RWMutex
-	themeReg = map[string]TypstTheme{}
+	themeReg = map[string]Theme{}
 )
 
-// RegisterTypstTheme adds a theme to the registry. Safe to call from init
-// functions. A later call with the same name overwrites the earlier one, so a
-// consumer may replace a built-in as well as add its own.
+// RegisterTheme adds a theme to the registry. Safe to call from init functions.
+// A later call with the same name overwrites the earlier one, so a consumer may
+// replace a built-in as well as add its own — note that replacing "report" also
+// replaces what every unknown name falls back to.
 //
-// This is how a product owns a house style without it living in the shared
-// theme set: register from the product's init, then select it by name exactly
-// like a built-in. Mirrors render/html.RegisterTheme.
-func RegisterTypstTheme(t TypstTheme) {
+// This is how a product owns a house style without it living in the shared theme
+// set: register from the product's init, then select it by name exactly like a
+// built-in. Registration is expected at init time; the registry is safe to write
+// later, but a render already in flight resolves its theme once at entry.
+//
+// Panics on a blank Name — see Theme.Name.
+func RegisterTheme(t Theme) {
+	if t.Name == "" {
+		panic("render/typst: RegisterTheme called with a blank Name")
+	}
 	themeMu.Lock()
 	themeReg[t.Name] = t
 	themeMu.Unlock()
 }
 
-// resolveTypstTheme returns the theme for the given name, falling back to
-// "report" when the name is unknown or empty.
-func resolveTypstTheme(name string) TypstTheme {
+// LookupTheme returns the registered theme for a name and whether it was found.
+// Use it to build a variant on top of a built-in instead of copying its preamble
+// out of this package and owning the drift. Mirrors render/html.LookupTheme.
+func LookupTheme(name string) (Theme, bool) {
 	themeMu.RLock()
 	defer themeMu.RUnlock()
-	if name == "" {
-		name = "report"
-	}
+	t, ok := themeReg[name]
+	return t, ok
+}
+
+// resolveTypstTheme returns the theme for the given name, falling back to
+// "report" when the name is unknown or empty. A blank name misses the map and
+// takes the same fallback, so it needs no special case.
+//
+// Returns the zero Theme only if "report" itself was unregistered, which cannot
+// happen through RegisterTheme's panic guard but would leave an empty preamble
+// rather than an error.
+func resolveTypstTheme(name string) Theme {
+	themeMu.RLock()
+	defer themeMu.RUnlock()
 	if t, ok := themeReg[name]; ok {
 		return t
 	}
-	return themeReg["report"]
+	return themeReg[themeDefault]
 }
-
-// themePageMarginPt returns the margin (in pt) used when a caller supplies
-// Width/Height pixel geometry.
-func themePageMarginPt(theme string) float64 { return resolveTypstTheme(theme).PageMarginPt }
-
-// themeOmitsTitleBlock reports whether the Go-side title heading should be
-// suppressed for a theme.
-func themeOmitsTitleBlock(theme string) bool { return resolveTypstTheme(theme).OmitsTitleBlock }
 
 // Card uses zero margin so its background fills edge-to-edge; dark gets a
 // roomier 32pt; the document themes match their 24pt body inset. Card and dark
 // style their own heading against a colored background, so they suppress the
 // Go-side title block.
 func init() {
-	RegisterTypstTheme(TypstTheme{Name: "report", Preamble: typstThemeReport, PageMarginPt: 24})
-	RegisterTypstTheme(TypstTheme{Name: "minimal", Preamble: typstThemeMinimal, PageMarginPt: 24})
-	RegisterTypstTheme(TypstTheme{Name: "corporate", Preamble: typstThemeCorporate, PageMarginPt: 24})
-	RegisterTypstTheme(TypstTheme{Name: themeCard, Preamble: typstThemeCard, PageMarginPt: 0, OmitsTitleBlock: true})
-	RegisterTypstTheme(TypstTheme{Name: themeDark, Preamble: typstThemeDark, PageMarginPt: 32, OmitsTitleBlock: true})
-	RegisterTypstTheme(TypstTheme{Name: "resume", Preamble: typstThemeResume, PageMarginPt: 24})
+	RegisterTheme(Theme{Name: themeDefault, Preamble: typstThemeReport, PageMarginPt: 24})
+	RegisterTheme(Theme{Name: "minimal", Preamble: typstThemeMinimal, PageMarginPt: 24})
+	RegisterTheme(Theme{Name: "corporate", Preamble: typstThemeCorporate, PageMarginPt: 24})
+	RegisterTheme(Theme{Name: themeCard, Preamble: typstThemeCard, PageMarginPt: 0, OmitsTitleBlock: true})
+	RegisterTheme(Theme{Name: themeDark, Preamble: typstThemeDark, PageMarginPt: 32, OmitsTitleBlock: true})
+	RegisterTheme(Theme{Name: "resume", Preamble: typstThemeResume, PageMarginPt: 24})
 }
 
 // ── report ────────────────────────────────────────────────

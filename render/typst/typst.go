@@ -87,7 +87,11 @@ func (r *TypstRenderer) Render(ctx context.Context, content, inputFmt string, op
 		return nil, errors.New("typst: content is empty")
 	}
 
-	doc, err := r.buildTypstSource(ctx, content, inputFmt, opts, "", false)
+	// Resolve once: the registry is writable at runtime, and reading it per
+	// decision would let a registration land between the preamble and the
+	// title-block choice.
+	th := resolveTypstTheme(opts.Theme)
+	doc, err := r.buildTypstSource(ctx, content, inputFmt, opts, th, "", th.OmitsTitleBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -104,11 +108,12 @@ func (r *TypstRenderer) RenderImage(ctx context.Context, content, inputFmt strin
 		return nil, errors.New("typst: content is empty")
 	}
 
-	override := pageSizeOverride(opts.Width, opts.Height, opts.PPI, themePageMarginPt(opts.Theme))
+	th := resolveTypstTheme(opts.Theme)
+	override := pageSizeOverride(opts.Width, opts.Height, opts.PPI, th.PageMarginPt)
 	// TOC is forced off for image output — a table of contents inside a single-page raster is meaningless.
 	imgOpts := opts
 	imgOpts.TOC = false
-	doc, err := r.buildTypstSource(ctx, content, inputFmt, imgOpts, override, themeOmitsTitleBlock(opts.Theme))
+	doc, err := r.buildTypstSource(ctx, content, inputFmt, imgOpts, th, override, th.OmitsTitleBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -116,13 +121,16 @@ func (r *TypstRenderer) RenderImage(ctx context.Context, content, inputFmt strin
 }
 
 // buildTypstSource produces the .typ source string consumed by compileTypst.
-// override is the caller-supplied geometry block (empty string when none);
-// omitTitle suppresses the auto-generated title block (themes that own
-// their own title presentation use this).
+// th is the already-resolved theme — callers resolve once so every decision in
+// one render comes from the same registry snapshot. override is the
+// caller-supplied geometry block (empty string when none); omitTitle suppresses
+// the auto-generated title block (themes that own their own title presentation
+// use this).
 func (r *TypstRenderer) buildTypstSource(
 	ctx context.Context,
 	content, inputFmt string,
 	opts render.Options,
+	th Theme,
 	override string,
 	omitTitle bool,
 ) (string, error) {
@@ -131,8 +139,7 @@ func (r *TypstRenderer) buildTypstSource(
 		return "", fmt.Errorf("typst: pandoc %s→typst: %w", inputFmt, err)
 	}
 
-	theme := resolveTypstTheme(opts.Theme)
-	preambleTmpl, err := template.New("preamble").Parse(theme.Preamble)
+	preambleTmpl, err := template.New("preamble").Parse(th.Preamble)
 	if err != nil {
 		return "", fmt.Errorf("typst: parse preamble template: %w", err)
 	}

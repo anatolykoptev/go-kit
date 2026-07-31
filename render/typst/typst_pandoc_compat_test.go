@@ -293,7 +293,7 @@ const resumeMarkdownSample = "# Jane Smith\n\n" +
 func TestResolveTypstTheme_Resume(t *testing.T) {
 	got := resolveTypstTheme("resume")
 	report := resolveTypstTheme("report")
-	if got == report {
+	if got.Preamble == report.Preamble {
 		t.Fatal(`resolveTypstTheme("resume") returned the report theme — new case not wired`)
 	}
 }

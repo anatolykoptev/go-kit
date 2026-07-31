@@ -82,16 +82,34 @@ jobs:
       # font against a 137427-byte golden rendered with it.
       - name: Install pandoc, typst and IBM Plex
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends pandoc fonts-ibm-plex
+
+          # Arch-derived so this step survives the move to ubuntu-24.04-arm that
+          # the fleet CI rule specifies for public repos, instead of 404-ing.
           TYPST_VERSION=v0.14.2
-          TYPST_TARBALL=typst-x86_64-unknown-linux-musl
-          curl -fsSL "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/${TYPST_TARBALL}.tar.xz" \
-            | tar -xJ -C /tmp
+          case "$(uname -m)" in
+            x86_64)  TYPST_ARCH=x86_64;  TYPST_SHA=a6044cbad2a954deb921167e257e120ac0a16b20339ec01121194ff9d394996d ;;
+            aarch64) TYPST_ARCH=aarch64; TYPST_SHA=491b101aa40a3a7ea82a3f8a6232cabb4e6a7e233810082e5ac812d43fdcd47a ;;
+            *) echo "no pinned typst build for $(uname -m)"; exit 1 ;;
+          esac
+          TYPST_TARBALL="typst-${TYPST_ARCH}-unknown-linux-musl"
+
+          # A git tag is mutable and a release asset is replaceable, so the
+          # download is verified rather than trusted.
+          curl -fsSL -o /tmp/typst.tar.xz \
+            "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/${TYPST_TARBALL}.tar.xz"
+          echo "${TYPST_SHA}  /tmp/typst.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/typst.tar.xz -C /tmp
           sudo install -m 0755 "/tmp/${TYPST_TARBALL}/typst" /usr/local/bin/typst
+
           pandoc --version | head -1
           typst --version
-          typst fonts | grep -q '^IBM Plex Sans$' \
+          # Written to a file rather than piped: grep -q exits early, and under
+          # pipefail that surfaces typst's SIGPIPE as a spurious 141.
+          typst fonts > /tmp/typst-fonts.txt
+          grep -qx 'IBM Plex Sans' /tmp/typst-fonts.txt \
             || { echo "IBM Plex Sans not visible to typst — renders would silently fall back"; exit 1; }
 
       # #53: gostall — static analysis for lock-order inversions, missing
