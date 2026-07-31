@@ -37,6 +37,21 @@ type Options struct {
 	CustomCSS string
 	// Theme selects a registered theme CSS (default: "report").
 	Theme string
+	// TypstPreamble replaces the named theme's preamble with a caller-supplied one.
+	// Empty means Theme selects the preamble as before. Honored by the Typst
+	// pipeline only; the HTML and Chrome pipelines ignore it.
+	//
+	// The string is parsed as a text/template with {{.Title}} available, exactly
+	// like a built-in theme's preamble, so a caller can reuse the same
+	// placeholders. Title-block behavior is unchanged: a non-empty Title still
+	// injects a level-1 heading unless the named theme suppresses it, so a caller
+	// supplying a preamble should either style level-1 headings or leave Title
+	// empty and own its own masthead.
+	//
+	// Use this when a product owns a house style that does not belong in the
+	// shared theme set — the rendering machinery stays here, the look stays with
+	// the product that defines it.
+	TypstPreamble string
 	// TOC, when true, prepends a table of contents derived from document headings.
 	TOC bool
 	// CoverPage sets an optional first-page cover.
@@ -64,6 +79,10 @@ func WithCustomCSS(css string) Option { return func(o *Options) { o.CustomCSS = 
 
 // WithTheme selects a registered theme by name. Unknown themes fall back to "report".
 func WithTheme(name string) Option { return func(o *Options) { o.Theme = name } }
+
+// WithTypstPreamble supplies a Typst preamble that replaces the named theme's.
+// Empty restores theme-based rendering. Typst pipeline only.
+func WithTypstPreamble(p string) Option { return func(o *Options) { o.TypstPreamble = p } }
 
 // WithTOC toggles auto-generated table of contents.
 func WithTOC(enabled bool) Option { return func(o *Options) { o.TOC = enabled } }
