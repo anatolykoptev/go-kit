@@ -23,10 +23,17 @@ type Theme struct {
 	// geometry for image output. Zero is meaningful (edge-to-edge), so a theme
 	// that wants the shared default states 24 explicitly.
 	PageMarginPt float64
-	// OmitsTitleBlock suppresses the Go-side title heading, for themes that
-	// render their own heading and would otherwise get two. Honored on both the
-	// PDF and image paths.
-	OmitsTitleBlock bool
+	// OmitsTitleBlockOnImage suppresses the Go-side title heading on the IMAGE
+	// path only. The name is that specific because the built-ins that set it,
+	// card and dark, do not render a title themselves — they only style a
+	// level-1 heading the body is expected to supply. Social cards carry their
+	// heading in the body, so injecting one duplicates it; a PDF of the same
+	// content does not, so suppressing there loses the title outright with no
+	// error.
+	//
+	// A consumer theme that genuinely emits its own masthead should leave this
+	// false and be selected with an empty Options.Title.
+	OmitsTitleBlockOnImage bool
 }
 
 const (
@@ -50,7 +57,9 @@ var (
 // built-in. Registration is expected at init time; the registry is safe to write
 // later, but a render already in flight resolves its theme once at entry.
 //
-// Panics on a blank Name — see Theme.Name.
+// Panics on a blank Name — see Theme.Name. This is stricter than
+// render/html.RegisterTheme, which stores such an entry unreachably; do not
+// call it with caller-controlled data.
 func RegisterTheme(t Theme) {
 	if t.Name == "" {
 		panic("render/typst: RegisterTheme called with a blank Name")
@@ -74,9 +83,9 @@ func LookupTheme(name string) (Theme, bool) {
 // "report" when the name is unknown or empty. A blank name misses the map and
 // takes the same fallback, so it needs no special case.
 //
-// Returns the zero Theme only if "report" itself was unregistered, which cannot
-// happen through RegisterTheme's panic guard but would leave an empty preamble
-// rather than an error.
+// Returns the zero Theme only if "report" is absent from the registry. init()
+// registers it, so that requires a consumer to have overwritten it — with an
+// empty Preamble, that silently becomes the fallback for every unknown name.
 func resolveTypstTheme(name string) Theme {
 	themeMu.RLock()
 	defer themeMu.RUnlock()
@@ -87,15 +96,18 @@ func resolveTypstTheme(name string) Theme {
 }
 
 // Card uses zero margin so its background fills edge-to-edge; dark gets a
-// roomier 32pt; the document themes match their 24pt body inset. Card and dark
-// style their own heading against a colored background, so they suppress the
-// Go-side title block.
+// roomier 32pt; the document themes match their 24pt body inset.
+//
+// Card and dark suppress the injected title on the image path because a social
+// card supplies its own heading in the body — neither preamble emits a title,
+// they only style a level-1 heading. That is why the flag is image-only: on the
+// PDF path the same suppression would drop the title with nothing replacing it.
 func init() {
 	RegisterTheme(Theme{Name: themeDefault, Preamble: typstThemeReport, PageMarginPt: 24})
 	RegisterTheme(Theme{Name: "minimal", Preamble: typstThemeMinimal, PageMarginPt: 24})
 	RegisterTheme(Theme{Name: "corporate", Preamble: typstThemeCorporate, PageMarginPt: 24})
-	RegisterTheme(Theme{Name: themeCard, Preamble: typstThemeCard, PageMarginPt: 0, OmitsTitleBlock: true})
-	RegisterTheme(Theme{Name: themeDark, Preamble: typstThemeDark, PageMarginPt: 32, OmitsTitleBlock: true})
+	RegisterTheme(Theme{Name: themeCard, Preamble: typstThemeCard, PageMarginPt: 0, OmitsTitleBlockOnImage: true})
+	RegisterTheme(Theme{Name: themeDark, Preamble: typstThemeDark, PageMarginPt: 32, OmitsTitleBlockOnImage: true})
 	RegisterTheme(Theme{Name: "resume", Preamble: typstThemeResume, PageMarginPt: 24})
 }
 

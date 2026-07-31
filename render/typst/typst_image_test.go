@@ -179,11 +179,18 @@ func within5Pct(got, want int) bool {
 // of which the repo can pin across an apt refresh or a runner image roll. A
 // byte-exact gate turns any of those into a red build on every PR at once, with
 // "got N bytes, want M" as the only diagnostic — and the reflex fix is to re-run
-// with -update, which silently retires the guard. What actually regresses in a
-// way worth blocking a merge is geometry (wrong preset, spilled page, blank
-// output) and gross payload change; both are caught here. The font-visibility
-// assertion in preflight.yml is the sharper instrument for the substitution
-// failure this test used to catch by accident.
+// with -update, which silently retires the guard.
+//
+// What this does NOT catch, stated so nobody credits it later: font
+// substitution. Measured by rendering the presets against a bogus family —
+// og-image 0.96%, twitter-card 0.39%, square-1080 0.69% payload delta, all well
+// inside the 5% band. Compressed PNG length answers to entropy, not to glyph
+// shape. The gate for that is the `typst fonts` assertion in preflight.yml, and
+// separately the fact that a substituted family reflows realistic content onto a
+// second page, which RenderImage rejects outright.
+//
+// What it does catch is geometry drift — wrong preset, spilled page, blank
+// output — and gross payload change.
 func assertGoldenClose(t *testing.T, got, want []byte, label string) {
 	t.Helper()
 	gotCfg, err := png.DecodeConfig(bytes.NewReader(got))

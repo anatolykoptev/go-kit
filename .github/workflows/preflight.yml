@@ -78,8 +78,12 @@ jobs:
       # `font: "IBM Plex Sans"`, and typst SUBSTITUTES a missing family in
       # silence rather than failing. Without it the render tests pass while
       # exercising a fallback face — they assert on output the fleet never
-      # produces. The golden image test measured it: 130039 bytes without the
-      # font against a 137427-byte golden rendered with it.
+      # produces.
+      #
+      # The `typst fonts` assertion below is the gate for that, not the golden
+      # image tests: measured, substitution moves three of the four goldens by
+      # under 1%, well inside their tolerance. Do not delete this step on the
+      # assumption the goldens would catch its absence.
       - name: Install pandoc, typst and IBM Plex
         run: |
           set -euo pipefail

@@ -80,7 +80,7 @@ func pageSizeOverride(widthPx, heightPx, ppi int, marginPt float64) string {
 // Render converts content (markdown or HTML) to a PDF using the Typst toolchain.
 //
 // inputFmt must be "markdown" or "html" — passed directly to pandoc -f.
-// opts.Theme controls the visual style (report/minimal/corporate).
+// opts.Theme names a registered theme; unknown names fall back to "report".
 // opts.Title sets the document title shown in headers.
 func (r *TypstRenderer) Render(ctx context.Context, content, inputFmt string, opts render.Options) ([]byte, error) {
 	if content == "" {
@@ -90,8 +90,13 @@ func (r *TypstRenderer) Render(ctx context.Context, content, inputFmt string, op
 	// Resolve once: the registry is writable at runtime, and reading it per
 	// decision would let a registration land between the preamble and the
 	// title-block choice.
+	//
+	// omitTitle is false unconditionally on this path. No built-in preamble emits
+	// a title of its own — card and dark only STYLE a level-1 heading the body is
+	// expected to supply — so honoring OmitsTitleBlockOnImage here would drop the
+	// title from a PDF with nothing replacing it and no error.
 	th := resolveTypstTheme(opts.Theme)
-	doc, err := r.buildTypstSource(ctx, content, inputFmt, opts, th, "", th.OmitsTitleBlock)
+	doc, err := r.buildTypstSource(ctx, content, inputFmt, opts, th, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -101,8 +106,9 @@ func (r *TypstRenderer) Render(ctx context.Context, content, inputFmt string, op
 // RenderImage converts content to a PNG using the same Typst pipeline as
 // Render. Unlike Render it honors opts.Width/opts.Height/opts.PPI so the
 // output is a fixed-pixel raster suitable for OG cards, social posts and
-// stories. Themes "card" and "dark" suppress the auto-injected H1 title
-// block — they style the heading themselves.
+// stories. Themes declaring OmitsTitleBlockOnImage suppress the auto-injected
+// H1 here — a social card carries its heading in the body, so injecting one
+// would duplicate it.
 func (r *TypstRenderer) RenderImage(ctx context.Context, content, inputFmt string, opts render.Options) ([]byte, error) {
 	if content == "" {
 		return nil, errors.New("typst: content is empty")
@@ -113,7 +119,7 @@ func (r *TypstRenderer) RenderImage(ctx context.Context, content, inputFmt strin
 	// TOC is forced off for image output — a table of contents inside a single-page raster is meaningless.
 	imgOpts := opts
 	imgOpts.TOC = false
-	doc, err := r.buildTypstSource(ctx, content, inputFmt, imgOpts, th, override, th.OmitsTitleBlock)
+	doc, err := r.buildTypstSource(ctx, content, inputFmt, imgOpts, th, override, th.OmitsTitleBlockOnImage)
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +130,9 @@ func (r *TypstRenderer) RenderImage(ctx context.Context, content, inputFmt strin
 // th is the already-resolved theme — callers resolve once so every decision in
 // one render comes from the same registry snapshot. override is the
 // caller-supplied geometry block (empty string when none); omitTitle suppresses
-// the auto-generated title block (themes that own their own title presentation
-// use this).
+// the auto-generated title block and is the caller's PATH decision, not the
+// theme's — Render always passes false, RenderImage passes the theme's
+// OmitsTitleBlockOnImage.
 func (r *TypstRenderer) buildTypstSource(
 	ctx context.Context,
 	content, inputFmt string,

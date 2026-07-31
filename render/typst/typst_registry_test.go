@@ -99,20 +99,20 @@ func TestRegisterTheme_CarriesMarginAndTitleSuppression(t *testing.T) {
 	snapshotThemes(t)
 
 	RegisterTheme(Theme{
-		Name: "edge", Preamble: "#let z = 3", PageMarginPt: 7, OmitsTitleBlock: true,
+		Name: "edge", Preamble: "#let z = 3", PageMarginPt: 7, OmitsTitleBlockOnImage: true,
 	})
 
 	got := resolveTypstTheme("edge")
 	if got.PageMarginPt != 7 {
 		t.Errorf("PageMarginPt = %v, want 7", got.PageMarginPt)
 	}
-	if !got.OmitsTitleBlock {
-		t.Error("OmitsTitleBlock = false, want true for a theme that declares it")
+	if !got.OmitsTitleBlockOnImage {
+		t.Error("OmitsTitleBlockOnImage = false, want true for a theme that declares it")
 	}
 }
 
 // Built-in geometry must survive the move from switch statements to registry
-// entries: card is edge-to-edge and self-titled, dark is roomier.
+// entries: card is edge-to-edge and image-self-titled, dark is roomier.
 func TestBuiltInThemes_GeometryPreserved(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -130,8 +130,8 @@ func TestBuiltInThemes_GeometryPreserved(t *testing.T) {
 		if got.PageMarginPt != tc.marginPt {
 			t.Errorf("%s: margin = %v, want %v", tc.name, got.PageMarginPt, tc.marginPt)
 		}
-		if got.OmitsTitleBlock != tc.omitTitle {
-			t.Errorf("%s: OmitsTitleBlock = %v, want %v", tc.name, got.OmitsTitleBlock, tc.omitTitle)
+		if got.OmitsTitleBlockOnImage != tc.omitTitle {
+			t.Errorf("%s: OmitsTitleBlockOnImage = %v, want %v", tc.name, got.OmitsTitleBlockOnImage, tc.omitTitle)
 		}
 	}
 }
@@ -146,26 +146,51 @@ func TestResolveTypstTheme_FallsBackToReport(t *testing.T) {
 	}
 }
 
-// A theme that declares it renders its own heading must suppress the injected
-// title block on the PDF path too, not only on the image path. A consumer theme
-// with its own masthead otherwise gets a duplicate H1 on every PDF, silently.
-func TestBuildTypstSource_OmitsTitleBlockOnPDFPath(t *testing.T) {
-	skipIfNoTypstPandoc(t)
-	snapshotThemes(t)
+// No built-in preamble emits a title of its own — card and dark only STYLE a
+// level-1 heading the body is expected to supply. This pins the theme DATA,
+// which is where the hazard lives: honoring the image-path flag on the PDF path
+// would drop the title with nothing replacing it, no error, and output that
+// still looks like a document.
+func TestBuiltInThemes_DoNotSelfTitle(t *testing.T) {
+	for _, name := range []string{"report", "minimal", "corporate", themeCard, themeDark, "resume"} {
+		th := resolveTypstTheme(name)
+		emitsTitle := strings.Contains(th.Preamble, "{{.Title}}")
+		if emitsTitle && th.OmitsTitleBlockOnImage {
+			t.Errorf("%s: suppresses the injected title AND emits its own — one of the two is wrong", name)
+		}
+		if !emitsTitle && !strings.Contains(th.Preamble, "heading.where(level: 1)") {
+			t.Errorf("%s: neither emits {{.Title}} nor styles a level-1 heading — "+
+				"a document rendered with it has no title path at all", name)
+		}
+	}
+}
 
-	RegisterTheme(Theme{Name: "selftitled", Preamble: "#let s = 1", OmitsTitleBlock: true})
+// The image path suppresses the injected title only for themes declaring it; the
+// PDF path never does. Mirrors the arguments of the two production call sites.
+func TestBuildTypstSource_TitleBlockPerPath(t *testing.T) {
+	skipIfNoTypstPandoc(t)
 
 	r := NewTypstRenderer()
-	th := resolveTypstTheme("selftitled")
-	src, err := r.buildTypstSource(
-		context.Background(), "Body text.\n", "markdown",
-		render.Options{Title: "Quarterly Review", Theme: "selftitled"}, th, "", th.OmitsTitleBlock,
-	)
+	th := resolveTypstTheme(themeCard)
+	const title = "Quarterly Review"
+	opts := render.Options{Title: title, Theme: themeCard}
+
+	// Render's arguments: omitTitle false unconditionally.
+	pdfSrc, err := r.buildTypstSource(context.Background(), "Body text.\n", "markdown", opts, th, "", false)
 	if err != nil {
-		t.Fatalf("buildTypstSource: %v", err)
+		t.Fatalf("buildTypstSource (pdf path): %v", err)
 	}
-	if strings.Contains(src, "= Quarterly Review") {
-		t.Errorf("title block injected for a theme declaring OmitsTitleBlock:\n%s", src)
+	if !strings.Contains(pdfSrc, "= "+title) {
+		t.Errorf("card: title missing on the PDF path, and the preamble emits none either:\n%s", pdfSrc)
+	}
+
+	// RenderImage's arguments: omitTitle comes from the theme.
+	imgSrc, err := r.buildTypstSource(context.Background(), "Body text.\n", "markdown", opts, th, "", th.OmitsTitleBlockOnImage)
+	if err != nil {
+		t.Fatalf("buildTypstSource (image path): %v", err)
+	}
+	if strings.Contains(imgSrc, "= "+title) {
+		t.Errorf("card: title injected on the image path despite OmitsTitleBlockOnImage:\n%s", imgSrc)
 	}
 }
 
@@ -184,7 +209,7 @@ func TestBuildTypstSource_UsesRegisteredTheme(t *testing.T) {
 	th := resolveTypstTheme("house")
 	src, err := r.buildTypstSource(
 		context.Background(), "# Heading\n\nBody text.\n", "markdown",
-		render.Options{Theme: "house"}, th, "", th.OmitsTitleBlock,
+		render.Options{Theme: "house"}, th, "", th.OmitsTitleBlockOnImage,
 	)
 	if err != nil {
 		t.Fatalf("buildTypstSource: %v", err)
