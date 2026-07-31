@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.9](https://github.com/anatolykoptev/go-kit/compare/v0.97.8...v0.97.9) (2026-07-31)
+
+
+### Added
+
+* **render/typst:** structured compile errors + ErrBinaryNotFound sentinel ([#246](https://github.com/anatolykoptev/go-kit/issues/246)) ([3b62442](https://github.com/anatolykoptev/go-kit/commit/3b6244202f901f3066ba4db6d645bea683c4f5fe))
+
 ## [0.97.8](https://github.com/anatolykoptev/go-kit/compare/v0.97.7...v0.97.8) (2026-07-27)
 
 
