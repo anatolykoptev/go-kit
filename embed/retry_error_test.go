@@ -23,15 +23,19 @@ func TestDo_RetryError_PreservesContextAndCause(t *testing.T) {
 		Multiplier:      2.0,
 		RetryableStatus: []int{503},
 	}
+	cause := &errHTTPStatus{Code: 503}
 	_, err := do(ctx, p, "model", noopObserver{}, func() (int, error) {
 		cancel()
-		return 0, &errHTTPStatus{Code: 503}
+		return 0, cause
 	})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("errors.Is(err, context.Canceled) = false; want true — err: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("errors.Is(err, cause) = false; want true — err: %v", err)
 	}
 	var hs *errHTTPStatus
 	if !errors.As(err, &hs) {
@@ -76,15 +80,19 @@ func TestDo_RetryError_SingleAttemptCarriesCause(t *testing.T) {
 		Multiplier:      2.0,
 		RetryableStatus: []int{503},
 	}
+	cause := &errHTTPStatus{Code: 503}
 	_, err := do(ctx, p, "model", noopObserver{}, func() (int, error) {
 		cancel()
-		return 0, &errHTTPStatus{Code: 503}
+		return 0, cause
 	})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("errors.Is(err, context.Canceled) = false; want true — err: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("single attempt should still carry cause: errors.Is(err, cause) = false — err: %v", err)
 	}
 	var hs *errHTTPStatus
 	if !errors.As(err, &hs) {

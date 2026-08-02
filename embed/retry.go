@@ -3,11 +3,12 @@ package embed
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"math/rand/v2"
 	"net/http"
 	"time"
+
+	"github.com/anatolykoptev/go-kit/retry"
 )
 
 // RetryPolicy controls how many times and how quickly the embed backend is
@@ -143,7 +144,7 @@ func do[T any](ctx context.Context, p RetryPolicy, model string, obs Observer, f
 				if !timer.Stop() {
 					<-timer.C
 				}
-				return result, &retryError{ctxErr: ctx.Err(), lastErr: err, attempts: attempt + 1}
+				return result, retry.WrapContextErr(ctx, attempt+1, err)
 			case <-timer.C:
 			}
 		}
@@ -228,7 +229,7 @@ func withRetry[T any](ctx context.Context, cfg retryConfig, fn func() (T, int, e
 
 		select {
 		case <-ctx.Done():
-			return zero, &retryError{ctxErr: ctx.Err(), lastErr: err, attempts: attempt}
+			return zero, retry.WrapContextErr(ctx, attempt, err)
 		case <-time.After(delay):
 		}
 
@@ -238,39 +239,4 @@ func withRetry[T any](ctx context.Context, cfg retryConfig, fn func() (T, int, e
 		}
 	}
 	return zero, errors.New("unreachable")
-}
-
-// retryError wraps a context error with the last attempt error and the
-// attempt count, so errors.Is matches both the context sentinel and the
-// attempt error's sentinels, and errors.As reaches the attempt error's
-// concrete type via Unwrap.
-//
-// Modeled on googleapis/google-cloud-go internal/retry wrappedCallErr
-// (PR #4797) and google/go-cloud internal/retry ContextError, extended
-// with a structured attempt-count field.
-//
-// Duplicated from go-kit/retry/errors.go rather than imported to avoid
-// adding a dependency edge from embed to the retry package — embed is a
-// leaf package by design (see sparse/retry.go for the same rationale).
-type retryError struct {
-	ctxErr   error // context.DeadlineExceeded or context.Canceled
-	lastErr  error // last error returned by the retried function
-	attempts int   // number of attempts that ran (≥1)
-}
-
-func (e *retryError) Error() string {
-	return fmt.Sprintf("after %d attempts: %v; last error: %v", e.attempts, e.ctxErr, e.lastErr)
-}
-
-// Is reports true for both the context sentinel and the attempt error's
-// sentinels, so errors.Is(err, context.Canceled) and
-// errors.Is(err, <underlying>) both succeed on the same value.
-func (e *retryError) Is(target error) bool {
-	return e.ctxErr == target || errors.Is(e.lastErr, target)
-}
-
-// Unwrap returns the last attempt error so errors.As reaches its concrete
-// type. The context sentinel is matched via Is, not Unwrap.
-func (e *retryError) Unwrap() error {
-	return e.lastErr
 }

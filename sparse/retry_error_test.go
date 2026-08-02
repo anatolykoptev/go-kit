@@ -16,15 +16,19 @@ var sparseSentinel = errors.New("sparse upstream boom")
 func TestWithRetry_RetryError_PreservesContextAndCause(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := RetryConfig{MaxAttempts: 5, BaseDelay: 200 * time.Millisecond, MaxDelay: 5 * time.Second}
+	cause := &errHTTPStatus{Code: 503, Body: "svc unavailable"}
 	_, err := withRetry(ctx, cfg, "http", noopObserver{}, func() (int, int, error) {
 		cancel()
-		return 0, 503, &errHTTPStatus{Code: 503, Body: "svc unavailable"}
+		return 0, 503, cause
 	})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("errors.Is(err, context.Canceled) = false; want true — err: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("errors.Is(err, cause) = false; want true — err: %v", err)
 	}
 	var hs *errHTTPStatus
 	if !errors.As(err, &hs) {
