@@ -37,7 +37,7 @@ func TestRetryError_PreservesContextAndCause(t *testing.T) {
 }
 
 // TestRetryError_ErrorsAsReachesCause verifies errors.As reaches the concrete
-// type of the underlying attempt error through Unwrap.
+// type of the underlying attempt error through the As method.
 func TestRetryError_ErrorsAsReachesCause(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	_, err := retry.Do(ctx, retry.Options{
@@ -78,7 +78,8 @@ func TestRetryError_AttemptCountReal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// 2 attempts ran before cancel took effect during the 3rd sleep.
+	// retry.Do waits before each call, so 2 attempts ran before cancel took effect
+	// during the 3rd sleep. The leaf ladders wait after the call and count differently.
 	if !strings.Contains(err.Error(), "after 2 attempts") {
 		t.Errorf("err message %q does not contain real attempt count 'after 2 attempts'", err.Error())
 	}
