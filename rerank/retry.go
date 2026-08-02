@@ -2,6 +2,8 @@ package rerank
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -133,10 +135,46 @@ func do[T any](ctx context.Context, p RetryPolicy, model string, obs Observer, f
 		if sleep > 0 {
 			select {
 			case <-ctx.Done():
-				return result, ctx.Err()
+				return result, &retryError{ctxErr: ctx.Err(), lastErr: err, attempts: attempt + 1}
 			case <-time.After(sleep):
 			}
 		}
 	}
 	return result, err
+}
+
+// retryError wraps a context error with the last attempt error and the
+// attempt count, so errors.Is matches both the context sentinel and the
+// attempt error's sentinels, and errors.As reaches the attempt error's
+// concrete type via Unwrap.
+//
+// Modeled on googleapis/google-cloud-go internal/retry wrappedCallErr
+// (PR #4797) and google/go-cloud internal/retry ContextError, extended
+// with a structured attempt-count field.
+//
+// Duplicated from go-kit/retry/errors.go rather than imported to avoid
+// adding a dependency edge from rerank to the retry package — rerank is a
+// leaf package by design (see embed/retry.go and sparse/retry.go for the
+// same rationale).
+type retryError struct {
+	ctxErr   error // context.DeadlineExceeded or context.Canceled
+	lastErr  error // last error returned by the retried function
+	attempts int   // number of attempts that ran (≥1)
+}
+
+func (e *retryError) Error() string {
+	return fmt.Sprintf("after %d attempts: %v; last error: %v", e.attempts, e.ctxErr, e.lastErr)
+}
+
+// Is reports true for both the context sentinel and the attempt error's
+// sentinels, so errors.Is(err, context.Canceled) and
+// errors.Is(err, <underlying>) both succeed on the same value.
+func (e *retryError) Is(target error) bool {
+	return e.ctxErr == target || errors.Is(e.lastErr, target)
+}
+
+// Unwrap returns the last attempt error so errors.As reaches its concrete
+// type. The context sentinel is matched via Is, not Unwrap.
+func (e *retryError) Unwrap() error {
+	return e.lastErr
 }

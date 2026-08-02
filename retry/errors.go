@@ -101,11 +101,46 @@ func IsPermanent(err error) bool {
 	return errors.As(err, &pe)
 }
 
-// wrapContextErr wraps a context error with attempt count and the last function error.
-// Uses %w on ctx.Err() so errors.Is(err, context.DeadlineExceeded) works.
+// retryError wraps a context error with the last attempt error and the
+// attempt count, so errors.Is matches both the context sentinel and the
+// attempt error's sentinels, and errors.As reaches the attempt error's
+// concrete type via Unwrap.
+//
+// Modeled on googleapis/google-cloud-go internal/retry wrappedCallErr
+// (PR #4797) and google/go-cloud internal/retry ContextError, extended
+// with a structured attempt-count field.
+//
+// Not errors.Join: the attempt count must be a structured int field, and
+// errors.Join has nowhere to put it.
+type retryError struct {
+	ctxErr   error // context.DeadlineExceeded or context.Canceled
+	lastErr  error // last error returned by the retried function
+	attempts int   // number of attempts that ran (≥1)
+}
+
+func (e *retryError) Error() string {
+	return fmt.Sprintf("after %d attempts: %v; last error: %v", e.attempts, e.ctxErr, e.lastErr)
+}
+
+// Is reports true for both the context sentinel and the attempt error's
+// sentinels, so errors.Is(err, context.Canceled) and
+// errors.Is(err, <underlying>) both succeed on the same value.
+func (e *retryError) Is(target error) bool {
+	return e.ctxErr == target || errors.Is(e.lastErr, target)
+}
+
+// Unwrap returns the last attempt error so errors.As reaches its concrete
+// type. The context sentinel is matched via Is, not Unwrap.
+func (e *retryError) Unwrap() error {
+	return e.lastErr
+}
+
+// wrapContextErr wraps a context error with attempt count and the last
+// function error. Returns lastErr unchanged when there is no context error
+// or no last error.
 func wrapContextErr(ctx context.Context, attempts int, lastErr error) error {
 	if ctx.Err() == nil || lastErr == nil {
 		return lastErr
 	}
-	return fmt.Errorf("after %d attempts: %w: %v", attempts, ctx.Err(), lastErr)
+	return &retryError{ctxErr: ctx.Err(), lastErr: lastErr, attempts: attempts}
 }
