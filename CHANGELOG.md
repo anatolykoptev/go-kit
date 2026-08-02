@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.11](https://github.com/anatolykoptev/go-kit/compare/v0.97.10...v0.97.11) (2026-08-02)
+
+
+### Fixed
+
+* **retry:** preserve the causal error when context cancels mid-retry ([#257](https://github.com/anatolykoptev/go-kit/issues/257)) ([8bfc8d4](https://github.com/anatolykoptev/go-kit/commit/8bfc8d4eb43e149b6d6ab0dd7c4a6118f79d2cd7))
+
 ## [0.97.10](https://github.com/anatolykoptev/go-kit/compare/v0.97.9...v0.97.10) (2026-07-31)
 
 
