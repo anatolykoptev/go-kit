@@ -355,5 +355,17 @@ func (c *OllamaClient) Dimension() int {
 // Close is a no-op for the HTTP-based Ollama client.
 func (c *OllamaClient) Close() error { return nil }
 
-// Compile-time interface check.
-var _ Embedder = (*OllamaClient)(nil)
+// MaxBatchSize returns the maximum recommended batch size for Ollama's
+// /api/embed endpoint. Ollama has no hard documented limit, but large batches
+// can timeout on slow hardware; 32 is a safe default that matches the
+// ox-embed-server cap and keeps latency bounded.
+func (c *OllamaClient) MaxBatchSize() int { return ollamaMaxBatch }
+
+// ollamaMaxBatch is the recommended batch size for Ollama /api/embed.
+const ollamaMaxBatch = 32
+
+// Compile-time interface checks.
+var (
+	_ Embedder   = (*OllamaClient)(nil)
+	_ BatchSizer = (*OllamaClient)(nil)
+)
