@@ -1,10 +1,13 @@
 package embed
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -269,5 +272,137 @@ func TestOllamaClient_NormalizeL2_Disabled(t *testing.T) {
 	}
 	if got[0][0] != 3.0 || got[0][1] != 4.0 {
 		t.Errorf("without normalize: want [3 4], got %v", got[0])
+	}
+}
+
+// TestOllamaClient_E5PrefixesNotInterchangeable is the regression guard for
+// issue #259: the e5 "passage: "/"query: " prefixes and raw text produce
+// vectors in different regions of the space, and a caller that stores raw-text
+// embeddings against a passage-prefixed corpus silently degrades retrieval
+// (cosine ~0.97 — high enough to look fine, low enough to reorder results).
+//
+// The mock server simulates the e5 model's real behaviour: it returns a
+// deterministic, prefix-distinct vector per distinct input string. We then
+// assert that the same text embedded once with E5PassagePrefix and once with
+// no prefix yields cosine < 1.0 — i.e. the two are NOT interchangeable. Had
+// this test existed when the misleading doc comment was written, the drift
+// would have been caught at the point it was introduced.
+func TestOllamaClient_E5PrefixesNotInterchangeable(t *testing.T) {
+	// mockE5Vec returns a stable, well-separated unit vector per distinct input
+	// string. Two inputs that differ only by prefix must land in different
+	// regions — that is the property we are proving is enforced.
+	mockE5Vec := func(input string) []float32 {
+		// Hash the input into two float32 coordinates in [-1, 1], then L2-normalize.
+		// Distinct inputs → distinct directions; identical inputs → identical vector.
+		var h1, h2 uint32
+		for i := 0; i < len(input); i++ {
+			h1 = h1*31 + uint32(input[i])
+			h2 = h2*37 + uint32(input[i])
+		}
+		v := []float32{
+			float32(int32(h1%2000)-1000) / 1000.0,
+			float32(int32(h2%2000)-1000) / 1000.0,
+		}
+		l2Normalize(v)
+		return v
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ollamaEmbedRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode: %v", err)
+			return
+		}
+		embs := make([][]float32, len(req.Input))
+		for i, in := range req.Input {
+			embs[i] = mockE5Vec(in)
+		}
+		resp := ollamaEmbedResponse{Embeddings: embs}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	const fixedText = "Senior Go engineer with distributed-systems experience"
+
+	// Embed the SAME text three ways: passage-prefixed (storage convention),
+	// query-prefixed (retrieval convention), and raw (the old, wrong advice).
+	passageC := NewOllamaClient(srv.URL, "multilingual-e5-large", testLogger(), WithTextPrefix(E5PassagePrefix))
+	queryC := NewOllamaClient(srv.URL, "multilingual-e5-large", testLogger(), WithTextPrefix(E5QueryPrefix))
+	rawC := NewOllamaClient(srv.URL, "multilingual-e5-large", testLogger()) // no prefix — the drift
+
+	passageVec, err := passageC.Embed(context.Background(), []string{fixedText})
+	if err != nil {
+		t.Fatalf("passage Embed: %v", err)
+	}
+	queryVec, err := queryC.Embed(context.Background(), []string{fixedText})
+	if err != nil {
+		t.Fatalf("query Embed: %v", err)
+	}
+	rawVec, err := rawC.Embed(context.Background(), []string{fixedText})
+	if err != nil {
+		t.Fatalf("raw Embed: %v", err)
+	}
+
+	// The three prefixes must produce three distinct vectors — if any two
+	// collide, the mock is not discriminating enough to prove the property.
+	if Cosine(passageVec[0], rawVec[0]) >= 0.999 {
+		t.Fatalf("mock not discriminating: passage vs raw cosine = %f (need <0.999 to prove the property)",
+			Cosine(passageVec[0], rawVec[0]))
+	}
+
+	// The actual regression assertion: passage-prefixed and raw embeddings of
+	// the same text are NOT interchangeable. This is the exact drift issue #259
+	// describes — a caller following the old "raw text" advice writes vectors
+	// that do not match the passage-prefixed corpus.
+	if got := Cosine(passageVec[0], rawVec[0]); got >= 0.999 {
+		t.Errorf("passage vs raw cosine = %f, want < 0.999 — prefixes are NOT interchangeable; "+
+			"raw-text embeddings cannot retrieve against a passage-prefixed e5 corpus", got)
+	}
+	// And query vs passage are distinct too — they are asymmetric by design.
+	if got := Cosine(passageVec[0], queryVec[0]); got >= 0.999 {
+		t.Errorf("passage vs query cosine = %f, want < 0.999 — e5 query/passage prefixes are asymmetric", got)
+	}
+}
+
+// TestOllamaClient_E5PrefixConstantsAreStable guards against accidental edits
+// to the exported prefix constants — a change here is a corpus-compatibility
+// break, not a refactor.
+func TestOllamaClient_E5PrefixConstantsAreStable(t *testing.T) {
+	if E5PassagePrefix != "passage: " {
+		t.Errorf("E5PassagePrefix = %q, want %q — changing this breaks existing e5 corpora", E5PassagePrefix, "passage: ")
+	}
+	if E5QueryPrefix != "query: " {
+		t.Errorf("E5QueryPrefix = %q, want %q — changing this breaks existing e5 query convention", E5QueryPrefix, "query: ")
+	}
+}
+
+// TestOllamaClient_E5ModelWarnsOnEmptyPrefix verifies that constructing an
+// OllamaClient with an e5-family model name and no prefixes emits the
+// silent-degradation warning from issue #259. The warning is informational,
+// not a hard error — the caller may intentionally use raw text.
+func TestOllamaClient_E5ModelWarnsOnEmptyPrefix(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	// e5 model + no prefixes → should warn.
+	_ = NewOllamaClient("http://x", "multilingual-e5-large", logger)
+	out := buf.String()
+	if !strings.Contains(out, "e5 family") || !strings.Contains(out, "quietly degrade") {
+		t.Errorf("e5 model + empty prefixes: expected warning about e5 family / quiet degradation, got: %s", out)
+	}
+
+	// e5 model + passage prefix set → should NOT warn.
+	buf.Reset()
+	_ = NewOllamaClient("http://x", "multilingual-e5-large", logger, WithTextPrefix(E5PassagePrefix))
+	if strings.Contains(buf.String(), "quietly degrade") {
+		t.Errorf("e5 model + passage prefix set: should not warn, got: %s", buf.String())
+	}
+
+	// non-e5 model + no prefixes → should NOT warn.
+	buf.Reset()
+	_ = NewOllamaClient("http://x", "nomic-embed-text", logger)
+	if strings.Contains(buf.String(), "e5 family") {
+		t.Errorf("non-e5 model: should not warn about e5 family, got: %s", buf.String())
 	}
 }
