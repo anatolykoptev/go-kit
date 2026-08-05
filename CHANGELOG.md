@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.97.12](https://github.com/anatolykoptev/go-kit/compare/v0.97.11...v0.97.12) (2026-08-05)
+
+
+### Added
+
+* **embed:** CheckCorpusDim helper for corpus-level dimension drift detection ([#263](https://github.com/anatolykoptev/go-kit/issues/263)) ([cad8127](https://github.com/anatolykoptev/go-kit/commit/cad8127a9d4e9311997c90921cdcac01464aa4c5))
+* **embed:** Prefixed decorator + BatchSizer interface ([#262](https://github.com/anatolykoptev/go-kit/issues/262)) ([bd2aa69](https://github.com/anatolykoptev/go-kit/commit/bd2aa69800651ce02800a9d30e58d73709fe3969))
+
+
+### Fixed
+
+* **embed:** correct e5 prefix convention + export shared constants ([#260](https://github.com/anatolykoptev/go-kit/issues/260)) ([0809a5b](https://github.com/anatolykoptev/go-kit/commit/0809a5b9b3549b6aed697d717bf6b32e5c37da89))
+
 ## [0.97.11](https://github.com/anatolykoptev/go-kit/compare/v0.97.10...v0.97.11) (2026-08-02)
 
 
