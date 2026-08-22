@@ -74,8 +74,39 @@ func (r *TypstRenderer) compiler() func(context.Context, string, typstOutput) ([
 }
 
 // typstDocData is the template context injected into a theme preamble.
+// Title carries the ALREADY-ESCAPED typst string-literal form (see
+// typstStringLiteral) so that text/template substitution into {{.Title}}
+// produces inert content, not executable typst.
 type typstDocData struct {
 	Title string
+}
+
+// typstStringLiteral converts a raw string into a typst string-literal
+// expression (#"…") with backslash and double-quote escaped. This is the
+// complete escape grammar for a typst string literal — small and auditable,
+// unlike typst's markup grammar which is large and a missed character is
+// another injection bypass.
+//
+// The returned form is inert wherever typst interpolates it: after a
+// heading marker (= #"), inside content brackets ([#"]), or as a function
+// argument. A title containing #import, #set, or any other code-mode
+// directive renders as literal text inside the string, never as executable
+// typst.
+//
+// This closes the second typst injection vector: opts.Title was interpolated
+// into the .typ source unescaped at two sites (the title-block heading and
+// the preamble template), and typst's # opens code mode wherever it lands,
+// so a title like `#import "@preview/cetz:0.3.1"` was executable typst that
+// fully bypassed the RawTypstPassthrough body guard.
+func typstStringLiteral(s string) string {
+	// Escape \ first (otherwise the \\ we insert would be re-escaped by the
+	// " pass), then escape ". No other character needs escaping inside a
+	// typst string literal.
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+	)
+	return `#"` + r.Replace(s) + `"`
 }
 
 // pageSizeOverride returns a typst snippet that pins page width/height to
@@ -192,13 +223,13 @@ func (r *TypstRenderer) buildTypstSource(
 		return "", fmt.Errorf("typst: parse preamble template: %w", err)
 	}
 	var preambleBuf bytes.Buffer
-	if err := preambleTmpl.Execute(&preambleBuf, typstDocData{Title: opts.Title}); err != nil {
+	if err := preambleTmpl.Execute(&preambleBuf, typstDocData{Title: typstStringLiteral(opts.Title)}); err != nil {
 		return "", fmt.Errorf("typst: render preamble: %w", err)
 	}
 
 	var titleBlock string
 	if opts.Title != "" && !omitTitle {
-		titleBlock = "= " + opts.Title + "\n\n"
+		titleBlock = "= " + typstStringLiteral(opts.Title) + "\n\n"
 	}
 
 	return preambleBuf.String() + "\n" + override + titleBlock + body, nil
