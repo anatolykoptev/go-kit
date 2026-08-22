@@ -54,6 +54,21 @@ type Options struct {
 	Height int
 	// PPI is the pixels-per-inch density for PNG output. 0 falls back to 144.
 	PPI int
+	// RawTypstPassthrough, when true, allows pandoc raw-attribute blocks
+	// (```{=typst} … ```) in the input to pass through to the typst output
+	// verbatim as executable typst code.
+	//
+	// WARNING: enabling this makes the rendered content a CODE-EXECUTION
+	// surface. Raw typst can #import and execute remote packages, run
+	// arbitrary typst code, and read local files via typst's primitives.
+	// Only enable for operator-controlled, trusted input — never for
+	// anything a user can influence.
+	//
+	// Default false (secure): pandoc's raw_attribute extension is disabled
+	// for markdown input, so {=typst} blocks are escaped into inert code
+	// spans instead of executable typst. A caller rendering untrusted input
+	// is safe without knowing to ask.
+	RawTypstPassthrough bool
 }
 
 // WithTitle sets the document title (otherwise derived from first H1).
@@ -98,4 +113,16 @@ func WithDirectives(enabled bool) Option {
 // blocks with info "mermaid" render as SVG via a CDN-loaded mermaid.js.
 func WithMermaid(enabled bool) Option {
 	return func(o *Options) { o.Mermaid = enabled }
+}
+
+// WithRawTypstPassthrough toggles whether pandoc raw-attribute blocks
+// (```{=typst} … ```) in the input pass through to the typst output as
+// executable typst code. Default false (secure).
+//
+// Enabling this makes the rendered content a CODE-EXECUTION surface —
+// raw typst can #import and execute remote packages. Only enable for
+// operator-controlled, trusted input; never for anything a user can
+// influence. See the RawTypstPassthrough field doc for the full warning.
+func WithRawTypstPassthrough(enabled bool) Option {
+	return func(o *Options) { o.RawTypstPassthrough = enabled }
 }
