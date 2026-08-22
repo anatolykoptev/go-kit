@@ -213,3 +213,52 @@ func TestTitleEscape_CorporateThemeIsInert(t *testing.T) {
 		t.Errorf("title not rendered as a string literal in the corporate preamble:\n%s", *src)
 	}
 }
+
+// TestTitleEscape_QuoteCannotBreakOutOfTheLiteral gates the quote half of the
+// escape on its own.
+//
+// The backslash test above covers a combined quote+backslash title, so removing
+// the quote pair from the replacer does turn it red — but only as a side effect.
+// A title needs no backslash at all to escape: a bare quote closes the literal
+// and everything after it is typst CODE. Confirmed by hand that
+//
+//	= #""; #set text(size: 999pt); ""
+//
+// compiles and applies the set rule, so this is a live bypass, not a formatting
+// nit — and the escape it depends on deserves a gate that names it.
+//
+// mutation: render/typst/typst.go, in typstStringLiteral, drop the quote pair
+// from the replacer, i.e. replace
+//
+//	strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+//
+// with
+//
+//	strings.NewReplacer(`\`, `\\`)
+//
+// -> still compiles, and this test turns RED.
+func TestTitleEscape_QuoteCannotBreakOutOfTheLiteral(t *testing.T) {
+	skipIfNoPandoc(t)
+
+	const quotePayload = `"; #set text(size: 999pt); "`
+
+	r, src := capturePassthroughSource(t)
+	if _, err := r.Render(context.Background(), "Body.\n", "markdown", render.Options{
+		Theme: "report",
+		Title: quotePayload,
+	}); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(*src, `#set text(size: 999pt)`) && !strings.Contains(*src, `\"; #set`) {
+		t.Errorf("quote closed the literal; the payload is executable typst:\n%s", *src)
+	}
+
+	// Second oracle: the real parser. A malformed literal that still satisfies
+	// the substring check above would fail here.
+	if _, err := NewTypstRenderer().Render(context.Background(), "Body.\n", "markdown", render.Options{
+		Theme: "report",
+		Title: quotePayload,
+	}); err != nil {
+		t.Errorf("real typst rejected a quote-bearing title: %v", err)
+	}
+}

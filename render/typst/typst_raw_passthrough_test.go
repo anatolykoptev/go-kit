@@ -165,3 +165,60 @@ func TestRawTypstPassthrough_HTMLPathIsSecure(t *testing.T) {
 		}
 	}
 }
+
+// TestWithRawTypstPassthrough_DrivesTheGuard gates the exported setter itself.
+//
+// The sibling tests build render.Options as a struct literal, so they exercise
+// the FIELD and say nothing about the OPTION. WithRawTypstPassthrough could
+// no-op, invert, or write a different field entirely and every one of them
+// would stay green — while callers using the documented functional-option API
+// silently got the opposite of what they asked for. On a security switch,
+// "the option is wired to the guard" is the claim that matters most.
+//
+// Applying the option and setting the field must therefore produce the same
+// rendered source, in BOTH directions.
+//
+// mutation: render/options.go, in WithRawTypstPassthrough, replace
+//
+//	o.RawTypstPassthrough = enabled
+//
+// with either
+//
+//	o.RawTypstPassthrough = false        (no-op)
+//	o.RawTypstPassthrough = !enabled     (inverted)
+//
+// -> both still compile, and this test turns RED.
+func TestWithRawTypstPassthrough_DrivesTheGuard(t *testing.T) {
+	skipIfNoPandoc(t)
+
+	render_ := func(t *testing.T, opts render.Options) string {
+		t.Helper()
+		r, src := capturePassthroughSource(t)
+		if _, err := r.Render(context.Background(), markdownWithRawTypst, "markdown", opts); err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		return *src
+	}
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{"enabled", true},
+		{"disabled", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			viaField := render.Options{RawTypstPassthrough: tc.enabled}
+
+			viaOption := render.Options{}
+			render.WithRawTypstPassthrough(tc.enabled)(&viaOption)
+
+			if viaOption.RawTypstPassthrough != tc.enabled {
+				t.Fatalf("WithRawTypstPassthrough(%v) set the field to %v", tc.enabled, viaOption.RawTypstPassthrough)
+			}
+			if got, want := render_(t, viaOption), render_(t, viaField); got != want {
+				t.Errorf("option and field produced different sources for enabled=%v", tc.enabled)
+			}
+		})
+	}
+}
