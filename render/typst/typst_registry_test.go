@@ -194,7 +194,7 @@ func TestSource_TitleBlockPerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pdfSource: %v", err)
 	}
-	if !strings.Contains(pdfSrc, "= "+title) {
+	if !strings.Contains(pdfSrc, `= #"`+title+`"`) {
 		t.Errorf("card: title missing on the PDF path, and the preamble emits none either:\n%s", pdfSrc)
 	}
 
@@ -202,7 +202,7 @@ func TestSource_TitleBlockPerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("imageSource: %v", err)
 	}
-	if strings.Contains(imgSrc, "= "+title) {
+	if strings.Contains(imgSrc, `= #"`+title+`"`) {
 		t.Errorf("card: title injected on the image path despite OmitsTitleBlockOnImage:\n%s", imgSrc)
 	}
 }
