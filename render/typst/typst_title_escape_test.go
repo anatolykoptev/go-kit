@@ -130,3 +130,86 @@ func TestTitleEscape_OrdinaryTitleRenders(t *testing.T) {
 		t.Errorf("ordinary title not rendered in preamble header:\n%s", head(*src))
 	}
 }
+
+// TestTitleEscape_BackslashCannotBreakOutOfTheLiteral is the regression this
+// suite was missing, and the gap was not academic: the injection payload above
+// contains no backslash, so deleting the \ -> \\ replacement from
+// typstStringLiteral left every title test GREEN.
+//
+// What that mutation costs. A title ending in a backslash renders as
+//
+//	= #"foo\"
+//
+// where the trailing backslash escapes the CLOSING quote. The literal never
+// ends, so it swallows the rest of the document until some later quote closes
+// it — and whatever follows that quote is then parsed as typst CODE. A body
+// containing an ordinary quotation mark is enough to turn a mangled document
+// into an executing one, which is why the body below carries one.
+//
+// This test asserts twice, deliberately. The captured source pins the escape
+// itself; the real Render pins that typst's own parser accepts the result. A
+// substring assertion alone would pass on a malformed-but-matching literal,
+// and a compile alone would pass on a literal that closes early and merely
+// mangles the document.
+//
+// mutation: render/typst/typst.go, in typstStringLiteral, drop the backslash
+// pair from the replacer, i.e. replace
+//
+//	strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+//
+// with
+//
+//	strings.NewReplacer(`"`, `\"`)
+//
+// -> still compiles, and the captured-source assertion below turns RED.
+func TestTitleEscape_BackslashCannotBreakOutOfTheLiteral(t *testing.T) {
+	skipIfNoPandoc(t)
+
+	r, src := capturePassthroughSource(t)
+	if _, err := r.Render(context.Background(), "Body with a \" quote.\n", "markdown", render.Options{
+		Theme: "report",
+		Title: `foo\`,
+	}); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(*src, `#"foo\\"`) {
+		t.Errorf("backslash not doubled in the literal; a trailing backslash escapes the closing quote and the string never ends.\nsource:\n%s", *src)
+	}
+
+	// The real toolchain is the second oracle: a malformed literal that still
+	// satisfies the substring above would fail here.
+	for _, title := range []string{`foo\`, `a\b`, `a\"b`, titleInjectionPayload + `\`} {
+		if _, err := NewTypstRenderer().Render(context.Background(),
+			"Body with a \" quote.\n", "markdown",
+			render.Options{Theme: "report", Title: title}); err != nil {
+			t.Errorf("real typst rejected title %q: %v", title, err)
+		}
+	}
+}
+
+// TestTitleEscape_CorporateThemeIsInert covers the second theme that splices
+// {{.Title}} into its preamble. The sibling preamble test uses "report" only,
+// so corporate's site was safe but ungated — and a theme added later with the
+// same shape would be too.
+//
+// mutation: render/typst/themes.go, in the corporate preamble, is not the
+// right lever — the escape is applied centrally. Use the same mutation as
+// TestTitleEscape_PreambleIsInert (revert typstDocData{Title:...} to the raw
+// opts.Title in render/typst/typst.go) -> RED here as well.
+func TestTitleEscape_CorporateThemeIsInert(t *testing.T) {
+	skipIfNoPandoc(t)
+
+	r, src := capturePassthroughSource(t)
+	if _, err := r.Render(context.Background(), "Body.\n", "markdown", render.Options{
+		Theme: "corporate",
+		Title: titleInjectionPayload,
+	}); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(*src, "[#import") || strings.Contains(*src, "[ #import") {
+		t.Errorf("payload reached the corporate preamble as executable typst:\n%s", *src)
+	}
+	if !strings.Contains(*src, `#"`+titleInjectionPayload[:7]) {
+		t.Errorf("title not rendered as a string literal in the corporate preamble:\n%s", *src)
+	}
+}

@@ -62,6 +62,7 @@ func capturePassthroughSource(t *testing.T) (*TypstRenderer, *string) {
 // disabled, so the block is escaped into an inert code span.
 //
 // Mutation that would RED this test (still compiles):
+//
 //	render/typst/typst.go — in pandocConvert, change the fromFmt assignment
 //	from "markdown-raw_attribute" back to "markdown" when the option is off.
 //	The raw block would pass through as bare #set text(size: 999pt) and the
@@ -93,6 +94,7 @@ func TestRawTypstPassthrough_DefaultIsSecure(t *testing.T) {
 // assembleResumeHeader rely on.
 //
 // Mutation that would RED this test (still compiles):
+//
 //	render/typst/typst.go — in pandocConvert, always use
 //	"markdown-raw_attribute" regardless of the option. The raw block would
 //	be escaped even when the caller opted in, and the assertion would fail.
@@ -127,6 +129,7 @@ func TestRawTypstPassthrough_OptInWorks(t *testing.T) {
 // not appear as a bare executable line.
 //
 // Mutation that would RED this test (still compiles):
+//
 //	render/typst/typst.go — if a future change made pandocConvert pass
 //	"-f html+raw_attribute" (which pandoc 3.1.3 rejects with exit 23), the
 //	Render call would fail and the test would RED on the Render error. If
