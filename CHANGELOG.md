@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.14](https://github.com/anatolykoptev/go-kit/compare/v0.97.13...v0.97.14) (2026-09-23)
+
+
+### Fixed
+
+* **jeff:** score is the mean level, not an index — add Answer.Level ([#268](https://github.com/anatolykoptev/go-kit/issues/268)) ([d6ffdc2](https://github.com/anatolykoptev/go-kit/commit/d6ffdc2153304b99647a6a7528703a49e49e2979))
+
 ## [0.97.13](https://github.com/anatolykoptev/go-kit/compare/v0.97.12...v0.97.13) (2026-09-23)
 
 
