@@ -152,10 +152,10 @@ func TestScoreLevelIsArgmaxNotMean(t *testing.T) {
 			`"legend":{"0":"low","1":"medium","2":"high"},` +
 			`"probabilities":{"0":0.7312,"1":0.1005,"2":0.1683}}`, 0},
 		// raw {0.6, 0, 0.4}: Score 0.8 rounds to level 1, which has p=0.
-		{"bimodal mean between levels", `{"type":"score","score":0.8,"confidence":0.3,` +
+		{"bimodal mean between levels", `{"type":"score","score":0.8,"confidence":0.2974,` +
 			`"probabilities":{"0":0.5316,"1":0.0,"2":0.4684}}`, 0},
 		// raw {0.05, 0.15, 0.8}: Score 1.75 truncates to level 1.
-		{"top level", `{"type":"score","score":1.75,"confidence":0.35,` +
+		{"top level", `{"type":"score","score":1.75,"confidence":0.245,` +
 			`"probabilities":{"0":0.2089,"1":0.2944,"2":0.4967}}`, 2},
 		// all-zero raw scores: the server emits a uniform distribution.
 		{"uniform tie resolves to lowest", `{"type":"score","score":1.0,"confidence":0,` +
