@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.13](https://github.com/anatolykoptev/go-kit/compare/v0.97.12...v0.97.13) (2026-09-23)
+
+
+### Added
+
+* **jeff:** System One decision-service client ([#266](https://github.com/anatolykoptev/go-kit/issues/266)) ([55b447b](https://github.com/anatolykoptev/go-kit/commit/55b447bd857d72ea86cfcab5f9676b0847caec76))
+
 ## [0.97.12](https://github.com/anatolykoptev/go-kit/compare/v0.97.11...v0.97.12) (2026-08-05)
 
 
