@@ -21,7 +21,7 @@
 // Construction:
 //
 //	c, err := jeff.NewClient("https://jeff.example.com",
-//	    jeff.WithTimeout(10*time.Second))
+//	    jeff.WithTimeout(5*time.Second))
 //	prob, err := c.AskNoul(ctx, state, "is replaying this action safe?")
 //
 // Auth: the bearer token resolves from WithToken or the JEFF_TOKEN env var.

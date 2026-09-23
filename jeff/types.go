@@ -2,6 +2,9 @@ package jeff
 
 import "strconv"
 
+// answerTypeScore is the wire type of score questions and answers.
+const answerTypeScore = "score"
+
 // Question is one typed question in a System One request. Criteria is
 // polymorphic by Type — use the Noul/Choice/Score constructors rather
 // than populating the struct directly.
@@ -35,7 +38,7 @@ func ChoiceQuestion(instructions string, options map[string]any) Question {
 // probability-weighted mean level (continuous, 0..len(levels)-1), not the
 // chosen level — use Answer.Level for that.
 func ScoreQuestion(instructions string, levels []any) Question {
-	return Question{Type: "score", Instructions: instructions, Criteria: levels}
+	return Question{Type: answerTypeScore, Instructions: instructions, Criteria: levels}
 }
 
 // Request is the /v1/systemone request body.
@@ -50,11 +53,11 @@ type Request struct {
 // depends on Type: "noul" → Noul; "choice" → Choice/Confidence/
 // Probabilities; "score" → Score/Confidence/Legend/Probabilities.
 //
-// For "score", Score is the expected level Σ i·p(i) over the uncalibrated
-// distribution, so it is fractional and can sit between levels that were
-// never likely (p(0)=0.55, p(2)=0.45 gives 0.9 → "level 1"). Probabilities
-// is keyed by the level index as a string ("0", "1", …); Level returns
-// its argmax.
+// For "score", Score is the expected level Σ i·p(i) over the server's raw
+// (untempered) distribution, so it is fractional and can sit between
+// levels. Probabilities is the temperature-flattened distribution keyed by
+// level index ("0", "1", …), so Σ i·Probabilities[i] ≠ Score. Level
+// returns the argmax of Probabilities.
 type Answer struct {
 	Type          string             `json:"type"`
 	Noul          float64            `json:"noul,omitempty"`
@@ -79,9 +82,14 @@ type Response struct {
 }
 
 // Level returns the most probable level of a "score" answer — the argmax
-// of Probabilities, whose keys are level indices. ok is false when the
-// answer carries no index-keyed probabilities.
+// of Probabilities, whose keys are level indices. Ties resolve to the
+// lowest index; a uniform (no-signal) answer therefore reads as level 0 —
+// check Confidence, which is 0 in that case. ok is false for non-score
+// answers and for answers without index-keyed probabilities.
 func (a Answer) Level() (level int, ok bool) {
+	if a.Type != answerTypeScore {
+		return 0, false
+	}
 	best := -1.0
 	for k, p := range a.Probabilities {
 		i, err := strconv.Atoi(k)

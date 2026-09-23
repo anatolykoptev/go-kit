@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -101,13 +102,13 @@ func TestEnvTokenResolution(t *testing.T) {
 func TestAskDecodesChoiceAndScore(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(Response{
-			Model: "m",
-			Answers: map[string]Answer{
-				"pick":  {Type: "choice", Choice: "billing", Confidence: 0.9, Probabilities: map[string]float64{"billing": 0.9, "other": 0.1}},
-				"level": {Type: "score", Score: 1.6, Confidence: 0.7, Legend: map[string]any{"0": "low"}, Probabilities: map[string]float64{"0": 0.1, "1": 0.2, "2": 0.7}},
-			},
-		})
+		// Literal wire JSON in the shape the jeff server emits — encoding a
+		// Response here would round-trip any struct-tag typo unnoticed.
+		_, _ = io.WriteString(w, `{"model":"m","answers":{`+
+			`"pick":{"type":"choice","choice":"billing","confidence":0.9,"probabilities":{"billing":0.9,"other":0.1}},`+
+			`"level":{"type":"score","score":1.6,"confidence":0.7,"legend":{"0":"low","1":"mid","2":"high"},`+
+			`"probabilities":{"0":0.1,"1":0.2,"2":0.7}}},`+
+			`"usage":{"input_tokens":64,"output_tokens":6}}`)
 	}))
 	defer srv.Close()
 
@@ -128,15 +129,19 @@ func TestAskDecodesChoiceAndScore(t *testing.T) {
 	if resp.Answers["pick"].Choice != "billing" {
 		t.Fatalf("choice = %q, want billing", resp.Answers["pick"].Choice)
 	}
+	if got := resp.Answers["level"].Score; got != 1.6 {
+		t.Fatalf("score = %v, want 1.6", got)
+	}
 	if lvl, ok := resp.Answers["level"].Level(); !ok || lvl != 2 {
 		t.Fatalf("Level() = %d, %v; want 2, true", lvl, ok)
 	}
 }
 
-// TestScoreLevelIsArgmaxNotMean decodes a score answer in the shape the jeff
-// server actually emits (captured from gliformer-large-v1): Score is the
-// fractional expected level, not an index. Truncating or rounding it picks
-// the wrong level; Level must use the probabilities.
+// TestScoreLevelIsArgmaxNotMean decodes score answers and checks Level
+// picks the argmax of Probabilities rather than rounding or truncating the
+// fractional Score. The first case is a live capture from
+// gliformer-large-v1; the others use the server's formula (Score over the
+// raw distribution, Probabilities = raw^(1/3.2) renormalized).
 func TestScoreLevelIsArgmaxNotMean(t *testing.T) {
 	cases := []struct {
 		name string
@@ -146,10 +151,17 @@ func TestScoreLevelIsArgmaxNotMean(t *testing.T) {
 		{"live capture", `{"type":"score","score":0.0197,"confidence":0.5968,` +
 			`"legend":{"0":"low","1":"medium","2":"high"},` +
 			`"probabilities":{"0":0.7312,"1":0.1005,"2":0.1683}}`, 0},
-		{"bimodal mean between levels", `{"type":"score","score":0.9,"confidence":0.3,` +
-			`"probabilities":{"0":0.55,"1":0.0,"2":0.45}}`, 0},
-		{"top level", `{"type":"score","score":1.62,"confidence":0.4,` +
-			`"probabilities":{"0":0.08,"1":0.22,"2":0.70}}`, 2},
+		// raw {0.6, 0, 0.4}: Score 0.8 rounds to level 1, which has p=0.
+		{"bimodal mean between levels", `{"type":"score","score":0.8,"confidence":0.3,` +
+			`"probabilities":{"0":0.5316,"1":0.0,"2":0.4684}}`, 0},
+		// raw {0.05, 0.15, 0.8}: Score 1.75 truncates to level 1.
+		{"top level", `{"type":"score","score":1.75,"confidence":0.35,` +
+			`"probabilities":{"0":0.2089,"1":0.2944,"2":0.4967}}`, 2},
+		// all-zero raw scores: the server emits a uniform distribution.
+		{"uniform tie resolves to lowest", `{"type":"score","score":1.0,"confidence":0,` +
+			`"probabilities":{"0":0.3333,"1":0.3333,"2":0.3333}}`, 0},
+		{"tie between upper levels", `{"type":"score","score":1.5,"confidence":0.25,` +
+			`"probabilities":{"0":0.0,"1":0.5,"2":0.5}}`, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,19 +169,33 @@ func TestScoreLevelIsArgmaxNotMean(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.raw), &a); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			got, ok := a.Level()
-			if !ok || got != tc.want {
-				t.Fatalf("Level() = %d, %v; want %d, true (Score=%v)", got, ok, tc.want, a.Score)
+			// Repeat: map iteration order varies, a missing tie-break flakes.
+			for range 50 {
+				got, ok := a.Level()
+				if !ok || got != tc.want {
+					t.Fatalf("Level() = %d, %v; want %d, true (Score=%v)", got, ok, tc.want, a.Score)
+				}
 			}
 		})
 	}
 }
 
-func TestLevelWithoutProbabilities(t *testing.T) {
-	if _, ok := (Answer{Type: "score", Score: 1}).Level(); ok {
-		t.Fatal("Level() ok = true on an answer with no probabilities")
+func TestLevelRejectsNonScoreAnswers(t *testing.T) {
+	cases := []struct {
+		name string
+		a    Answer
+	}{
+		{"score without probabilities", Answer{Type: "score", Score: 1}},
+		{"choice with numeric option names", Answer{Type: "choice", Choice: "5",
+			Probabilities: map[string]float64{"1": 0.1, "5": 0.9}}},
+		{"choice with mixed option names", Answer{Type: "choice", Choice: "other",
+			Probabilities: map[string]float64{"0": 0.2, "other": 0.8}}},
+		{"score with non-index keys", Answer{Type: "score",
+			Probabilities: map[string]float64{"low": 1}}},
 	}
-	if _, ok := (Answer{Probabilities: map[string]float64{"billing": 1}}).Level(); ok {
-		t.Fatal("Level() ok = true on choice-style (non-index) probabilities")
+	for _, tc := range cases {
+		if lvl, ok := tc.a.Level(); ok {
+			t.Errorf("%s: Level() = %d, true; want ok=false", tc.name, lvl)
+		}
 	}
 }
