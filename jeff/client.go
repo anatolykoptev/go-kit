@@ -14,9 +14,9 @@ import (
 )
 
 // defaultTimeout bounds a call when the caller's context carries no earlier
-// deadline. The reference deployment (GLiFormer-large, ONNX int8, CPU)
-// answers a single question in ~0.5s; 10s is generous headroom, not a
-// latency target — callers on hot paths should pass a tighter ctx.
+// deadline. It is headroom, not a latency target: latency scales with the
+// label count (see the package doc), so callers on hot paths should pass a
+// ctx sized to their question shape.
 const defaultTimeout = 10 * time.Second
 
 // defaultModel is the Jev contract's conventional model name; the server
