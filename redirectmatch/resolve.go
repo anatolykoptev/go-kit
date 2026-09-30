@@ -71,6 +71,17 @@ func buildDecision(rule Rule, np, rawQuery string, submatch []int) Decision {
 	if rule.MatchType == Regex && submatch != nil {
 		dst := rule.re.ExpandString(nil, rule.Target, np, submatch)
 		location = string(dst)
+		// A capture carries whatever the request path held, and the matched path
+		// is percent-DECODED (Policy.DecodeOnce): "/old/%2Fevil.com" captures
+		// "/evil.com", "/old/%5Cevil.com" captures "\evil.com". Expanded into a
+		// relative target such as "/$1" that becomes "//evil.com" or "/\evil.com",
+		// which a browser resolves off-site — an open redirect from our own
+		// domain. A relative template must therefore expand to a same-origin
+		// path; if it does not, the rule does not apply. (An absolute template
+		// is an operator-chosen destination and is left alone.)
+		if !isAbsoluteURL(rule.Target) && !isSameOriginPath(location) {
+			return Decision{Matched: false}
+		}
 	}
 
 	// Apply query propagation.
@@ -90,4 +101,29 @@ func buildDecision(rule Rule, np, rawQuery string, submatch []int) Decision {
 		StatusCode: rule.StatusCode,
 		Location:   location,
 	}
+}
+
+// isAbsoluteURL reports whether target names its own scheme and host.
+func isAbsoluteURL(target string) bool {
+	t := strings.ToLower(target)
+	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://")
+}
+
+// isSameOriginPath reports whether loc, used as a Location, stays on the
+// requesting origin: one leading "/", not "//" or "/\" (both protocol-relative
+// to a browser), and no control characters or spaces, which browsers strip or
+// that split headers.
+func isSameOriginPath(loc string) bool {
+	if loc == "" || loc[0] != '/' {
+		return false
+	}
+	if len(loc) > 1 && (loc[1] == '/' || loc[1] == '\\') {
+		return false
+	}
+	for i := 0; i < len(loc); i++ {
+		if c := loc[i]; c <= 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
