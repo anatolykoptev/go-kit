@@ -53,11 +53,14 @@
 // it can hold "/", "\\", "@" or ".". For a Regex rule whose Target contains
 // capture references:
 //   - [Compile] rejects a reference inside the host of an absolute or
-//     protocol-relative Target ("https://blog.example.org$1", "//$1"), and any
-//     Target that is neither such a URL nor starts with "/" ("$1", "news/$1");
-//   - [Resolve] treats a "/"-rooted Target as no match when its expansion is
-//     not a same-origin path ("//evil.example", "/\\evil.example", or one
-//     holding a control character, which browsers strip).
+//     protocol-relative Target ("https://blog.example.org$1", "//$1"), a "\\"
+//     in such a host, any Target that is neither such a URL nor starts with
+//     "/" ("$1", "news/$1"), and a "/"-rooted Target whose literal prefix could
+//     never be a same-origin path ("/\\h/$1");
+//   - [Resolve] treats an expansion holding a control byte as no match (CR/LF
+//     split headers, browsers strip tab and newline), and so a "/"-rooted
+//     expansion that is not a same-origin path ("//evil.example",
+//     "/\\evil.example").
 //
 // # Thread safety
 //

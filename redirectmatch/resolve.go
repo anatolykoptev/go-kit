@@ -77,9 +77,11 @@ func buildDecision(rule Rule, np, rawQuery string, submatch []int) Decision {
 		// "/$1" that becomes "//evil.com" or "/\\evil.com", which a browser
 		// resolves off-site — an open redirect from our own domain. Compile
 		// (targetCaptureError) already keeps captures out of a target's host, so
-		// a target with a fixed host is safe; any other target must expand to a
-		// same-origin path, or the rule does not apply.
-		if _, fixedHost := targetAuthority(rule.Target); !fixedHost && !isSameOriginPath(location) {
+		// a target with a fixed host only needs to be free of control bytes
+		// (CR/LF would split the Location header in a writer that passes them);
+		// any other target must also expand to a same-origin path, or the rule
+		// does not apply.
+		if _, fixedHost := targetAuthority(rule.Target); hasControlByte(location) || !fixedHost && !isSameOriginPath(location) {
 			return Decision{Matched: false}
 		}
 	}
@@ -105,17 +107,19 @@ func buildDecision(rule Rule, np, rawQuery string, submatch []int) Decision {
 
 // isSameOriginPath reports whether loc, the expansion of a target that
 // Compile guarantees starts with "/", stays on the requesting origin: not "//"
-// or "/\\" (both protocol-relative to a browser), and no control characters,
-// which browsers strip ("/\t\\x" becomes "/\\x") or which split headers. A
-// space is an ordinary path byte.
+// or "/\\", both protocol-relative to a browser.
 func isSameOriginPath(loc string) bool {
-	if len(loc) > 1 && (loc[1] == '/' || loc[1] == '\\') {
-		return false
-	}
+	return !(len(loc) > 1 && (loc[1] == '/' || loc[1] == '\\'))
+}
+
+// hasControlByte reports whether loc holds a byte below 0x20. Browsers strip
+// tab and newline anywhere in a URL ("/\t\\x" becomes "/\\x"), and CR/LF
+// split headers. A space is an ordinary path byte.
+func hasControlByte(loc string) bool {
 	for i := 0; i < len(loc); i++ {
 		if loc[i] < 0x20 {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }

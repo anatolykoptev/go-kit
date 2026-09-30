@@ -149,7 +149,7 @@ func Compile(spec RuleSpec) (Rule, error) {
 // stays a same-origin path.
 func targetCaptureError(target string) error {
 	if authority, ok := targetAuthority(target); ok {
-		if hasCaptureRefs(authority) {
+		if hasCaptureRefs(authority) || strings.Contains(authority, "\\") {
 			return fmt.Errorf("redirectmatch: Target %q has a capture reference in its host; a request could choose the redirect's destination", target)
 		}
 		return nil
@@ -157,13 +157,20 @@ func targetCaptureError(target string) error {
 	if !strings.HasPrefix(target, "/") {
 		return fmt.Errorf("redirectmatch: Target %q with capture references must start with '/' or be an absolute URL with a fixed host", target)
 	}
+	// The literal part before the first reference is fixed, so a shape Resolve
+	// would always refuse ("/\\h/$1", a control byte) is a dead rule: say so now.
+	literal := target[:captureRefRE.FindStringIndex(target)[0]]
+	if !isSameOriginPath(literal) || hasControlByte(literal) {
+		return fmt.Errorf("redirectmatch: Target %q can never produce a same-origin path", target)
+	}
 	return nil
 }
 
 // targetAuthority returns the authority (userinfo, host, port) of an absolute
 // ("http://", "https://") or protocol-relative ("//") target, and false for
-// any other target. The authority ends at the first "/", "?", "#" or "\\"
-// (browsers read "\\" as "/" in http URLs).
+// any other target. The authority ends at the first "/", "?" or "#". A "\\"
+// stays inside it and is rejected by targetCaptureError: browsers end the
+// host there, RFC 3986 parsers do not, and the two would disagree on it.
 func targetAuthority(target string) (string, bool) {
 	var rest string
 	switch t := strings.ToLower(target); {
@@ -176,7 +183,7 @@ func targetAuthority(target string) (string, bool) {
 	default:
 		return "", false
 	}
-	if i := strings.IndexAny(rest, "/?#\\"); i >= 0 {
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
 		rest = rest[:i]
 	}
 	return rest, true

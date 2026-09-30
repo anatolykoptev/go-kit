@@ -54,6 +54,10 @@ func TestCompile_CaptureCannotChooseTheHost(t *testing.T) {
 		"$1",
 		"news/$1",
 		"javascript:$1",
+		"https://h.example\\$1",
+		"https://h.example\\@evil.example/$1",
+		"/\\h.example/$1",
+		"/\t/$1",
 	} {
 		spec := redirectmatch.RuleSpec{ID: 1, SourcePath: `^/blog(.*)$`, MatchType: redirectmatch.Regex, Target: target, StatusCode: 301}
 		if _, err := redirectmatch.Compile(spec); err == nil {
@@ -70,6 +74,25 @@ func TestCompile_CaptureCannotChooseTheHost(t *testing.T) {
 		if _, err := redirectmatch.Compile(spec); err != nil {
 			t.Errorf("Target %q: %v, want it to compile", target, err)
 		}
+	}
+}
+
+// A fixed host still refuses control bytes: CR/LF would split the Location
+// header in a writer that passes them through.
+//
+// Falsification: drop hasControlByte from the check in buildDecision
+// (resolve.go) and this goes RED.
+func TestResolve_FixedHostRefusesControlBytes(t *testing.T) {
+	set := mustBuild(t, []redirectmatch.RuleSpec{
+		{ID: 1, SourcePath: `^/f/([^/]*)(.*)$`, MatchType: redirectmatch.Regex, Target: "https://h.example/$1$2", StatusCode: 302},
+	}, redirectmatch.DefaultPolicy())
+	for _, path := range []string{"/f/%0D%0ASet-Cookie:a", "/f/a%09b"} {
+		if dec := redirectmatch.Resolve(set, path, ""); dec.Matched {
+			t.Errorf("%s: redirected to %q, want no match", path, dec.Location)
+		}
+	}
+	if dec := redirectmatch.Resolve(set, "/f/a%20b", ""); !dec.Matched || dec.Location != "https://h.example/a b" {
+		t.Errorf("/f/a%%20b: got matched=%v location=%q", dec.Matched, dec.Location)
 	}
 }
 
