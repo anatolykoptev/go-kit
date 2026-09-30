@@ -48,6 +48,8 @@ func hasCaptureRefs(target string) bool {
 //   - self-redirect: Normalize(Target) == Normalize(SourcePath) under [DefaultPolicy]
 //   - Regex identity self-redirect (static-target case, no $n refs): the compiled RE matches its own Target
 //   - an un-RE2-compilable regex pattern (surfaces the error; never silently drops)
+//   - a Regex target whose capture references could choose the redirect's host
+//     (see targetCaptureError)
 func Compile(spec RuleSpec) (Rule, error) {
 	if !validStatusCodes[spec.StatusCode] {
 		return Rule{}, fmt.Errorf("redirectmatch: invalid status code %d: must be one of 301, 302, 307, 308, 410, 451", spec.StatusCode)
@@ -123,7 +125,66 @@ func Compile(spec RuleSpec) (Rule, error) {
 				return Rule{}, fmt.Errorf("redirectmatch: regex identity self-redirect: pattern %q matches its own Target %q", spec.SourcePath, spec.Target)
 			}
 		}
+
+		if is3xx(spec.StatusCode) && hasCaptureRefs(spec.Target) {
+			if err := targetCaptureError(spec.Target); err != nil {
+				return Rule{}, err
+			}
+		}
 	}
 
 	return r, nil
+}
+
+// targetCaptureError rejects a capture-bearing target whose captures could
+// choose where the redirect goes. A capture carries request input, and the
+// matched path is percent-decoded, so it can hold "@", ".", "/" or "\\":
+//   - in the authority of an absolute or protocol-relative target
+//     ("https://blog.example.org$1", "//$1"), "/blog@evil.example" would
+//     become "https://blog.example.org@evil.example" — host evil.example;
+//   - in a target that does not start with "/" ("$1", "news/$1"), the capture
+//     can supply a scheme and host outright.
+//
+// A target that starts with "/" is allowed: Resolve checks that its expansion
+// stays a same-origin path.
+func targetCaptureError(target string) error {
+	if authority, ok := targetAuthority(target); ok {
+		if hasCaptureRefs(authority) || strings.Contains(authority, "\\") {
+			return fmt.Errorf("redirectmatch: Target %q has a capture reference in its host; a request could choose the redirect's destination", target)
+		}
+		return nil
+	}
+	if !strings.HasPrefix(target, "/") {
+		return fmt.Errorf("redirectmatch: Target %q with capture references must start with '/' or be an absolute URL with a fixed host", target)
+	}
+	// The literal part before the first reference is fixed, so a shape Resolve
+	// would always refuse ("/\\h/$1", a control byte) is a dead rule: say so now.
+	literal := target[:captureRefRE.FindStringIndex(target)[0]]
+	if !isSameOriginPath(literal) || hasControlByte(literal) {
+		return fmt.Errorf("redirectmatch: Target %q can never produce a same-origin path", target)
+	}
+	return nil
+}
+
+// targetAuthority returns the authority (userinfo, host, port) of an absolute
+// ("http://", "https://") or protocol-relative ("//") target, and false for
+// any other target. The authority ends at the first "/", "?" or "#". A "\\"
+// stays inside it and is rejected by targetCaptureError: browsers end the
+// host there, RFC 3986 parsers do not, and the two would disagree on it.
+func targetAuthority(target string) (string, bool) {
+	var rest string
+	switch t := strings.ToLower(target); {
+	case strings.HasPrefix(t, "http://"):
+		rest = target[len("http://"):]
+	case strings.HasPrefix(t, "https://"):
+		rest = target[len("https://"):]
+	case strings.HasPrefix(target, "//"):
+		rest = target[len("//"):]
+	default:
+		return "", false
+	}
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest, true
 }
