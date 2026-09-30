@@ -121,7 +121,7 @@ func isSameOriginPath(loc string) bool {
 		return false
 	}
 	for i := 0; i < len(loc); i++ {
-		if c := loc[i]; c <= 0x20 || c == 0x7f {
+		if c := loc[i]; c < 0x20 || c == 0x7f {
 			return false
 		}
 	}
