@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.17](https://github.com/anatolykoptev/go-kit/compare/v0.97.16...v0.97.17) (2026-10-03)
+
+
+### Added
+
+* **telegram:** scrub bot tokens out of errors and SDK logs (tgsafe, NewSafeBotAPI) ([#279](https://github.com/anatolykoptev/go-kit/issues/279)) ([150112f](https://github.com/anatolykoptev/go-kit/commit/150112fbf80511363a8ae1edab333b16f280c6bf))
+
 ## [0.97.16](https://github.com/anatolykoptev/go-kit/compare/v0.97.15...v0.97.16) (2026-10-03)
 
 
