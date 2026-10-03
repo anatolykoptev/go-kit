@@ -20,6 +20,8 @@ import (
 	"github.com/anatolykoptev/go-kit/telegram/tgsafe"
 )
 
+const Placeholder = tgsafe.Placeholder
+
 const (
 	fakeToken = "123456789:AAFakeTokenFakeTokenFake_x-y"
 	getMeOK   = `{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"b","username":"b"}}`
@@ -44,7 +46,10 @@ func (s *syncBuf) String() string {
 
 // restoreSDKLogger puts the SDK's package logger back to its default after a test.
 func restoreSDKLogger(t *testing.T) {
-	t.Cleanup(func() { _ = tgbotapi.SetLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags)) })
+	t.Cleanup(func() {
+		resetSafeLogger()
+		_ = tgbotapi.SetLogger(stdlog.New(os.Stderr, "", stdlog.LstdFlags))
+	})
 }
 
 // fakeTelegram answers getMe, and getUpdates according to updates.
@@ -152,6 +157,7 @@ func pollUntilLogged(t *testing.T, bot *tgbotapi.BotAPI, out *syncBuf) {
 
 func TestGetUpdatesChanFailedPollIsScrubbedByTheLogger(t *testing.T) {
 	restoreSDKLogger(t)
+	resetSafeLogger()
 
 	t.Run("control: default SDK logging leaks", func(t *testing.T) {
 		srv := fakeTelegram(t, nil)
@@ -176,6 +182,7 @@ func TestGetUpdatesChanFailedPollIsScrubbedByTheLogger(t *testing.T) {
 		}
 		srv.Close()
 		var out syncBuf
+		resetSafeLogger()
 		if err := SetSafeLogger(slog.New(slog.NewTextHandler(&out, nil)), fakeToken); err != nil {
 			t.Fatal(err)
 		}
@@ -194,8 +201,84 @@ func TestGetUpdatesChanFailedPollIsScrubbedByTheLogger(t *testing.T) {
 		}
 		srv.Close()
 		var out syncBuf
+		resetSafeLogger()
 		_ = SetSafeLogger(slog.New(slog.NewTextHandler(&out, nil)))
 		pollUntilLogged(t, bot, &out)
 		noToken(t, "logger output", out.String())
 	})
+}
+
+// Two bots with different tokens: a second SetSafeLogger call must add its
+// secret to the one installed logger, not replace it. The tokens are not
+// bot<id>:<secret> shaped, so only the literal-secret path can scrub them.
+func TestSetSafeLoggerAccumulatesSecretsAndKeepsTheFirstLogger(t *testing.T) {
+	restoreSDKLogger(t)
+	resetSafeLogger()
+	const tokA, tokB = "literalTokenAAA", "literalTokenBBB"
+
+	mkBot := func(tok string) *tgbotapi.BotAPI {
+		srv := fakeTelegram(t, nil)
+		bot, err := tgbotapi.NewBotAPIWithClient(tok, endpoint(srv), &http.Client{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		return bot
+	}
+	botA, botB := mkBot(tokA), mkBot(tokB)
+
+	var first, second syncBuf
+	if err := SetSafeLogger(slog.New(slog.NewTextHandler(&first, nil)), tokA); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSafeLogger(slog.New(slog.NewTextHandler(&second, nil)), tokB); err != nil {
+		t.Fatal(err)
+	}
+	pollUntilLogged(t, botA, &first)
+	// botB's failed poll is logged after botA's goroutine is gone; wait on a fresh marker.
+	before := len(first.String())
+	ch := botB.GetUpdatesChan(tgbotapi.UpdateConfig{})
+	deadline := time.Now().Add(5 * time.Second)
+	for len(first.String()) == before && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	botB.StopReceivingUpdates()
+	for range ch {
+	}
+
+	out := first.String()
+	if strings.Contains(out, tokA) || strings.Contains(out, tokB) {
+		t.Errorf("a token reached the log: %s", out)
+	}
+	if !strings.Contains(out, Placeholder) {
+		t.Errorf("nothing was redacted (the poll never logged?): %s", out)
+	}
+	if second.String() != "" {
+		t.Errorf("second call swapped the logger destination: %s", second.String())
+	}
+}
+
+// Adding secrets while an SDK poll goroutine is logging must not race (run with -race).
+func TestSetSafeLoggerAfterPollingStartedDoesNotRace(t *testing.T) {
+	restoreSDKLogger(t)
+	resetSafeLogger()
+	srv := fakeTelegram(t, nil)
+	bot, err := tgbotapi.NewBotAPIWithClient("literalTokenCCC", endpoint(srv), &http.Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Close()
+	var out syncBuf
+	_ = SetSafeLogger(slog.New(slog.NewTextHandler(&out, nil)), "literalTokenCCC")
+	ch := bot.GetUpdatesChan(tgbotapi.UpdateConfig{})
+	for range 100 {
+		_ = SetSafeLogger(nil, "another-secret")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(out.String(), "Failed to get updates") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	bot.StopReceivingUpdates()
+	for range ch {
+	}
 }

@@ -14,6 +14,16 @@
 // github.com/go-telegram-bot-api/telegram-bot-api/v5 and of the
 // github.com/OvyFlash/telegram-bot-api fork alike. For the OvyFlash fork,
 // telegram/tgapi5.NewSafeBotAPI wires everything in one call.
+//
+// Consumers of go-telegram-bot-api/v5 (not the OvyFlash fork), which
+// tgapi5.NewSafeBotAPI does not cover, wire the same pieces by hand:
+//
+//	hc := tgsafe.NewHTTPClient(&http.Client{Timeout: 75 * time.Second}, token)
+//	bot, err := tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, hc)
+//	_ = tgbotapi.SetLogger(tgsafe.NewLogger(slog.Default(), token)) // once, at startup
+//
+// Use the same hc (or one built the same way) for file downloads: a file link
+// from tgFile.Link(token) embeds the token too.
 package tgsafe
 
 import (
@@ -23,6 +33,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Placeholder replaces a literal secret.
@@ -35,7 +46,17 @@ const botSegmentPlaceholder = "bot<redacted>"
 // ("bot123456789:AA..." in /bot<token>/method and /file/bot<token>/path). It
 // works without knowing the token, so a rotated token, or one this process
 // never saw, is still scrubbed.
-var botSegmentRE = regexp.MustCompile(`bot\d{6,}:[A-Za-z0-9_-]{20,}`)
+//
+// The separator is ":" or its query-escaped forms "%3A"/"%3a" (the token inside
+// a URL-encoded parameter) and "%253A"/"%253a" (escaped twice, e.g. a URL
+// carried as a query value of another URL).
+//
+// Bounds: Telegram bot ids are numeric and today 8-10 digits, secrets are 35
+// characters of [A-Za-z0-9_-]. \d{6,} and {20,} sit well below those so a
+// token of any real size matches, while ordinary text such as "bot42: ready"
+// or a short "bot123456:abc" does not turn into a redaction. A token that
+// falls outside the bounds is still removed when passed as a literal secret.
+var botSegmentRE = regexp.MustCompile(`bot\d{6,}(?::|%3[Aa]|%253[Aa])[A-Za-z0-9_-]{20,}`)
 
 // Scrub returns s with the Telegram bot segment and every non-empty secret
 // (raw and URL-query-escaped form) replaced.
@@ -46,8 +67,12 @@ func Scrub(s string, secrets ...string) string {
 			continue
 		}
 		s = strings.ReplaceAll(s, sec, Placeholder)
-		if esc := url.QueryEscape(sec); esc != sec {
-			s = strings.ReplaceAll(s, esc, Placeholder)
+		// Raw, query-escaped, and escaped twice (a URL inside a query value).
+		esc := url.QueryEscape(sec)
+		for _, form := range []string{esc, url.QueryEscape(esc)} {
+			if form != sec {
+				s = strings.ReplaceAll(s, form, Placeholder)
+			}
 		}
 	}
 	return s
@@ -124,26 +149,44 @@ func (h *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 // Logger adapts a *slog.Logger to the SDKs' BotLogger interface
 // (Println/Printf) and scrubs everything it prints. Install it with the SDK's
 // SetLogger so GetUpdatesChan's failed-poll lines cannot carry the token.
+// It is safe for concurrent use.
 type Logger struct {
 	l       *slog.Logger
+	mu      sync.RWMutex
 	secrets []string
 }
 
 // NewLogger returns a Logger writing at Warn level to l (nil means
-// slog.Default()). The SDK only prints errors and debug traces through it.
+// slog.Default()). The SDK prints failed polls and, when a bot has Debug set,
+// its debug traces (request endpoints and responses, which include message
+// text) through it; with Debug=true those traces are also logged at Warn.
 func NewLogger(l *slog.Logger, secrets ...string) *Logger {
 	if l == nil {
 		l = slog.Default()
 	}
-	return &Logger{l: l, secrets: secrets}
+	return &Logger{l: l, secrets: append([]string(nil), secrets...)}
+}
+
+// AddSecrets adds literal secrets to scrub from now on (a second bot's token,
+// say). Safe to call while the logger is in use.
+func (lg *Logger) AddSecrets(secrets ...string) {
+	lg.mu.Lock()
+	defer lg.mu.Unlock()
+	lg.secrets = append(lg.secrets, secrets...)
+}
+
+func (lg *Logger) scrub(s string) string {
+	lg.mu.RLock()
+	defer lg.mu.RUnlock()
+	return Scrub(strings.TrimRight(s, "\n"), lg.secrets...)
 }
 
 // Println implements the SDK's BotLogger.
 func (lg *Logger) Println(v ...any) {
-	lg.l.Warn(Scrub(strings.TrimRight(fmt.Sprintln(v...), "\n"), lg.secrets...), "component", "tgbotapi")
+	lg.l.Warn(lg.scrub(fmt.Sprintln(v...)), "component", "tgbotapi")
 }
 
 // Printf implements the SDK's BotLogger.
 func (lg *Logger) Printf(format string, v ...any) {
-	lg.l.Warn(Scrub(strings.TrimRight(fmt.Sprintf(format, v...), "\n"), lg.secrets...), "component", "tgbotapi")
+	lg.l.Warn(lg.scrub(fmt.Sprintf(format, v...)), "component", "tgbotapi")
 }

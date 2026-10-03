@@ -33,6 +33,39 @@ func TestScrub(t *testing.T) {
 	}
 }
 
+// Every separator shape of the segment, with no secrets passed: the regexp
+// alone must catch them. The suffix keeps the secret part >= 20 chars.
+func TestScrubEscapedSegmentShapes(t *testing.T) {
+	secret := "AAFakeTokenFakeTokenFake_x-y"
+	for name, sep := range map[string]string{
+		"plain colon":          ":",
+		"escaped upper":        "%3A",
+		"escaped lower":        "%3a",
+		"double escaped":       "%253A",
+		"double escaped lower": "%253a",
+	} {
+		in := "u=https://api.telegram.org/bot123456789" + sep + secret + "/getMe"
+		got := Scrub(in)
+		if strings.Contains(got, "AAFake") || !strings.Contains(got, "bot<redacted>") {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	// Below the bounds the regexp leaves ordinary text alone (the bounds are
+	// documented on botSegmentRE).
+	for _, in := range []string{"bot42:AAAAAAAAAAAAAAAAAAAAAAAA", "bot123456789:short", "robot 123456789:AAAAAAAAAAAAAAAAAAAA"} {
+		if got := Scrub(in); got != in {
+			t.Errorf("false positive: %q -> %q", in, got)
+		}
+	}
+}
+
+func TestScrubDoubleEscapedLiteralSecret(t *testing.T) {
+	in := "next=" + url.QueryEscape(url.QueryEscape(oddKey))
+	if got := Scrub(in, oddKey); strings.Contains(got, "k3y") || !strings.Contains(got, Placeholder) {
+		t.Errorf("double-escaped literal survived: %q", got)
+	}
+}
+
 func TestScrubLiteralSecretsRawAndEscaped(t *testing.T) {
 	in := "key=" + url.QueryEscape(oddKey) + " raw=" + oddKey
 	got := Scrub(in, oddKey, "")
@@ -144,5 +177,25 @@ func TestErrorAttr(t *testing.T) {
 func closeBody(r *http.Response) {
 	if r != nil {
 		r.Body.Close()
+	}
+}
+
+func TestLoggerAddSecretsIsConcurrencySafe(t *testing.T) {
+	var buf bytes.Buffer
+	lg := NewLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			lg.AddSecrets("late-secret")
+		}
+	}()
+	for range 200 {
+		lg.Println("tick")
+	}
+	<-done
+	lg.Println("leak late-secret")
+	if strings.Contains(buf.String(), "leak late-secret") {
+		t.Errorf("added secret not scrubbed: %s", buf.String())
 	}
 }
