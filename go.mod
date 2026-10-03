@@ -11,6 +11,7 @@ require (
 	github.com/chromedp/chromedp v0.15.1
 	github.com/daulet/tokenizers v1.25.0
 	github.com/exaring/otelpgx v0.10.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/larsartmann/go-filewatcher/v2 v2.2.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
