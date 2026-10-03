@@ -122,6 +122,9 @@ func TestGemini_RejectsUnsupportedWAVAndEmptyAudio(t *testing.T) {
 
 func TestGemini_RealFFmpegProducesOggOpus(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("ffmpeg missing under CI: provision it, do not skip")
+		}
 		t.Skip("ffmpeg not installed on this host")
 	}
 	pcm := make([]byte, 24000*2/2) // 0.5 s of silence
@@ -129,7 +132,7 @@ func TestGemini_RealFFmpegProducesOggOpus(t *testing.T) {
 		reply(w, geminiJSON(wavBytes(pcm, 24000)))
 	}))
 	defer srv.Close()
-	p := NewGeminiProvider(GeminiConfig{APIKey: testKey, BaseURL: srv.URL, HTTPClient: srv.Client(), OutputDir: t.TempDir()})
+	p := NewGeminiProvider(GeminiConfig{APIKey: testKey, baseURL: srv.URL, HTTPClient: srv.Client(), OutputDir: t.TempDir()})
 	path, err := p.Synthesize(context.Background(), "hi", "")
 	if err != nil {
 		t.Fatal(err)
@@ -165,11 +168,15 @@ func TestGemini_ErrorReasonLoggedWithoutMessage(t *testing.T) {
 
 func TestGoogleErrorReason(t *testing.T) {
 	for in, want := range map[string]string{
-		`{"error":{"status":"RESOURCE_EXHAUSTED"}}`:    "RESOURCE_EXHAUSTED",
-		`{"error":{"status":"free text with spaces"}}`: "",
-		`{"error":{"status":"lower_case"}}`:            "",
-		`not json`:                                     "",
-		`{}`:                                           "",
+		`{"error":{"status":"RESOURCE_EXHAUSTED"}}`:                      "RESOURCE_EXHAUSTED",
+		`{"error":{"message":"secret text","code":"too_many_requests"}}`: "too_many_requests",
+		`{"error":{"message":"m","code":429}}`:                           "",
+		`{"error":{"code":"Free text, with spaces"}}`:                    "",
+		`{"error":{"code":"UPPER"}}`:                                     "",
+		`{"error":{"status":"free text with spaces"}}`:                   "",
+		`{"error":{"status":"lower_case"}}`:                              "",
+		`not json`:                                                       "",
+		`{}`:                                                             "",
 	} {
 		if got := googleErrorReason([]byte(in)); got != want {
 			t.Errorf("%s -> %q, want %q", in, got, want)
@@ -275,14 +282,15 @@ func TestGemini_LateSuccessSkipsEncode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Run("bare", func(t *testing.T) {
+	t.Run("bare provider keeps the paid synthesis", func(t *testing.T) {
 		enc := &encoderLog{}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second) // 2.5 s left after the reply
 		defer cancel()
 		path, err := newTestGemini(t, srv, testKey, enc).Synthesize(ctx, "hi", "")
-		if !errors.Is(err, ErrBudgetExhausted) || enc.len() != 0 || path != "" {
-			t.Errorf("path=%q err=%v encodes=%d, want ErrBudgetExhausted and no encode", path, err, enc.len())
+		if err != nil || enc.len() != 1 {
+			t.Fatalf("err=%v encodes=%d, want a successful encode", err, enc.len())
 		}
+		os.Remove(path)
 	})
 	t.Run("positive control: enough budget encodes", func(t *testing.T) {
 		enc := &encoderLog{}

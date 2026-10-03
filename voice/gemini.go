@@ -58,8 +58,9 @@ var ErrBudgetExhausted = errors.New("gemini tts: deadline budget exhausted")
 // can reach logs through it.
 type GeminiHTTPError struct {
 	Status int
-	// Reason is Google's error.status enum (e.g. INVALID_ARGUMENT), kept only
-	// if it looks like an enum; never the message or body.
+	// Reason is Google's error.status enum (e.g. INVALID_ARGUMENT) or the
+	// Interactions API's error.code token (e.g. too_many_requests), kept only if
+	// it matches a strict token pattern; never the message or body.
 	Reason string
 }
 
@@ -70,19 +71,34 @@ func (e *GeminiHTTPError) Error() string {
 	return fmt.Sprintf("gemini tts: http status %d", e.Status)
 }
 
-var googleStatusEnum = regexp.MustCompile(`^[A-Z][A-Z_]{2,39}$`)
+var (
+	googleStatusEnum = regexp.MustCompile(`^[A-Z][A-Z_]{2,39}$`)
+	googleCodeToken  = regexp.MustCompile(`^[a-z][a-z_]{2,39}$`)
+)
 
-// googleErrorReason extracts error.status from a Google API error body.
+// googleErrorReason extracts a machine-readable reason from an API error body,
+// never the message. Two shapes are seen: the classic Google
+// {"error":{"status":"INVALID_ARGUMENT"}} and the Interactions API's
+// {"error":{"message":...,"code":"too_many_requests"}}. A value is kept only if
+// it is a strict enum/token; anything else yields "".
 func googleErrorReason(body []byte) string {
 	var e struct {
 		Error struct {
-			Status string `json:"status"`
+			Status string          `json:"status"`
+			Code   json.RawMessage `json:"code"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(body, &e) != nil || !googleStatusEnum.MatchString(e.Error.Status) {
+	if json.Unmarshal(body, &e) != nil {
 		return ""
 	}
-	return e.Error.Status
+	if googleStatusEnum.MatchString(e.Error.Status) {
+		return e.Error.Status
+	}
+	var code string // a numeric code (classic shape) fails to unmarshal and is ignored
+	if json.Unmarshal(e.Error.Code, &code) == nil && googleCodeToken.MatchString(code) {
+		return code
+	}
+	return ""
 }
 
 // GeminiConfig configures [GeminiProvider].
@@ -99,10 +115,10 @@ type GeminiConfig struct {
 	OutputDir string
 	// Logger receives operational logs; nil means slog.Default().
 	Logger *slog.Logger
-	// BaseURL overrides the API origin (tests only).
-	BaseURL string
-	// HTTPClient overrides the HTTP client (tests only). Its CheckRedirect is
-	// always replaced: redirects are never followed.
+	// baseURL overrides the API origin (tests only).
+	baseURL string
+	// HTTPClient supplies the transport (proxy, TLS, timeouts). Its
+	// CheckRedirect is always replaced: redirects are never followed.
 	HTTPClient *http.Client
 }
 
@@ -130,8 +146,8 @@ func NewGeminiProvider(cfg GeminiConfig) *GeminiProvider {
 	if cfg.Style == "" {
 		cfg.Style = DefaultGeminiStyle
 	}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = geminiBaseURL
+	if cfg.baseURL == "" {
+		cfg.baseURL = geminiBaseURL
 	}
 	var c http.Client
 	if cfg.HTTPClient != nil {
@@ -187,12 +203,13 @@ func (p *GeminiProvider) Synthesize(ctx context.Context, text, _ string) (string
 	if err != nil {
 		return "", err
 	}
-	// A late success must not eat the time a fallback needs: skip the encode
-	// when too little of the deadline remains.
-	if budgetLow(ctx) {
+	// Under a FallbackProvider a late success must not eat the time the
+	// fallback needs: skip the encode when too little of the deadline remains.
+	// A bare provider keeps a paid, successful synthesis.
+	if underFallback(ctx) && budgetLow(ctx) {
 		return "", ErrBudgetExhausted
 	}
-	outPath, err := createOutputFile(p.cfg.OutputDir, "gemini tts")
+	outPath, err := createTempFile(p.cfg.OutputDir, "tts_*.ogg", "gemini tts")
 	if err != nil {
 		return "", err
 	}
@@ -202,6 +219,15 @@ func (p *GeminiProvider) Synthesize(ctx context.Context, text, _ string) (string
 	}
 	p.log.InfoContext(ctx, "voice: speech synthesized", "provider", "gemini")
 	return outPath, nil
+}
+
+type fallbackKey struct{}
+
+// underFallback reports whether ctx was derived by FallbackProvider for its
+// primary.
+func underFallback(ctx context.Context) bool {
+	v, _ := ctx.Value(fallbackKey{}).(bool)
+	return v
 }
 
 // budgetLow reports whether ctx has a deadline less than minGeminiBudget away.
@@ -275,7 +301,7 @@ func (p *GeminiProvider) request(ctx context.Context, text string) ([]byte, erro
 	ctx, cancel := context.WithTimeout(ctx, geminiRequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(p.cfg.BaseURL, "/")+"/v1beta/interactions", bytes.NewReader(payload))
+		strings.TrimRight(p.cfg.baseURL, "/")+"/v1beta/interactions", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("gemini tts: build request: %w", err)
 	}
@@ -402,8 +428,8 @@ func encodeOggOpus(ctx context.Context, log *slog.Logger, pcm []byte, rate int, 
 		"-c:a", "libopus", "-b:a", opusBitrate, outPath)
 	cmd.Stdin = bytes.NewReader(pcm)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.ErrorContext(ctx, "voice: ffmpeg opus encode failed", "exit", exitStatus(err), "output_bytes", len(out))
-		return fmt.Errorf("gemini tts: ffmpeg encode: exit %s", exitStatus(err))
+		log.ErrorContext(ctx, "voice: ffmpeg opus encode failed", "exit", exitStatus(ctx, err), "output_bytes", len(out))
+		return fmt.Errorf("gemini tts: %w: exit %s", ErrEncode, exitStatus(ctx, err))
 	}
 	return nil
 }

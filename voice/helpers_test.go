@@ -103,7 +103,7 @@ func (e *encoderLog) get(i int) fakeEncoded {
 func newTestGemini(t testing.TB, srv *httptest.Server, key string, enc *encoderLog) *GeminiProvider {
 	t.Helper()
 	p := NewGeminiProvider(GeminiConfig{
-		APIKey: key, BaseURL: srv.URL, HTTPClient: srv.Client(), OutputDir: t.TempDir(),
+		APIKey: key, baseURL: srv.URL, HTTPClient: srv.Client(), OutputDir: t.TempDir(),
 	})
 	p.ffmpegOK = func() bool { return true }
 	p.encode = func(_ context.Context, pcm []byte, rate int, out string) error {

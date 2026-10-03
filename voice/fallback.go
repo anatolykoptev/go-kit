@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -17,14 +18,17 @@ const (
 
 // Settings is the provider-selection input, decoupled from any config format.
 type Settings struct {
-	Provider      string // "" or "edge" (default) | "gemini"
-	Fallback      string // "" or "edge" (default) | "none"; used only with a non-edge Provider
-	EdgeVoice     string
-	GeminiAPIKey  string // supplied by the caller; the library never reads the environment
-	GeminiModel   string
-	GeminiVoice   string
-	GeminiStyle   string
-	GeminiBaseURL string // tests only
+	Provider     string // "" or "edge" (default) | "gemini"
+	Fallback     string // "" or "edge" (default) | "none"; used only with a non-edge Provider
+	EdgeVoice    string
+	GeminiAPIKey string // supplied by the caller; the library never reads the environment
+	GeminiModel  string
+	GeminiVoice  string
+	GeminiStyle  string
+	// GeminiHTTPClient supplies the Gemini transport (proxy, TLS, timeouts);
+	// redirects are never followed regardless.
+	GeminiHTTPClient *http.Client
+	geminiBaseURL    string // tests only
 	// OutputDir is where audio files are created by every provider; empty
 	// means the OS temp dir.
 	OutputDir string
@@ -43,13 +47,14 @@ func NewProviderFromSettings(s Settings) Provider {
 		return edge
 	case ProviderGemini:
 		gemini := NewGeminiProvider(GeminiConfig{
-			APIKey:    s.GeminiAPIKey,
-			Model:     s.GeminiModel,
-			Voice:     s.GeminiVoice,
-			Style:     s.GeminiStyle,
-			BaseURL:   s.GeminiBaseURL,
-			OutputDir: s.OutputDir,
-			Logger:    log,
+			APIKey:     s.GeminiAPIKey,
+			Model:      s.GeminiModel,
+			Voice:      s.GeminiVoice,
+			Style:      s.GeminiStyle,
+			baseURL:    s.geminiBaseURL,
+			HTTPClient: s.GeminiHTTPClient,
+			OutputDir:  s.OutputDir,
+			Logger:     log,
 		})
 		if s.GeminiAPIKey == "" {
 			log.Warn("voice: gemini api key not configured; gemini tts disabled")
@@ -66,8 +71,7 @@ func NewProviderFromSettings(s Settings) Provider {
 
 // EdgeReserve is the slice of the caller's deadline that [FallbackProvider]
 // keeps for the fallback: the primary runs under (deadline - EdgeReserve).
-// Sized from measurements of edge-tts with a Russian neural voice on a 4-core
-// ARM host: 54.7 s for 2000 runes (+1.2 s ffmpeg) and 100.2 s for 4000 runes
+// Sized from measurements of edge-tts with a Russian neural voice: 54.7 s for 2000 runes (+1.2 s ffmpeg) and 100.2 s for 4000 runes
 // (+4.4 s ffmpeg); a 2000-rune Gemini request took ~35 s. With a 120 s caller
 // deadline, 60 s covers an edge run for the 2000 runes Gemini accepts; longer
 // text skips Gemini and edge gets the whole deadline.
@@ -121,10 +125,10 @@ func (p *FallbackProvider) Synthesize(ctx context.Context, text, lang string) (s
 // keeps its reserve; ctx itself (not the trimmed one) still gates whether the
 // fallback runs. stop is true when the caller's ctx is done.
 func (p *FallbackProvider) tryPrimary(ctx context.Context, text, lang string) (path string, stop bool, err error) {
-	pctx := ctx
+	pctx := context.WithValue(ctx, fallbackKey{}, true)
 	if dl, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
-		pctx, cancel = context.WithDeadline(ctx, dl.Add(-EdgeReserve))
+		pctx, cancel = context.WithDeadline(pctx, dl.Add(-EdgeReserve))
 		defer cancel()
 	}
 	path, err = p.primary.Synthesize(pctx, text, lang)
@@ -136,7 +140,7 @@ func (p *FallbackProvider) tryPrimary(ctx context.Context, text, lang string) (p
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
 			kind = "parent_deadline"
 		}
-		p.log.Warn("voice: primary tts failed and caller context ended, fallback skipped",
+		p.log.WarnContext(ctx, "voice: primary tts failed and caller context ended, fallback skipped",
 			"provider", p.name, "kind", kind)
 		return "", true, err
 	}
@@ -148,7 +152,7 @@ func (p *FallbackProvider) tryPrimary(ctx context.Context, text, lang string) (p
 			args = append(args, "reason", httpErr.Reason)
 		}
 	}
-	p.log.Warn("voice: primary tts failed, falling back", args...)
+	p.log.WarnContext(ctx, "voice: primary tts failed, falling back", args...)
 	return "", false, err
 }
 
@@ -162,6 +166,8 @@ func errKind(err error) string {
 		return "timeout"
 	case errors.Is(err, ErrTextTooLong):
 		return "text_too_long"
+	case errors.Is(err, ErrEncode):
+		return "encode"
 	case errors.Is(err, ErrBudgetExhausted):
 		return "budget_exhausted"
 	default:

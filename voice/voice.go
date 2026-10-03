@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -68,60 +69,87 @@ func NewEdgeProvider(cfg EdgeConfig) *EdgeProvider {
 	}
 }
 
-// Synthesize implements [Provider]. lang "en"/"english" and "ru"/"russian"
-// select a built-in voice; any other value keeps the configured one.
-func (p *EdgeProvider) Synthesize(ctx context.Context, text, lang string) (string, error) {
-	voiceName := p.voice
+// ErrEncode means ffmpeg could not produce the ogg/opus file.
+var ErrEncode = errors.New("voice: ffmpeg encode failed")
+
+// pickVoice applies the language hint: "en"/"english" and "ru"/"russian" select
+// a built-in voice unless the configured voice already speaks that language
+// (its locale prefix, e.g. "ru" in "ru-RU-SvetlanaNeural", matches the hint).
+// Any other hint keeps the configured voice.
+func pickVoice(configured, lang string) string {
+	var code, builtin string
 	switch lang {
 	case "en", "english":
-		voiceName = enVoice
+		code, builtin = "en", enVoice
 	case "ru", "russian":
-		voiceName = defaultEdgeVoice
+		code, builtin = "ru", defaultEdgeVoice
+	default:
+		return configured
 	}
+	if prefix, _, _ := strings.Cut(configured, "-"); strings.EqualFold(prefix, code) {
+		return configured
+	}
+	return builtin
+}
+
+// Synthesize implements [Provider]. A "ru"/"en" lang hint selects a built-in
+// voice only when the configured voice speaks another language.
+func (p *EdgeProvider) Synthesize(ctx context.Context, text, lang string) (string, error) {
+	voiceName := pickVoice(p.voice, lang)
 	p.log.InfoContext(ctx, "voice: synthesizing", "provider", "edge",
 		"voice", voiceName, "lang", lang, "text_runes", utf8.RuneCountInString(text))
 
-	outPath, err := createOutputFile(p.outputDir, "edge tts")
+	outPath, err := createTempFile(p.outputDir, "tts_*.ogg", "edge tts")
 	if err != nil {
 		return "", err
 	}
-	// edge-tts writes mp3; ffmpeg converts it to ogg/opus.
-	mp3Path := outPath + ".mp3"
+	// edge-tts writes mp3; ffmpeg converts it to ogg/opus. The mp3 gets its own
+	// random name so it cannot be predicted from the .ogg.
+	mp3Path, err := createTempFile(p.outputDir, "tts_*.mp3", "edge tts")
+	if err != nil {
+		os.Remove(outPath)
+		return "", err
+	}
 	defer os.Remove(mp3Path)
 
-	// The text is in argv by edge-tts's CLI contract (visible to `ps`).
+	// The text is in argv by edge-tts's CLI contract (visible to `ps`). The
+	// "--text=" form keeps text that starts with "-" from being parsed as a flag.
 	cmd := exec.CommandContext(ctx, p.edgeBin, //nolint:gosec // configured binary, argv slice, no shell
-		"--voice", voiceName, "--text", text, "--write-media", mp3Path)
+		"--voice", voiceName, "--text="+text, "--write-media", mp3Path)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// The CLI output can echo the input text: log its size only.
-		p.log.ErrorContext(ctx, "voice: edge-tts failed", "exit", exitStatus(err), "output_bytes", len(out))
+		p.log.ErrorContext(ctx, "voice: edge-tts failed", "exit", exitStatus(ctx, err), "output_bytes", len(out))
 		os.Remove(outPath)
-		return "", fmt.Errorf("edge-tts failed: exit %s", exitStatus(err))
+		return "", fmt.Errorf("edge-tts failed: exit %s", exitStatus(ctx, err))
 	}
 
 	ff := exec.CommandContext(ctx, p.ffmpegBin, //nolint:gosec // configured binary, argv slice, no shell
 		"-y", "-i", mp3Path, "-c:a", "libopus", "-b:a", opusBitrate, outPath)
 	if out, err := ff.CombinedOutput(); err != nil {
 		p.log.ErrorContext(ctx, "voice: ffmpeg ogg conversion failed",
-			"exit", exitStatus(err), "output_bytes", len(out))
-		// Keep the raw mp3 rather than fail the reply.
-		if err := os.Rename(mp3Path, outPath); err != nil {
-			os.Remove(outPath)
-			return "", fmt.Errorf("edge-tts: keep mp3: %w", err)
-		}
+			"exit", exitStatus(ctx, err), "output_bytes", len(out))
+		os.Remove(outPath)
+		return "", fmt.Errorf("edge tts: %w: exit %s", ErrEncode, exitStatus(ctx, err))
 	}
 	p.log.InfoContext(ctx, "voice: speech synthesized", "provider", "edge")
 	return outPath, nil
 }
 
-// IsAvailable reports whether the edge-tts executable is on PATH.
+// IsAvailable reports whether both edge-tts and ffmpeg are on PATH.
 func (p *EdgeProvider) IsAvailable() bool {
-	_, err := exec.LookPath(p.edgeBin)
+	if _, err := exec.LookPath(p.edgeBin); err != nil {
+		return false
+	}
+	_, err := exec.LookPath(p.ffmpegBin)
 	return err == nil
 }
 
-// exitStatus renders a command error without any command output.
-func exitStatus(err error) string {
+// exitStatus renders a command error without any command output; "canceled"
+// when the context ended (the process was killed by it).
+func exitStatus(ctx context.Context, err error) string {
+	if ctx.Err() != nil {
+		return "canceled"
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return strconv.Itoa(ee.ExitCode())
@@ -129,16 +157,16 @@ func exitStatus(err error) string {
 	return "start_failed"
 }
 
-// createOutputFile makes a unique, empty tts_*.ogg file in dir (created if
-// missing; empty means the OS temp dir) and returns its path.
-func createOutputFile(dir, who string) (string, error) {
+// createTempFile makes a unique, empty file matching pattern in dir (created
+// if missing; empty means the OS temp dir) and returns its path.
+func createTempFile(dir, pattern, who string) (string, error) {
 	if dir != "" {
 		if err := os.MkdirAll(dir, dirMode); err != nil {
 			return "", fmt.Errorf("%s: output dir: %w", who, err)
 		}
 		dir = filepath.Clean(dir)
 	}
-	f, err := os.CreateTemp(dir, "tts_*.ogg")
+	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", fmt.Errorf("%s: temp file: %w", who, err)
 	}

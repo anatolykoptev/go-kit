@@ -84,11 +84,13 @@ jobs:
       # image tests: measured, substitution moves three of the four goldens by
       # under 1%, well inside their tolerance. Do not delete this step on the
       # assumption the goldens would catch its absence.
-      - name: Install pandoc, typst and IBM Plex
+      # ffmpeg: voice/ tests encode real ogg/opus; without it the real-encode
+      # test fails under CI (it must never skip there).
+      - name: Install pandoc, typst, IBM Plex and ffmpeg
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends pandoc fonts-ibm-plex
+          sudo apt-get install -y --no-install-recommends pandoc fonts-ibm-plex ffmpeg
 
           # Arch-derived so this step survives the move to ubuntu-24.04-arm that
           # the fleet CI rule specifies for public repos, instead of 404-ing.
