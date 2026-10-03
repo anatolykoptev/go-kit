@@ -105,25 +105,25 @@ func writeField(w *multipart.Writer, name, value string) error {
 func (c *Client) postTranscription(ctx context.Context, body io.Reader, contentType string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/audio/transcriptions", body)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", stripURLError(err))
 	}
 	req.Header.Set("Content-Type", contentType)
 	c.setAuth(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", stripURLError(err))
 	}
 	defer resp.Body.Close()
-	return readResponse(resp, limit)
+	return c.readResponse(resp, limit)
 }
 
 // readResponse returns the body of a 200 response (capped at limit) or an
 // *Error for any other status.
-func readResponse(resp *http.Response, limit int64) ([]byte, error) {
+func (c *Client) readResponse(resp *http.Response, limit int64) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		eb, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return nil, newHTTPError(resp.StatusCode, eb)
+		return nil, newHTTPError(resp.StatusCode, eb, c.apiKey)
 	}
 	return readLimited(resp.Body, limit)
 }

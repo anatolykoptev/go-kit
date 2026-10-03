@@ -10,7 +10,7 @@ import (
 // true when not explicitly set (nil *bool), matching the doc comments. Before
 // the fix, buildStreamURL sent the zero value (false) for both fields.
 func TestStreamParamsDefaultsApplied(t *testing.T) {
-	got, err := buildStreamURL("http://host:8092", StreamParams{})
+	got, err := buildStreamURL("http://host:8000", StreamParams{})
 	if err != nil {
 		t.Fatalf("buildStreamURL: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestStreamParamsDefaultsApplied(t *testing.T) {
 // TestStreamParamsExplicitFalseRespected verifies that explicitly setting
 // VAD=false and Punctuate=false is honored (not overridden by the default).
 func TestStreamParamsExplicitFalseRespected(t *testing.T) {
-	got, err := buildStreamURL("http://host:8092", StreamParams{
+	got, err := buildStreamURL("http://host:8000", StreamParams{
 		VAD:       Bool(false),
 		Punctuate: Bool(false),
 	})
@@ -53,7 +53,7 @@ func TestStreamParamsExplicitFalseRespected(t *testing.T) {
 // TestStreamParamsExplicitTrueRespected verifies that explicitly setting
 // VAD=true and Punctuate=true is honored.
 func TestStreamParamsExplicitTrueRespected(t *testing.T) {
-	got, err := buildStreamURL("http://host:8092", StreamParams{
+	got, err := buildStreamURL("http://host:8000", StreamParams{
 		VAD:       Bool(true),
 		Punctuate: Bool(true),
 	})

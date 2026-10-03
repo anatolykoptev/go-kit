@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 )
 
 // ErrResponseTooLarge means the server's response exceeded the size cap for
@@ -48,13 +50,33 @@ func (e *Error) IsTransient() bool {
 
 // reasonToken matches the machine tokens servers put in error.code/error.type
 // (e.g. "invalid_api_key", "rate_limit_exceeded").
-var reasonToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{1,63}$`)
+//
+// Deliberately narrow: all-lower or all-upper snake_case only, so key-shaped
+// strings such as "sk-..." or "gsk_Ab12..." (mixed case, dashes) never qualify.
+var reasonToken = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$|^[A-Z][A-Z0-9_]{1,63}$`)
 
 // newHTTPError builds an *Error from a non-2xx status and (a bounded prefix of)
 // its body. Only error.code or error.type are read, and only if they are a
 // strict token; the message and the rest of the body are dropped.
-func newHTTPError(status int, body []byte) *Error {
-	return &Error{StatusCode: status, Message: http.StatusText(status), Reason: errorReason(body)}
+//
+// apiKey is the client's key: a reason containing it is dropped.
+func newHTTPError(status int, body []byte, apiKey string) *Error {
+	reason := errorReason(body)
+	if apiKey != "" && strings.Contains(reason, apiKey) {
+		reason = ""
+	}
+	return &Error{StatusCode: status, Message: http.StatusText(status), Reason: reason}
+}
+
+// stripURLError returns the cause of a *url.Error. net/http and net/url put the
+// full request URL in that error's text; the base URL is not secret, but a URL
+// can carry credentials, so no returned error wraps it.
+func stripURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
+	}
+	return err
 }
 
 func errorReason(body []byte) string {

@@ -135,17 +135,17 @@ func (c *Client) Models(ctx context.Context) (*ModelList, error) {
 	do := func() (*ModelList, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models", nil)
 		if err != nil {
-			return nil, fmt.Errorf("create request: %w", err)
+			return nil, fmt.Errorf("create request: %w", stripURLError(err))
 		}
 		c.setAuth(req)
 
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("send request: %w", err)
+			return nil, fmt.Errorf("send request: %w", stripURLError(err))
 		}
 		defer resp.Body.Close()
 
-		respBody, err := readResponse(resp, maxModelsResponse)
+		respBody, err := c.readResponse(resp, maxModelsResponse)
 		if err != nil {
 			return nil, err
 		}

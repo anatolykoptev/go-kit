@@ -173,15 +173,12 @@ func TestTranscribeRejectsSubtitleFormats(t *testing.T) {
 }
 
 func TestDownloadIsBounded(t *testing.T) {
-	old := maxDownloadBytes
-	maxDownloadBytes = 10
-	t.Cleanup(func() { maxDownloadBytes = old })
 	var size atomic.Int64
 	url := serve(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("x", int(size.Load()))))
 	})
 	tmp := t.TempDir()
-	c := New(url, WithTempDir(tmp))
+	c := New(url, WithTempDir(tmp), WithMaxDownload(10))
 
 	size.Store(11)
 	if _, err := c.downloadToTemp(context.Background(), url+"/f.ogg"); !errors.Is(err, ErrResponseTooLarge) {
@@ -228,12 +225,9 @@ func TestResponseReadStopsPullingAtCap(t *testing.T) {
 }
 
 func TestDownloadStopsPullingAtCap(t *testing.T) {
-	old := maxDownloadBytes
-	maxDownloadBytes = 10
-	t.Cleanup(func() { maxDownloadBytes = old })
 	var written atomic.Int64
 	url := streamForever(t, &written)
-	if _, err := New(url, WithTempDir(t.TempDir())).downloadToTemp(context.Background(), url+"/f.ogg"); !errors.Is(err, ErrResponseTooLarge) {
+	if _, err := New(url, WithTempDir(t.TempDir()), WithMaxDownload(10)).downloadToTemp(context.Background(), url+"/f.ogg"); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("err = %v, want ErrResponseTooLarge", err)
 	}
 	if got := written.Load(); got > 64<<20 {

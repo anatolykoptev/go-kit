@@ -17,12 +17,12 @@ func TestConvertWebSocketScheme(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "no scheme loopback", base: "127.0.0.1:8092", wantErr: true},
+		{name: "no scheme loopback", base: "127.0.0.1:8000", wantErr: true},
 		{name: "http to ws", base: "http://host", want: "ws://host"},
 		{name: "https to wss", base: "https://host", want: "wss://host"},
 		{name: "ws passthrough", base: "ws://host", want: "ws://host"},
 		{name: "wss passthrough", base: "wss://host", want: "wss://host"},
-		{name: "trailing slash stripped no double slash", base: "http://host:8092/", want: "ws://host:8092"},
+		{name: "trailing slash stripped no double slash", base: "http://host:8000/", want: "ws://host:8000"},
 		{name: "query preserved", base: "https://host/path?q=1", want: "wss://host/path?q=1"},
 		{name: "empty", base: "", wantErr: true},
 	}
@@ -50,7 +50,7 @@ func TestConvertWebSocketScheme(t *testing.T) {
 // surfaces the scheme-conversion error rather than silently misrouting.
 func TestBuildStreamURLRejectsBadScheme(t *testing.T) {
 	t.Parallel()
-	_, err := buildStreamURL("127.0.0.1:8092", StreamParams{})
+	_, err := buildStreamURL("127.0.0.1:8000", StreamParams{})
 	if err == nil {
 		t.Fatal("expected error for schemeless URL")
 	}
@@ -63,15 +63,15 @@ func TestBuildStreamURLRejectsBadScheme(t *testing.T) {
 // /v1/listen endpoint and stream query params after scheme conversion.
 func TestBuildStreamURLAppendsListenPath(t *testing.T) {
 	t.Parallel()
-	got, err := buildStreamURL("http://host:8092/", StreamParams{Language: "en"})
+	got, err := buildStreamURL("http://host:8000/", StreamParams{Language: "en"})
 	if err != nil {
 		t.Fatalf("buildStreamURL err = %v", err)
 	}
-	if !strings.HasPrefix(got, "ws://host:8092/v1/listen?") {
-		t.Errorf("buildStreamURL = %q, want prefix ws://host:8092/v1/listen?", got)
+	if !strings.HasPrefix(got, "ws://host:8000/v1/listen?") {
+		t.Errorf("buildStreamURL = %q, want prefix ws://host:8000/v1/listen?", got)
 	}
 	// No double slash from the stripped trailing slash.
-	if strings.Contains(got, "8092//v1/listen") {
+	if strings.Contains(got, "8000//v1/listen") {
 		t.Errorf("buildStreamURL = %q, contains double slash", got)
 	}
 }

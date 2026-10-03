@@ -31,7 +31,7 @@ func TestAPIKeySentInAuthorization(t *testing.T) {
 }
 
 // TestAPIKeyNotSetWhenEmpty verifies that no Authorization header is sent
-// when WithAPIKey is not used (backward compat with self-hosted self-hosted server).
+// when WithAPIKey is not used (backward compat with self-hosted server).
 func TestAPIKeyNotSetWhenEmpty(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

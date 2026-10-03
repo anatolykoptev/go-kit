@@ -26,6 +26,7 @@ type Client struct {
 	cb              *circuitBreaker
 	apiKey          string
 	tempDir         string
+	maxDownload     int64
 }
 
 // Option configures the Client.
@@ -48,7 +49,28 @@ func WithFormat(format string) Option {
 
 // WithTimeout sets the HTTP request timeout (default: 60s).
 func WithTimeout(timeout time.Duration) Option {
-	return func(c *Client) { c.http.Timeout = timeout }
+	return func(c *Client) {
+		hc := *c.http // copy: never mutate a client the caller supplied
+		hc.Timeout = timeout
+		c.http = &hc
+	}
+}
+
+// WithHTTPClient replaces the HTTP client (transport, proxy, TLS, timeout).
+// Use it to pass a guarded transport when [Client.TranscribeURL] receives URLs
+// you do not control. Apply [WithTimeout] after it to override its timeout.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) {
+		if hc != nil {
+			c.http = hc
+		}
+	}
+}
+
+// WithMaxDownload caps the size of audio fetched by TranscribeURL (default
+// 256 MiB); larger downloads fail with ErrResponseTooLarge.
+func WithMaxDownload(n int64) Option {
+	return func(c *Client) { c.maxDownload = n }
 }
 
 // WithPunctuate enables or disables automatic punctuation.
@@ -130,9 +152,11 @@ func WithCircuitBreaker(maxFails int, cooldown time.Duration) Option {
 	}
 }
 
-// WithAPIKey sets the API key sent as "Authorization: Bearer <key>" on all
-// HTTP requests (transcription, models, health) and on the WebSocket upgrade
-// request. Required for OpenAI API; self-hosted servers usually do not need it.
+// WithAPIKey sets the API key sent as "Authorization: Bearer <key>" on the STT
+// server's HTTP requests (transcription, models, health) and on the WebSocket
+// upgrade request. It is NOT sent to TranscribeURL download URLs, which are
+// arbitrary hosts. Required for OpenAI API; self-hosted servers usually do not
+// need it.
 func WithAPIKey(key string) Option {
 	return func(c *Client) { c.apiKey = key }
 }

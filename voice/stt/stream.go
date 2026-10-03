@@ -73,13 +73,13 @@ func (sc *StreamClient) SetAPIKey(key string) {
 
 // convertWebSocketScheme converts an HTTP/HTTPS base URL to a WebSocket URL
 // using net/url. Unlike a naive strings.NewReplacer, it correctly handles
-// schemeless loopback addresses (e.g. "127.0.0.1:8092"), ws/wss passthrough,
+// schemeless loopback addresses (e.g. "127.0.0.1:8000"), ws/wss passthrough,
 // trailing slashes, and preserved query strings. It requires an explicit
 // http/https/ws/wss scheme and rejects anything else.
 func convertWebSocketScheme(baseURL string) (string, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid stream URL %q: %w", baseURL, err)
+		return "", fmt.Errorf("invalid stream URL: %w", stripURLError(err))
 	}
 	switch u.Scheme {
 	case "http":
@@ -89,7 +89,7 @@ func convertWebSocketScheme(baseURL string) (string, error) {
 	case "ws", "wss":
 		// passthrough — already a WebSocket scheme
 	default:
-		return "", fmt.Errorf("invalid stream URL %q: missing or unsupported scheme %q (want http/https/ws/wss)", baseURL, u.Scheme)
+		return "", fmt.Errorf("invalid stream URL: missing or unsupported scheme %q (want http/https/ws/wss)", u.Scheme)
 	}
 	// Strip a trailing slash so appending "/v1/listen" doesn't produce a
 	// double slash ("host//v1/listen").
