@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.97.15](https://github.com/anatolykoptev/go-kit/compare/v0.97.14...v0.97.15) (2026-10-03)
+
+
+### Added
+
+* **voice:** add TTS package (edge-tts, Gemini, fallback) ([#274](https://github.com/anatolykoptev/go-kit/issues/274)) ([82690a3](https://github.com/anatolykoptev/go-kit/commit/82690a37c0d05a84ae61983f3b5abd076cdab572))
+
+
+### Fixed
+
+* **redirectmatch:** a capture can no longer choose where a redirect goes ([#272](https://github.com/anatolykoptev/go-kit/issues/272)) ([62e8b76](https://github.com/anatolykoptev/go-kit/commit/62e8b76b0c2498651cb0ae824a18c0cc683a7898))
+
 ## [0.97.14](https://github.com/anatolykoptev/go-kit/compare/v0.97.13...v0.97.14) (2026-09-23)
 
 
