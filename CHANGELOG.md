@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.16](https://github.com/anatolykoptev/go-kit/compare/v0.97.15...v0.97.16) (2026-10-03)
+
+
+### Added
+
+* **voice/stt:** add OpenAI-compatible speech-to-text client ([#276](https://github.com/anatolykoptev/go-kit/issues/276)) ([6d4155d](https://github.com/anatolykoptev/go-kit/commit/6d4155d98a80d16037c1c74dcf14dbbf5e07972f))
+
 ## [0.97.15](https://github.com/anatolykoptev/go-kit/compare/v0.97.14...v0.97.15) (2026-10-03)
 
 
