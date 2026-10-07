@@ -6,7 +6,17 @@
 // public URLs cannot set it at all without leaking it to third parties.
 // Transport scopes the header by destination instead: wrap the client once,
 // list the internal base URLs, and every request to one of them carries the
-// secret while every other request, redirect hops included, carries nothing.
+// secret while every other request carries none — a caller-set
+// X-Internal-Secret is stripped from it too.
+//
+// Redirects: a hop into a routed origin carries the secret only when the hop
+// it came from was itself routed. A public page answering 302 to an internal
+// service therefore cannot borrow the credential.
+//
+// Proxies: with a nil base the transport is http.DefaultTransport, which
+// honours HTTP_PROXY. A plain-http internal route that is not in NO_PROXY is
+// then sent, header included, through that proxy in cleartext. Pass a base
+// with Proxy set to nil, or list the internal hosts in NO_PROXY.
 package svcauth
 
 import (
@@ -57,7 +67,11 @@ func New(base http.RoundTripper, routes ...Route) (*Transport, error) {
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			return nil, fmt.Errorf("svcauth: invalid base URL %q", r.BaseURL)
 		}
-		t.routes[originKey(u)] = r.Secret
+		key := originKey(u)
+		if prev, dup := t.routes[key]; dup && prev != r.Secret {
+			return nil, fmt.Errorf("svcauth: origin %s listed twice with different secrets", key)
+		}
+		t.routes[key] = r.Secret
 	}
 	return t, nil
 }
@@ -89,22 +103,57 @@ func WrapClient(c *http.Client, routes ...Route) (*http.Client, error) {
 }
 
 // RoundTrip implements http.RoundTripper. The request is cloned before the
-// header is set, as the RoundTripper contract requires; http.Client calls
-// RoundTrip again for every redirect hop, so a hop to another origin gets
-// no credential.
+// header changes, as the RoundTripper contract requires. http.Client calls
+// RoundTrip again for every redirect hop, with req.Response set to the
+// response that redirected.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if secret, ok := t.routes[originKey(req.URL)]; ok {
+	secret, routed := t.secretFor(req)
+	switch {
+	case routed:
 		req = req.Clone(req.Context())
 		req.Header.Set(HeaderInternalSecret, secret)
+	case req.Header.Get(HeaderInternalSecret) != "":
+		req = req.Clone(req.Context())
+		req.Header.Del(HeaderInternalSecret)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// secretFor returns the secret for req's origin, provided every hop that led
+// to req (when it is a redirect) was routed as well.
+func (t *Transport) secretFor(req *http.Request) (string, bool) {
+	if req.URL == nil {
+		return "", false
+	}
+	secret, ok := t.routes[originKey(req.URL)]
+	if !ok {
+		return "", false
+	}
+	for prev := req.Response; prev != nil; {
+		if prev.Request == nil || prev.Request.URL == nil {
+			return "", false
+		}
+		if _, ok := t.routes[originKey(prev.Request.URL)]; !ok {
+			return "", false
+		}
+		prev = prev.Request.Response
+	}
+	return secret, true
+}
+
+// CloseIdleConnections forwards to the base transport, so
+// http.Client.CloseIdleConnections keeps working through WrapClient.
+func (t *Transport) CloseIdleConnections() {
+	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // originKey normalises scheme://host:port so "http://Ox-Browser:80" and
 // "http://ox-browser" compare equal.
 func originKey(u *url.URL) string {
 	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	port := u.Port()
 	if port == "" {
 		switch scheme {

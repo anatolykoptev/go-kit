@@ -134,3 +134,84 @@ func TestFromEnv(t *testing.T) {
 		t.Errorf("got %q, want [env-secret]", *got)
 	}
 }
+
+// A public server must not be able to redirect the client into a routed
+// origin and have the secret attached there. RED-on-revert: drop the
+// req.Response walk in secretFor.
+func TestTransport_RedirectFromPublicIntoRoutedDropsSecret(t *testing.T) {
+	internal, gotInternal := recorder(t)
+	public, _ := recorder(t)
+
+	c, err := WrapClient(nil, Route{BaseURL: internal.URL, Secret: "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Get(public.URL + "/?redirect=" + internal.URL + "/api/v1/chrome/tabs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(*gotInternal) != 1 || (*gotInternal)[0] != "" {
+		t.Errorf("internal got %q via a public redirect, want no header", *gotInternal)
+	}
+}
+
+func TestTransport_RedirectBetweenRoutedOriginsKeepsSecret(t *testing.T) {
+	a, gotA := recorder(t)
+	b, gotB := recorder(t)
+	c, err := WrapClient(nil, Route{BaseURL: a.URL, Secret: "s3cret"}, Route{BaseURL: b.URL, Secret: "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Get(a.URL + "/?redirect=" + b.URL + "/next")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if (*gotA)[0] != "s3cret" || len(*gotB) != 1 || (*gotB)[0] != "s3cret" {
+		t.Errorf("a=%q b=%q, want the secret on both routed hops", *gotA, *gotB)
+	}
+}
+
+func TestTransport_StripsCallerSetSecretOnUnroutedOrigin(t *testing.T) {
+	internal, _ := recorder(t)
+	external, gotExternal := recorder(t)
+	c, err := WrapClient(nil, Route{BaseURL: internal.URL, Secret: "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, external.URL, nil)
+	req.Header.Set(HeaderInternalSecret, "manual")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if (*gotExternal)[0] != "" {
+		t.Errorf("external got %q, want the caller-set header stripped", *gotExternal)
+	}
+	if req.Header.Get(HeaderInternalSecret) != "manual" {
+		t.Error("caller's request was mutated")
+	}
+}
+
+func TestNew_RejectsConflictingDuplicateRoutes(t *testing.T) {
+	_, err := New(nil, Route{BaseURL: "http://a:1", Secret: "x"}, Route{BaseURL: "http://A:1/", Secret: "y"})
+	if err == nil || !strings.Contains(err.Error(), "listed twice") {
+		t.Fatalf("err = %v, want duplicate-origin error", err)
+	}
+	if _, err := New(nil, Route{BaseURL: "http://a:1", Secret: "x"}, Route{BaseURL: "http://a:1", Secret: "x"}); err != nil {
+		t.Fatalf("identical duplicate should be accepted: %v", err)
+	}
+}
+
+func TestOriginKey_TrailingDot(t *testing.T) {
+	tr, err := New(nil, Route{BaseURL: "http://ox-browser.:8901", Secret: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://ox-browser:8901/read", nil)
+	if _, ok := tr.secretFor(req); !ok {
+		t.Error("trailing-dot route did not match the dotless host")
+	}
+}
