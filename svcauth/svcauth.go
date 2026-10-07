@@ -108,16 +108,15 @@ func WrapClient(c *http.Client, routes ...Route) (*http.Client, error) {
 // response that redirected.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	secret, routed := t.secretFor(req)
-	switch {
-	case routed:
-		req = req.Clone(req.Context())
-		req.Header.Set(HeaderInternalSecret, secret)
-	case hasSecretHeader(req.Header):
+	if routed || hasSecretHeader(req.Header) {
 		req = req.Clone(req.Context())
 		for k := range req.Header {
 			if strings.EqualFold(k, HeaderInternalSecret) {
 				delete(req.Header, k)
 			}
+		}
+		if routed {
+			req.Header.Set(HeaderInternalSecret, secret)
 		}
 	}
 	return t.base.RoundTrip(req)

@@ -216,3 +216,26 @@ func TestOriginKey_TrailingDot(t *testing.T) {
 		t.Error("trailing-dot route did not match the dotless host")
 	}
 }
+
+// A stale hand-set value must not travel alongside ours to a routed origin.
+func TestTransport_RoutedReplacesCallerSetValues(t *testing.T) {
+	var vals []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vals = r.Header.Values(HeaderInternalSecret)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := WrapClient(nil, Route{BaseURL: srv.URL, Secret: "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req.Header["x-internal-secret"] = []string{"stale"}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(vals) != 1 || vals[0] != "s3cret" {
+		t.Errorf("routed origin got %q, want exactly [s3cret]", vals)
+	}
+}
