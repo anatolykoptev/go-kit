@@ -182,6 +182,7 @@ func TestTransport_StripsCallerSetSecretOnUnroutedOrigin(t *testing.T) {
 	}
 	req, _ := http.NewRequest(http.MethodGet, external.URL, nil)
 	req.Header.Set(HeaderInternalSecret, "manual")
+	req.Header["x-internal-secret"] = []string{"rawkey"}
 	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)

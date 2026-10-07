@@ -112,11 +112,26 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	case routed:
 		req = req.Clone(req.Context())
 		req.Header.Set(HeaderInternalSecret, secret)
-	case req.Header.Get(HeaderInternalSecret) != "":
+	case hasSecretHeader(req.Header):
 		req = req.Clone(req.Context())
-		req.Header.Del(HeaderInternalSecret)
+		for k := range req.Header {
+			if strings.EqualFold(k, HeaderInternalSecret) {
+				delete(req.Header, k)
+			}
+		}
 	}
 	return t.base.RoundTrip(req)
+}
+
+// hasSecretHeader matches the header case-insensitively, so a key written
+// into the map by hand ("x-internal-secret") is stripped too.
+func hasSecretHeader(h http.Header) bool {
+	for k := range h {
+		if strings.EqualFold(k, HeaderInternalSecret) {
+			return true
+		}
+	}
+	return false
 }
 
 // secretFor returns the secret for req's origin, provided every hop that led
