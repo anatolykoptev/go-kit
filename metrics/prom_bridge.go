@@ -59,7 +59,7 @@ func RecordDroppedSample() {
 	droppedSampleOnce.Do(func() {
 		droppedSampleCounter = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "gokit_metrics_dropped_samples_total",
-			Help: "Number of samples dropped because the registered metric rejected their label values (wrong label count or an invalid value). Before go-kit counted them, these panicked the observing goroutine.",
+			Help: "Number of samples dropped because the registered metric rejected their label values (wrong label count or an invalid value).",
 		})
 		if err := prometheus.DefaultRegisterer.Register(droppedSampleCounter); err != nil {
 			var are prometheus.AlreadyRegisteredError
