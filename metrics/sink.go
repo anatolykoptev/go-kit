@@ -8,23 +8,30 @@ import (
 	"strings"
 )
 
-// labelSanitizer replaces the characters that delimit the Label syntax
-// (and the quote/newline that break the text exposition) with '_'.
-// Label values are often request-controlled (an MCP tool name, a route):
-// an unescaped ',' or '=' turned one value into extra label pairs, and the
-// Prometheus bridge then panicked on the label-count mismatch inside the
-// caller's goroutine, killing the process on a single request.
-var labelSanitizer = strings.NewReplacer(
-	",", "_", "=", "_", "{", "_", "}", "_", `"`, "_", "\n", "_", "\r", "_",
+// The Label syntax is name{k=v,k=v}: parseLabeled splits pairs on ',' and
+// each pair on its FIRST '='. So a value may hold anything but ',' (and a
+// line break, which would split a TextSink line); a key must also be free
+// of '=', '{' and '}'. Everything else — '=', braces and quotes in a value,
+// e.g. a route pattern "GET /items/{id}" — is left as is: Prometheus
+// escapes it on exposition and existing series keep their names.
+var (
+	labelValueSanitizer = strings.NewReplacer(",", "_", "\n", "_", "\r", "_")
+	labelKeySanitizer   = strings.NewReplacer(",", "_", "=", "_", "{", "_", "}", "_", "\n", "_", "\r", "_")
 )
+
+// SanitizeLabelValue returns v as Label would embed it. Code that observes
+// a prometheus vec directly with a value it also passes to Label must use
+// it, so both series carry the same label value.
+func SanitizeLabelValue(v string) string { return labelValueSanitizer.Replace(v) }
 
 // Label builds a metric key with labels. Labels are alternating key-value pairs.
 // Label("requests", "method", "GET") returns "requests{method=GET}".
 // Label("rpc", "service", "auth", "method", "login") returns "rpc{service=auth,method=login}".
 // Returns name unchanged if no labels or odd number of label values.
-// Keys and values are sanitized: the delimiters , = { } plus " and line
-// breaks become '_', so the key always parses back to exactly len(kvs)/2
-// labels.
+// Request-controlled values are safe to pass: a ',' or line break in a
+// value, and any of , = { } or a line break in a key, becomes '_', so the
+// key always parses back to exactly len(kvs)/2 labels. Keys are expected
+// to be code constants.
 func Label(name string, kvs ...string) string {
 	if len(kvs) == 0 || len(kvs)%2 != 0 {
 		return name
@@ -36,9 +43,9 @@ func Label(name string, kvs ...string) string {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		sb.WriteString(labelSanitizer.Replace(kvs[i]))
+		sb.WriteString(labelKeySanitizer.Replace(kvs[i]))
 		sb.WriteByte('=')
-		sb.WriteString(labelSanitizer.Replace(kvs[i+1]))
+		sb.WriteString(labelValueSanitizer.Replace(kvs[i+1]))
 	}
 	sb.WriteByte('}')
 	return sb.String()

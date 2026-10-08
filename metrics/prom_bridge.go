@@ -25,7 +25,7 @@ func incrShapeCollision() {
 	shapeCollisionOnce.Do(func() {
 		shapeCollisionCounter = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "gokit_metrics_shape_collisions_total",
-			Help: "Number of samples dropped because their label shape did not match the registered metric: no-label vs labeled, or a label count/value the registered vec rejects. The first-registered shape wins.",
+			Help: "Number of times a base metric name was observed in two incompatible shapes (no-label vs labeled). The first-registered shape wins; subsequent observations of the losing shape are dropped.",
 		})
 		// Best-effort: if something else already registered this exact name
 		// (different go-kit version vendored twice), swallow the error.
@@ -40,6 +40,38 @@ func incrShapeCollision() {
 	})
 	if shapeCollisionCounter != nil {
 		shapeCollisionCounter.Inc()
+	}
+}
+
+// droppedSampleCounter counts samples a registered vec rejected — a label
+// count or a label value (e.g. invalid UTF-8) it does not accept. Distinct
+// from shape collisions: those are a startup wiring bug, these are usually
+// request-driven, and before they were counted they panicked the caller.
+var (
+	droppedSampleOnce    sync.Once
+	droppedSampleCounter prometheus.Counter
+)
+
+// RecordDroppedSample counts one sample a prometheus vec rejected. The
+// bridge calls it; code observing a vec directly (httpmw's histogram)
+// calls it too, so every drop lands in one counter.
+func RecordDroppedSample() {
+	droppedSampleOnce.Do(func() {
+		droppedSampleCounter = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gokit_metrics_dropped_samples_total",
+			Help: "Number of samples dropped because the registered metric rejected their label values (wrong label count or an invalid value). Before go-kit counted them, these panicked the observing goroutine.",
+		})
+		if err := prometheus.DefaultRegisterer.Register(droppedSampleCounter); err != nil {
+			var are prometheus.AlreadyRegisteredError
+			if errors.As(err, &are) {
+				if existing, ok := are.ExistingCollector.(prometheus.Counter); ok {
+					droppedSampleCounter = existing
+				}
+			}
+		}
+	})
+	if droppedSampleCounter != nil {
+		droppedSampleCounter.Inc()
 	}
 }
 
@@ -94,7 +126,7 @@ func (b *promBridge) observeCounter(name string, delta float64) {
 	if err != nil {
 		// Label-count or label-value mismatch with the registered vec:
 		// drop the sample and count it rather than panic in the caller.
-		incrShapeCollision()
+		RecordDroppedSample()
 		return
 	}
 	c.Add(delta)
@@ -158,7 +190,7 @@ func (b *promBridge) observeGauge(name string, value float64, opAdd bool) {
 	}
 	g, err := b.gaugeVec(base, keys).GetMetricWithLabelValues(vals...)
 	if err != nil {
-		incrShapeCollision() // see observeCounter
+		RecordDroppedSample() // see observeCounter
 		return
 	}
 	if opAdd {
@@ -220,7 +252,7 @@ func (b *promBridge) observeHistogram(name string, seconds float64) {
 	}
 	h, err := b.histogramVec(base, keys).GetMetricWithLabelValues(vals...)
 	if err != nil {
-		incrShapeCollision() // see observeCounter
+		RecordDroppedSample() // see observeCounter
 		return
 	}
 	h.Observe(seconds)
