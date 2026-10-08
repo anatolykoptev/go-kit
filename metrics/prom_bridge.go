@@ -25,7 +25,7 @@ func incrShapeCollision() {
 	shapeCollisionOnce.Do(func() {
 		shapeCollisionCounter = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "gokit_metrics_shape_collisions_total",
-			Help: "Number of times a base metric name was observed in two incompatible shapes (no-label vs labeled). The first-registered shape wins; subsequent observations of the losing shape are dropped.",
+			Help: "Number of samples dropped because their label shape did not match the registered metric: no-label vs labeled, or a label count/value the registered vec rejects. The first-registered shape wins.",
 		})
 		// Best-effort: if something else already registered this exact name
 		// (different go-kit version vendored twice), swallow the error.
@@ -90,8 +90,14 @@ func (b *promBridge) observeCounter(name string, delta float64) {
 		c.Add(delta)
 		return
 	}
-	vec := b.counterVec(base, keys)
-	vec.WithLabelValues(vals...).Add(delta)
+	c, err := b.counterVec(base, keys).GetMetricWithLabelValues(vals...)
+	if err != nil {
+		// Label-count or label-value mismatch with the registered vec:
+		// drop the sample and count it rather than panic in the caller.
+		incrShapeCollision()
+		return
+	}
+	c.Add(delta)
 }
 
 func (b *promBridge) counterNoLabels(base string) prometheus.Counter {
@@ -150,11 +156,15 @@ func (b *promBridge) observeGauge(name string, value float64, opAdd bool) {
 		}
 		return
 	}
-	vec := b.gaugeVec(base, keys)
+	g, err := b.gaugeVec(base, keys).GetMetricWithLabelValues(vals...)
+	if err != nil {
+		incrShapeCollision() // see observeCounter
+		return
+	}
 	if opAdd {
-		vec.WithLabelValues(vals...).Add(value)
+		g.Add(value)
 	} else {
-		vec.WithLabelValues(vals...).Set(value)
+		g.Set(value)
 	}
 }
 
@@ -208,7 +218,12 @@ func (b *promBridge) observeHistogram(name string, seconds float64) {
 		b.histogramNoLabels(base).Observe(seconds)
 		return
 	}
-	b.histogramVec(base, keys).WithLabelValues(vals...).Observe(seconds)
+	h, err := b.histogramVec(base, keys).GetMetricWithLabelValues(vals...)
+	if err != nil {
+		incrShapeCollision() // see observeCounter
+		return
+	}
+	h.Observe(seconds)
 }
 
 func (b *promBridge) bucketsFor(base string) []float64 {

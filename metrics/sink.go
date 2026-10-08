@@ -8,10 +8,23 @@ import (
 	"strings"
 )
 
+// labelSanitizer replaces the characters that delimit the Label syntax
+// (and the quote/newline that break the text exposition) with '_'.
+// Label values are often request-controlled (an MCP tool name, a route):
+// an unescaped ',' or '=' turned one value into extra label pairs, and the
+// Prometheus bridge then panicked on the label-count mismatch inside the
+// caller's goroutine, killing the process on a single request.
+var labelSanitizer = strings.NewReplacer(
+	",", "_", "=", "_", "{", "_", "}", "_", `"`, "_", "\n", "_", "\r", "_",
+)
+
 // Label builds a metric key with labels. Labels are alternating key-value pairs.
 // Label("requests", "method", "GET") returns "requests{method=GET}".
 // Label("rpc", "service", "auth", "method", "login") returns "rpc{service=auth,method=login}".
 // Returns name unchanged if no labels or odd number of label values.
+// Keys and values are sanitized: the delimiters , = { } plus " and line
+// breaks become '_', so the key always parses back to exactly len(kvs)/2
+// labels.
 func Label(name string, kvs ...string) string {
 	if len(kvs) == 0 || len(kvs)%2 != 0 {
 		return name
@@ -23,9 +36,9 @@ func Label(name string, kvs ...string) string {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		sb.WriteString(kvs[i])
+		sb.WriteString(labelSanitizer.Replace(kvs[i]))
 		sb.WriteByte('=')
-		sb.WriteString(kvs[i+1])
+		sb.WriteString(labelSanitizer.Replace(kvs[i+1]))
 	}
 	sb.WriteByte('}')
 	return sb.String()
