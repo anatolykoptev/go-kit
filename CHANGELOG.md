@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.97.18](https://github.com/anatolykoptev/go-kit/compare/v0.97.17...v0.97.18) (2026-10-10)
+
+
+### Added
+
+* **svcauth:** destination-scoped X-Internal-Secret transport ([#282](https://github.com/anatolykoptev/go-kit/issues/282)) ([001cdff](https://github.com/anatolykoptev/go-kit/commit/001cdff70dcb7a051c704e89f387487efdf458b9))
+
+
+### Fixed
+
+* **metrics:** sanitize Label delimiters; never panic on a rejected label set ([#284](https://github.com/anatolykoptev/go-kit/issues/284)) ([01c9bad](https://github.com/anatolykoptev/go-kit/commit/01c9bad3ec4d964b6f9cd5a32fda07db308e68aa))
+
 ## [0.97.17](https://github.com/anatolykoptev/go-kit/compare/v0.97.16...v0.97.17) (2026-10-03)
 
 
