@@ -74,8 +74,39 @@ func (r *TypstRenderer) compiler() func(context.Context, string, typstOutput) ([
 }
 
 // typstDocData is the template context injected into a theme preamble.
+// Title carries the ALREADY-ESCAPED typst string-literal form (see
+// typstStringLiteral) so that text/template substitution into {{.Title}}
+// produces inert content, not executable typst.
 type typstDocData struct {
 	Title string
+}
+
+// typstStringLiteral converts a raw string into a typst string-literal
+// expression (#"…") with backslash and double-quote escaped. This is the
+// complete escape grammar for a typst string literal — small and auditable,
+// unlike typst's markup grammar which is large and a missed character is
+// another injection bypass.
+//
+// The returned form is inert wherever typst interpolates it: after a
+// heading marker (= #"), inside content brackets ([#"]), or as a function
+// argument. A title containing #import, #set, or any other code-mode
+// directive renders as literal text inside the string, never as executable
+// typst.
+//
+// This closes the second typst injection vector: opts.Title was interpolated
+// into the .typ source unescaped at two sites (the title-block heading and
+// the preamble template), and typst's # opens code mode wherever it lands,
+// so a title like `#import "@preview/cetz:0.3.1"` was executable typst that
+// fully bypassed the RawTypstPassthrough body guard.
+func typstStringLiteral(s string) string {
+	// Escape \ first (otherwise the \\ we insert would be re-escaped by the
+	// " pass), then escape ". No other character needs escaping inside a
+	// typst string literal.
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+	)
+	return `#"` + r.Replace(s) + `"`
 }
 
 // pageSizeOverride returns a typst snippet that pins page width/height to
@@ -182,7 +213,7 @@ func (r *TypstRenderer) buildTypstSource(
 	override string,
 	omitTitle bool,
 ) (string, error) {
-	body, err := pandocConvert(ctx, content, inputFmt, opts.TOC)
+	body, err := pandocConvert(ctx, content, inputFmt, opts.TOC, opts.RawTypstPassthrough)
 	if err != nil {
 		return "", fmt.Errorf("typst: pandoc %s→typst: %w", inputFmt, err)
 	}
@@ -192,13 +223,13 @@ func (r *TypstRenderer) buildTypstSource(
 		return "", fmt.Errorf("typst: parse preamble template: %w", err)
 	}
 	var preambleBuf bytes.Buffer
-	if err := preambleTmpl.Execute(&preambleBuf, typstDocData{Title: opts.Title}); err != nil {
+	if err := preambleTmpl.Execute(&preambleBuf, typstDocData{Title: typstStringLiteral(opts.Title)}); err != nil {
 		return "", fmt.Errorf("typst: render preamble: %w", err)
 	}
 
 	var titleBlock string
 	if opts.Title != "" && !omitTitle {
-		titleBlock = "= " + opts.Title + "\n\n"
+		titleBlock = "= " + typstStringLiteral(opts.Title) + "\n\n"
 	}
 
 	return preambleBuf.String() + "\n" + override + titleBlock + body, nil
@@ -214,7 +245,20 @@ type typstOutput struct {
 // pandocConvert runs pandoc to convert content from inputFmt to typst markup.
 // When toc is true, --toc and --toc-depth=3 are appended so pandoc emits a
 // table-of-contents block at the top of the typst output.
-func pandocConvert(ctx context.Context, content, inputFmt string, toc bool) (string, error) {
+//
+// When rawTypstPassthrough is false (the secure default), pandoc's
+// raw_attribute extension is disabled for markdown input (-f
+// markdown-raw_attribute) so that {=typst} raw blocks are escaped into inert
+// code spans instead of passing through as executable typst. When true, the
+// extension stays enabled and raw blocks pass through verbatim — this is a
+// code-execution surface and must only be enabled for operator-controlled
+// input (see render.Options.RawTypstPassthrough).
+//
+// The html reader has no raw_attribute extension (confirmed with pandoc
+// 3.1.3: "The extension raw_attribute is not supported for html"), and html
+// <pre><code> blocks produce fenced typst code blocks (displayed, not
+// executed), so there is no passthrough hole to close for html.
+func pandocConvert(ctx context.Context, content, inputFmt string, toc, rawTypstPassthrough bool) (string, error) {
 	// Allowlist inputFmt before passing it to exec.Command. The gosec linter
 	// correctly flags shell-injection risk on user-controlled strings passed
 	// as CLI arguments; restricting to a known-safe set eliminates the risk.
@@ -233,7 +277,16 @@ func pandocConvert(ctx context.Context, content, inputFmt string, toc bool) (str
 	pCtx, cancel := context.WithTimeout(ctx, pandocTimeout)
 	defer cancel()
 
-	args := []string{"-f", inputFmt, "-t", "typst", "--wrap=none"}
+	// Build the -f argument. When raw passthrough is off (the secure default),
+	// disable pandoc's raw_attribute extension for markdown so {=typst} blocks
+	// are escaped rather than passed through as executable typst. The html
+	// reader has no raw_attribute extension, so no guard is needed for it.
+	fromFmt := inputFmt
+	if !rawTypstPassthrough && inputFmt == "markdown" {
+		fromFmt = "markdown-raw_attribute"
+	}
+
+	args := []string{"-f", fromFmt, "-t", "typst", "--wrap=none"}
 	if toc {
 		args = append(args, "--toc", "--toc-depth=3")
 	}
