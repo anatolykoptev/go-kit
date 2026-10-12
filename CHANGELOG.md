@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.19](https://github.com/anatolykoptev/go-kit/compare/v0.97.18...v0.97.19) (2026-10-12)
+
+
+### Added
+
+* **httputil:** TrustedProxyClientIP — peer-gated, rightmost-untrusted XFF ([#285](https://github.com/anatolykoptev/go-kit/issues/285)) ([b2e63e5](https://github.com/anatolykoptev/go-kit/commit/b2e63e58283f9811994fa7907a0d90007d784efa))
+
 ## [0.97.18](https://github.com/anatolykoptev/go-kit/compare/v0.97.17...v0.97.18) (2026-10-10)
 
 
