@@ -45,6 +45,9 @@ func TestTrustedProxyClientIP(t *testing.T) {
 		{"IPv4-mapped hop treated as trusted", "10.0.0.2:4000", "", []string{"1.2.3.4, ::ffff:10.1.1.1"}, "1.2.3.4"},
 		{"IPv4-mapped untrusted hop returned unmapped", "10.0.0.2:4000", "", []string{"::ffff:1.2.3.4"}, "1.2.3.4"},
 		{"bare-IP trusted entry", "192.168.1.1:80", "", []string{"1.2.3.4"}, "1.2.3.4"},
+		{"zoned IPv6 hop zone stripped", "[fd00::2]:4000", "", []string{"fe80::1%x"}, "fe80::1"},
+		{"untrusted IPv4-mapped peer unmapped", "[::ffff:203.0.113.9]:1", "", nil, "203.0.113.9"},
+		{"untrusted zoned peer zone stripped", "[fe80::1%eth0]:1", "", nil, "fe80::1"},
 		{"RemoteAddr without port", "10.0.0.2", "", []string{"1.2.3.4"}, "1.2.3.4"},
 	}
 	fn := httputil.TrustedProxyClientIP(mustProxies(t, trusted))
@@ -61,6 +64,15 @@ func TestTrustedProxyClientIP(t *testing.T) {
 				t.Errorf("TrustedProxyClientIP = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestTrustedProxyClientIP_UnparseablePeerVerbatim(t *testing.T) {
+	fn := httputil.TrustedProxyClientIP(mustProxies(t, "10.0.0.0/8"))
+	r := &http.Request{RemoteAddr: "@", Header: http.Header{}}
+	r.Header.Set("X-Forwarded-For", "1.2.3.4")
+	if got := fn(r); got != "@" {
+		t.Errorf("got %q, want verbatim \"@\"", got)
 	}
 }
 
@@ -83,7 +95,6 @@ func TestParseTrustedProxies(t *testing.T) {
 		{"bare v4 becomes /32", "192.168.1.1", []string{"192.168.1.1/32"}},
 		{"bare v6 becomes /128", "2001:db8::1", []string{"2001:db8::1/128"}},
 		{"spaces and empty entries skipped", " 10.0.0.0/8 , ,, 1.2.3.4 ,", []string{"10.0.0.0/8", "1.2.3.4/32"}},
-		{"empty string", "", nil},
 		{"mapped bare IP unmapped", "::ffff:10.0.0.1", []string{"10.0.0.1/32"}},
 		{"mapped CIDR unmapped", "::ffff:10.0.0.0/104", []string{"10.0.0.0/8"}},
 	}
@@ -107,6 +118,8 @@ func TestParseTrustedProxies(t *testing.T) {
 		{"garbage", "10.0.0.0/8,nope", "nope"},
 		{"bad mask", "10.0.0.0/99", "10.0.0.0/99"},
 		{"hostname", "proxy.local", "proxy.local"},
+		{"empty string", "", "no trusted proxies"},
+		{"only separators", " , ", "no trusted proxies"},
 	}
 	for _, tc := range bad {
 		t.Run("invalid "+tc.name, func(t *testing.T) {
