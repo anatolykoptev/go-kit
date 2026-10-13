@@ -77,14 +77,14 @@ func TestEntryPointSourceWiring(t *testing.T) {
 		t.Fatal("RenderImage never called the injected compile step — it bypassed r.compiler()")
 	}
 
-	if !strings.Contains(*pdfSrc, "= "+title) {
+	if !strings.Contains(*pdfSrc, `= #"`+title+`"`) {
 		t.Errorf("Render did not inject the title block — it is not assembling through pdfSource:\n%s", head(*pdfSrc))
 	}
 	if strings.Contains(*pdfSrc, "#set page(width:") {
 		t.Errorf("Render emitted a geometry override — it is assembling through imageSource:\n%s", head(*pdfSrc))
 	}
 
-	if strings.Contains(*imgSrc, "= "+title) {
+	if strings.Contains(*imgSrc, `= #"`+title+`"`) {
 		t.Errorf("RenderImage injected the title block on a theme declaring OmitsTitleBlockOnImage — it is assembling through pdfSource:\n%s", head(*imgSrc))
 	}
 	if !strings.Contains(*imgSrc, "#set page(width:") {
