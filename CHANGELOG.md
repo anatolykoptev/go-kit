@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.97.20](https://github.com/anatolykoptev/go-kit/compare/v0.97.19...v0.97.20) (2026-11-03)
+
+
+### Fixed
+
+* **deps:** move to Go 1.27.3 and update dependencies ([#293](https://github.com/anatolykoptev/go-kit/issues/293)) ([7723b80](https://github.com/anatolykoptev/go-kit/commit/7723b80f8fe60f56bb8d006869fa10ff8d0bf313))
+* **httputil:** close the gaps in the SSRF guard ([#292](https://github.com/anatolykoptev/go-kit/issues/292)) ([b7b184f](https://github.com/anatolykoptev/go-kit/commit/b7b184fad0af91efd2c97f3b5df0d8e8315292dd))
+* **tracing:** send traces to /v1/traces when the endpoint has no path ([#290](https://github.com/anatolykoptev/go-kit/issues/290)) ([99bb7ac](https://github.com/anatolykoptev/go-kit/commit/99bb7ac45d93646e3e1e542ab694cd94eb5f945e))
+
 ## [0.97.19](https://github.com/anatolykoptev/go-kit/compare/v0.97.18...v0.97.19) (2026-10-12)
 
 
