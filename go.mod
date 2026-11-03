@@ -1,6 +1,6 @@
 module github.com/anatolykoptev/go-kit
 
-go 1.26.3
+go 1.27.3
 
 require (
 	github.com/OvyFlash/telegram-bot-api v0.0.0-20260508182159-345479149526

@@ -131,8 +131,8 @@ jobs:
         run: make preflight
 
       # golangci-lint disabled on GH-hosted: golangci-lint-action@v6 ships
-      # v1.64.8 (built with go1.24), which can't load config for go1.26
-      # (go-kit's toolchain). Re-enable once golangci-lint ships a go1.26-
+      # v1.64.8 (built with go1.24), which can't load config for go1.27
+      # (go-kit's toolchain). Re-enable once golangci-lint ships a go1.27-
       # compatible release. Lint runs on the self-hosted runner via
       # ~/.local/bin/golangci-lint for now.
       # - name: golangci-lint
