@@ -40,7 +40,7 @@ cover:
 # excluded (intra-procedural false positives on defer wg.Done() in goroutines,
 # signal.Notify channels, and test spin loops).
 gostall:
-> @[ -x "$(GOSTALL)" ] || { echo "gostall not installed: go install github.com/erfanmomeniii/gostall/cmd/gostall@$(GOSTALL_VERSION)"; exit 1; }
+> @[ -x "$(GOSTALL)" ] || { echo "gostall not installed: run scripts/install-gostall.sh (gostall $(GOSTALL_VERSION) built against a current x/tools)"; exit 1; }
 > @echo "==> gostall"
 > @GOWORK=off "$(GOSTALL)" -lockorder -missingunlock -starvation ./...
 
