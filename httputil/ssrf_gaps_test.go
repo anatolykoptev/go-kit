@@ -376,3 +376,59 @@ func TestNewSSRFGuardedClient_RedirectToBlockedAddressRefused(t *testing.T) {
 		})
 	}
 }
+
+// Go ignores Dialer.Control when ControlContext is non-nil, so the guard must
+// live in ControlContext or a caller's ControlContext dialer skips it.
+func TestGuardedDial_ControlContextDialerStillGuarded(t *testing.T) {
+	t.Parallel()
+	errCaller := errors.New("caller control refused")
+	type mk func(d *net.Dialer) func(context.Context, string, string) (net.Conn, error)
+	paths := map[string]mk{
+		"GuardedDialContext": GuardedDialContext,
+		"WithDialer": func(d *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+			return dialerThroughClient(t, NewSSRFGuardedClient(nil, WithDialer(d)))
+		},
+	}
+	for name, build := range paths {
+		t.Run(name+"/hook returns nil", func(t *testing.T) {
+			t.Parallel()
+			var seen atomic.Int32
+			d := &net.Dialer{ControlContext: func(context.Context, string, string, syscall.RawConn) error {
+				seen.Add(1)
+				return nil
+			}}
+			_, err := build(d)(context.Background(), "tcp", "127.0.0.1:9")
+			if !errors.Is(err, ErrSSRFBlocked) {
+				t.Fatalf("dial 127.0.0.1 err = %v, want ErrSSRFBlocked (guard skipped)", err)
+			}
+			if seen.Load() != 1 {
+				t.Errorf("caller ControlContext ran %d times, want 1", seen.Load())
+			}
+		})
+		t.Run(name+"/hook returns error", func(t *testing.T) {
+			t.Parallel()
+			d := &net.Dialer{Timeout: 200 * time.Millisecond, ControlContext: func(context.Context, string, string, syscall.RawConn) error {
+				return errCaller
+			}}
+			_, err := build(d)(context.Background(), "tcp", "8.8.8.8:80")
+			if !errors.Is(err, errCaller) {
+				t.Fatalf("err = %v, want the caller's ControlContext error", err)
+			}
+		})
+		t.Run(name+"/both set: ControlContext wins, Control not run", func(t *testing.T) {
+			t.Parallel()
+			var ctrl, ctrlCtx atomic.Int32
+			d := &net.Dialer{
+				Control:        func(string, string, syscall.RawConn) error { ctrl.Add(1); return nil },
+				ControlContext: func(context.Context, string, string, syscall.RawConn) error { ctrlCtx.Add(1); return nil },
+			}
+			_, err := build(d)(context.Background(), "tcp", "127.0.0.1:9")
+			if !errors.Is(err, ErrSSRFBlocked) {
+				t.Fatalf("err = %v, want ErrSSRFBlocked", err)
+			}
+			if ctrlCtx.Load() != 1 || ctrl.Load() != 0 {
+				t.Errorf("ControlContext ran %d (want 1), Control ran %d (want 0)", ctrlCtx.Load(), ctrl.Load())
+			}
+		})
+	}
+}

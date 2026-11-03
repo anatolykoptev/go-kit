@@ -160,6 +160,15 @@ func isBlockedAddr(addr netip.Addr) bool {
 //
 // base == nil uses a Dialer with sane guarded-fetch defaults (10s connect
 // timeout, 30s keepalive).
+//
+// The guard is installed in the copy's ControlContext (Go ignores Control when
+// ControlContext is set), chained after the caller's ControlContext or, if
+// that is nil, their Control. A caller hook can refuse a connection but never
+// skip the check.
+//
+// This guards connections made by the returned dial function only. A
+// DialTLSContext or DialTLS on an http.Transport built around it bypasses this
+// check for HTTPS.
 func GuardedDialContext(base *net.Dialer) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return guardedDialContext(base, nil)
 }
@@ -182,9 +191,19 @@ func guardedDialContext(base *net.Dialer, res Resolver) func(ctx context.Context
 	default:
 		d = net.Dialer{Timeout: guardedDialTimeout, KeepAlive: guardedDialKeepAlive}
 	}
-	prevControl := d.Control
-	d.Control = func(network, address string, c syscall.RawConn) error {
-		if prevControl != nil {
+	// Go ignores Control when ControlContext is non-nil, so the guard always
+	// goes in ControlContext and Control is cleared on the copy. The caller's
+	// ControlContext is chained if set, otherwise their Control; if both are
+	// set Go would have used ControlContext, and so do we.
+	prevControl, prevControlCtx := d.Control, d.ControlContext
+	d.Control = nil
+	d.ControlContext = func(ctx context.Context, network, address string, c syscall.RawConn) error {
+		switch {
+		case prevControlCtx != nil:
+			if err := prevControlCtx(ctx, network, address, c); err != nil {
+				return err
+			}
+		case prevControl != nil:
 			if err := prevControl(network, address, c); err != nil {
 				return err
 			}
@@ -349,7 +368,8 @@ type ssrfConfig struct {
 type SSRFOption func(*ssrfConfig)
 
 // WithDialer sets the base net.Dialer the guarded transport connects with.
-// Its Control hook is kept and runs first; the SSRF check runs after it on the
+// Its ControlContext hook (or Control, when ControlContext is nil, as in
+// net.Dialer itself) is kept and runs first; the SSRF check runs after it on the
 // address actually being connected to, so a caller can add its own
 // connect-time restrictions (extra ranges, socket options) without losing the
 // guard. The dialer is copied, never mutated. Without this option the
@@ -389,6 +409,10 @@ func WithResolver(r Resolver) SSRFOption {
 //     the delegate's own, separate resolution), but the best guarantee
 //     available without reaching into a dial mechanism this package does
 //     not own.
+//
+// A DialTLSContext or DialTLS set on a supplied *http.Transport is kept by
+// Clone and bypasses the connect-time check for HTTPS; only the pre-request
+// CheckURL tier covers such connections.
 //
 // Options (WithDialer, WithResolver) extend the guard without weakening it. The
 // client's CheckRedirect is kept, and every redirect hop re-enters the guarded
