@@ -24,7 +24,47 @@ go get github.com/anatolykoptev/go-kit
 | [`rerank`](#rerank) | Cohere-compatible cross-encoder rerank HTTP client for embed-server / TEI / Cohere / Jina / Voyage / Mixedbread. Best-effort — any error returns input unchanged. | stdlib + prometheus/client_golang |
 | [`sparse`](#sparse) | SPLADE-shape HTTP client for learned-sparse embeddings — middleware stack mirrors embed/rerank (cache, circuit, retry, hooks, fallback). Pairs with dense embed/ for hybrid retrieval. | stdlib + prometheus/client_golang |
 
-All packages are independent — no internal cross-imports. Import only what you need.
+Import only what you need: each package is its own Go package, so the ones you do not import add nothing to your binary. A few packages build on others (for example `pgutil` wraps `retry`, `voice` uses `voice/stt`).
+
+### More packages
+
+These packages have no section below; the linked guide or the package documentation (`go doc`) is the reference.
+
+| Package | What |
+|---------|------|
+| [`admintable`](admintable) | SQL-injection-safe sort and filter builders for server-rendered admin list pages |
+| [`cli`](cli) | Thin cobra scaffold: root command with `--version` / `--config` and a subcommand helper |
+| [`embed`](doc/embed.md) | Text-embedding backends behind one interface |
+| [`httputil`](doc/httputil.md) | HTTP helpers: security headers, SSRF-guarded client, trusted-proxy client IP |
+| [`langdetect`](langdetect) | Language detection (84 languages) with confidence and reliability scores |
+| [`pacing`](pacing) | Request spacing: random jitter, per-key pacing, symmetric jitter for backoff |
+| [`pgutil`](doc/pgutil.md) | PostgreSQL connection helpers with retry and graceful degradation |
+| [`redirectmatch`](redirectmatch) | Storage-free, two-tier redirect matching |
+| [`render`](render) | Markdown and HTML to PDF and raster images |
+| [`score`](doc/score.md) | Confidence-bucket helpers for ranking output |
+| [`session`](doc/session.md) | Conversation memory for chat agents with memory, file and Redis stores |
+| [`svcauth`](svcauth) | Destination-scoped service-to-service credential for outbound requests |
+| [`telegram`](doc/telegram.md) | Telegram formatting, keyboards, FSM, broadcast and safe-logging helpers |
+| [`toolutil`](doc/toolutil.md) | Argument extraction helpers for MCP tool handlers |
+| [`tracing`](doc/tracing.md) | One-call OpenTelemetry bootstrap |
+| [`uploads`](doc/uploads.md) | Canonical filesystem layout for files a service produces |
+| [`voice`](voice) | Text-to-speech to ogg/opus, plus an OpenAI-compatible speech-to-text client in `voice/stt` |
+| [`watcher`](watcher) | Generic file-watcher adapter with a decoupled event type |
+
+## Status
+
+go-kit is pre-1.0 (current release series `v0.97.x`). release-please is configured so that a breaking change raises the minor version (`0.97` to `0.98`) while features and fixes raise only the patch version, so pin a version and read the changelog before moving the minor. Versions and the changelog are produced by release-please from Conventional Commit messages; see [CHANGELOG.md](CHANGELOG.md). The module requires Go 1.27.3 or newer.
+
+## Development
+
+```sh
+make test        # go test ./...  (DB-backed tests skip without Postgres)
+make test-db     # full suite against a throwaway Postgres 16 (needs Docker)
+make preflight   # the merge gate: gostall, gofmt, vet, build, make test-db
+make lint        # golangci-lint
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [docs/INDEX.md](docs/INDEX.md) for the full documentation index.
 
 ---
 
@@ -653,4 +693,4 @@ vecs, err := c.EmbedSparse(ctx, []string{"first text", "second text"})
 
 ## License
 
-Apache 2.0
+Apache-2.0, see [LICENSE](LICENSE).
