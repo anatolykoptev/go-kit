@@ -48,7 +48,7 @@ go-kit (stdlib + redis), go-mcpserver (mcp-go)
   ↑
 go-stealth, go-imagefy, go-enriche, go-engine (domain libs)
   ↑
-go-search, go-code, go-wp, go-job, go-startup, go-hully, go-nerv, gigiena-teksta
+go-search, go-code, go-wp, go-job, go-startup, go-nerv, gigiena-teksta
 ```
 
 ## Migration Strategy
@@ -84,7 +84,7 @@ Duplications better solved by importing existing domain libraries:
 | Feature | Why not go-kit | Where it belongs |
 |---------|----------------|------------------|
 | `BuildSourcesText`, `SearchResult` | Search-engine domain logic | go-engine |
-| `CleanHTML` | Web scraping logic | go-enriche |
+| `CleanHTML` | Web page extraction logic | go-enriche |
 | `UserAgentChrome` | Anti-bot/stealth | go-stealth |
 | TrackOperation with slog | Mixes metrics + logging | Not needed |
 

@@ -412,7 +412,7 @@ func (c *countingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error
 // opaque-RoundTripper tier refuses a blocked target WITHOUT ever calling the
 // delegate (call-count == 0 on block), and DOES call the delegate for an
 // allowed target — the pre-check-before-delegating contract for a
-// stealth/fingerprint-evasion client this package cannot dial-guard
+// stealth/fingerprint-masking client this package cannot dial-guard
 // directly.
 func TestNewSSRFGuardedClient_OpaqueTierPreChecksBeforeDelegating(t *testing.T) {
 	t.Parallel()
