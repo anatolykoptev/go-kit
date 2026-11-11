@@ -74,6 +74,8 @@ type Embedded struct {
 	mu          sync.Mutex
 	cachedBody  string
 	cachedMtime time.Time
+	cachedPath  string // env path cachedBody was read from
+	cachedSize  int64  // size of that file when it was read
 }
 
 // NewEmbedded creates an Embedded loader for a single named skill.
@@ -158,9 +160,10 @@ func (e *Embedded) resolveEnvBody(path string) (string, string) {
 	info, err := os.Stat(path) //nolint:gosec // G703: path from operator env; intentional
 	if err != nil {
 		slog.Debug("skills.Embedded: stat failed", "name", e.name, "path", path, "err", err) //nolint:gosec // G706: path is operator-controlled; not user input
-		// Return last-known-good cache if available, else embedded default.
+		// Return last-known-good cache if it came from this path, else
+		// embedded default.
 		e.fireEnvFallback("unreadable")
-		if e.cachedBody != "" {
+		if e.hasCacheFor(path) {
 			return e.cachedBody, "last_known_good"
 		}
 		return e.body, "embedded"
@@ -172,8 +175,11 @@ func (e *Embedded) resolveEnvBody(path string) (string, string) {
 		return e.body, "embedded"
 	}
 
+	// The cache key is (path, size, mtime): mtime alone cannot tell two
+	// different files apart when the operator repoints the env var, or a
+	// rewrite that preserved the timestamp.
 	mtime := info.ModTime()
-	if !e.cachedMtime.IsZero() && mtime.Equal(e.cachedMtime) && e.cachedBody != "" {
+	if e.hasCacheFor(path) && info.Size() == e.cachedSize && mtime.Equal(e.cachedMtime) {
 		return e.cachedBody, "cache_hit"
 	}
 
@@ -184,7 +190,7 @@ func (e *Embedded) resolveEnvBody(path string) (string, string) {
 		// to keep reason cardinality low. Both indicate the env path
 		// is currently inaccessible regardless of root cause.
 		e.fireEnvFallback("unreadable")
-		if e.cachedBody != "" {
+		if e.hasCacheFor(path) {
 			return e.cachedBody, "last_known_good"
 		}
 		return e.body, "embedded"
@@ -199,7 +205,15 @@ func (e *Embedded) resolveEnvBody(path string) (string, string) {
 
 	e.cachedBody = stripped
 	e.cachedMtime = mtime
+	e.cachedPath = path
+	e.cachedSize = info.Size()
 	return e.cachedBody, "env"
+}
+
+// hasCacheFor reports whether the cache holds a body read from path.
+// Caller holds e.mu.
+func (e *Embedded) hasCacheFor(path string) bool {
+	return e.cachedBody != "" && e.cachedPath == path && !e.cachedMtime.IsZero()
 }
 
 // Body returns the resolved skill body. Resolution order:
@@ -286,4 +300,6 @@ func (e *Embedded) ResetCache() {
 
 	e.cachedBody = ""
 	e.cachedMtime = time.Time{}
+	e.cachedPath = ""
+	e.cachedSize = 0
 }

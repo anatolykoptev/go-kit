@@ -440,24 +440,16 @@ func TestEmbedded_Observer_ReadFailWithCache_LastKnownGood(t *testing.T) {
 		t.Fatalf("first call: %q", body1)
 	}
 
-	// Now point env at a directory: stat succeeds, ReadFile fails,
-	// but cache is populated → last_known_good.
-	dir := t.TempDir()
-	setObsEnv(t, dir) // stat on dir succeeds; ReadFile(dir) → EISDIR
-
-	// Reset mtime cache so it doesn't return cache_hit (mtime will differ).
-	e.ResetCache()
-	// ResetCache clears cachedBody too — but we need the cache to be populated
-	// to test the last_known_good path after ReadFile failure. Re-call with the
-	// directory only works if cachedBody is non-empty. We must re-prime it.
-	// Strategy: do NOT call ResetCache. Instead rely on mtime mismatch.
-	// The dir's mtime != the file's cached mtime, so it will proceed to ReadFile.
-	// But we DID call ResetCache which cleared cachedBody.
-	// So instead: re-prime cache by pointing at the original file again, then
-	// redirect to the directory WITHOUT clearing cache.
-	setObsEnv(t, path)                    // prime cache
-	_ = e.Body()                          // populates cachedBody
-	setObsEnv(t, dir)                     // now point at directory
+	// Replace the file at the SAME path with a directory: stat succeeds,
+	// ReadFile fails (EISDIR), and the cache was populated from this very
+	// path → last_known_good. (A different path would not qualify: the cache
+	// is only trusted for the path it was read from.)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	e.cachedMtime = e.cachedMtime.Add(-1) // force mtime mismatch to skip cache_hit path
 	rec2 := &recorder{}
 	e.observer = rec2.observer() // fresh recorder
