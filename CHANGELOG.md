@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.22](https://github.com/anatolykoptev/go-kit/compare/v0.97.21...v0.97.22) (2026-11-11)
+
+
+### Fixed
+
+* **telegram:** entity-safe split, strict HTML detection, safe Markdown links ([#302](https://github.com/anatolykoptev/go-kit/issues/302)) ([b191f1a](https://github.com/anatolykoptev/go-kit/commit/b191f1a41e0a058bf690739c73a8ed29408e1af6))
+
 ## [0.97.21](https://github.com/anatolykoptev/go-kit/compare/v0.97.20...v0.97.21) (2026-11-11)
 
 
