@@ -32,10 +32,14 @@ const (
 	truncateSuffixLen = 3
 )
 
+// tagTGSpoiler is the Telegram spoiler tag name.
+const tagTGSpoiler = "tg-spoiler"
+
 // trackedTags is the set of Telegram-supported formatting tags.
 var trackedTags = map[string]bool{
 	"b": true, "i": true, "s": true, "u": true,
 	"a": true, "code": true, "pre": true, "blockquote": true,
+	"span": true, tagTGSpoiler: true, "tg-emoji": true,
 }
 
 // Precompiled regexes for CompactForTelegram.
@@ -241,9 +245,75 @@ func SplitMessage(text string, maxLen int) []string {
 	}
 
 	originalText := text
+	text = dropOversizedTags(text, maxLen)
 	rawChunks := splitRawChunks(text, maxLen)
 	result := fixChunkTags(rawChunks, maxLen)
 	return filterEmptyChunks(result, originalText)
+}
+
+// dropOversizedTags removes tracked opening tags longer than 3/4 of maxLen
+// (typically an <a> with a huge href), together with their matching closer,
+// keeping the enclosed text. Such a tag is reopened at the head of every
+// chunk it spans, so one that nearly fills a chunk leaves no room for
+// content and no legal split exists; losing the link target beats losing
+// text or emitting an over-limit chunk.
+func dropOversizedTags(text string, maxLen int) string {
+	limit := maxLen * 3 / 4
+	if limit < 1 || len(text) < limit {
+		return text
+	}
+	for from := 0; ; {
+		lt := strings.IndexByte(text[from:], '<')
+		if lt < 0 {
+			return text
+		}
+		lt += from
+		gt := strings.IndexByte(text[lt:], '>')
+		if gt < 0 {
+			return text
+		}
+		gt += lt
+		tag := text[lt : gt+1]
+		from = gt + 1
+		if len(tag) < htmlTagMinLen || tag[1] == '/' || strutil.UTF16Len(tag) <= limit {
+			continue
+		}
+		name := parseTagName(tag)
+		if !trackedTags[name] {
+			continue
+		}
+		rest := text[gt+1:]
+		if ci := matchingCloser(rest, name); ci >= 0 {
+			closeEnd := ci + len("</"+name+">")
+			rest = rest[:ci] + rest[closeEnd:]
+		}
+		text = text[:lt] + rest
+		from = lt
+	}
+}
+
+// matchingCloser returns the offset in s of the `</name>` closing an already
+// open `name`, counting nested same-name tags, or -1.
+func matchingCloser(s, name string) int {
+	depth := 0
+	for i := 0; i < len(s); {
+		lt := strings.IndexByte(s[i:], '<')
+		if lt < 0 {
+			return -1
+		}
+		i += lt
+		switch {
+		case strings.HasPrefix(s[i:], "</"+name+">"):
+			if depth == 0 {
+				return i
+			}
+			depth--
+		case strings.HasPrefix(s[i:], "<"+name+">"), strings.HasPrefix(s[i:], "<"+name+" "):
+			depth++
+		}
+		i++
+	}
+	return -1
 }
 
 // splitRawChunks splits text on newline boundaries respecting maxLen

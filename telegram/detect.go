@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -41,7 +42,7 @@ func fieldSet(names string) map[string]bool {
 // htmlTagNames is the whitelist of tags that route text to the HTML path.
 // Every name here is handled by SanitizeHTML (kept, renamed or flattened).
 var htmlTagNames = fieldSet("b strong i em u ins s strike del a code pre blockquote " +
-	"span p div br ul ol li tg-spoiler h1 h2 h3 h4 h5 h6")
+	"span p div br ul ol li tg-spoiler tg-emoji h1 h2 h3 h4 h5 h6")
 
 // htmlVoidTags never take a closing tag, so they do not count toward balance.
 var htmlVoidTags = fieldSet("br")
@@ -56,10 +57,48 @@ var reHTMLTagAt = regexp.MustCompile(
 	`^<(/?)([A-Za-z][A-Za-z0-9-]*)((?:\s+[A-Za-z][A-Za-z0-9_:-]*(?:\s*=\s*(?:"[^"<>]*"|'[^'<>]*'))?)*)\s*(/?)>`,
 )
 
+// htmlImplicitTags are closed implicitly by HTML (`<p>one<p>two`,
+// `<ul><li>a<li>b</ul>`), so they never need a matching closer.
+var htmlImplicitTags = fieldSet("p li")
+
 var (
 	reDetectFence  = regexp.MustCompile("(?s)```.*?```")
 	reDetectInline = regexp.MustCompile("`[^`\\n]+`")
 )
+
+// codeSpans returns the byte ranges of fenced and inline code in text, in
+// order. Their content is literal and never HTML.
+func codeSpans(text string) [][2]int {
+	var spans [][2]int
+	masked := []byte(text)
+	for _, loc := range reDetectFence.FindAllStringIndex(text, -1) {
+		spans = append(spans, [2]int{loc[0], loc[1]})
+		for i := loc[0]; i < loc[1]; i++ {
+			masked[i] = 'x'
+		}
+	}
+	for _, loc := range reDetectInline.FindAllStringIndex(string(masked), -1) {
+		spans = append(spans, [2]int{loc[0], loc[1]})
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	return spans
+}
+
+// maskCode returns text with every code span overwritten by 'x' (same byte
+// length, so offsets still line up with the original).
+func maskCode(text string) string {
+	spans := codeSpans(text)
+	if len(spans) == 0 {
+		return text
+	}
+	b := []byte(text)
+	for _, sp := range spans {
+		for i := sp[0]; i < sp[1]; i++ {
+			b[i] = 'x'
+		}
+	}
+	return string(b)
+}
 
 // isTagLikeStart reports whether text[i:] begins a tag-like token: `<`
 // followed by a letter or `/`. Comparisons (`a < b`, `x<5`, `<-`) are not.
@@ -71,59 +110,92 @@ func isTagLikeStart(text string, i int) bool {
 	return c == '/' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// applyHTMLTag validates one matched tag against the whitelist and updates
-// the open-tag depth. It reports false for a tag that disqualifies the text.
-func applyHTMLTag(m []string, depth map[string]int) bool {
+// htmlTok is one tag-like token found by htmlRoute.
+type htmlTok struct {
+	pos     int // byte offset of '<'
+	name    string
+	closing bool
+	bad     bool // not a whitelisted well-formed tag, or unbalanced
+}
+
+// validTag reports whether the matched tag is whitelisted and well-formed.
+func validTag(m []string) bool {
 	closing, name, attrs, selfClose := m[1] == "/", strings.ToLower(m[2]), m[3], m[4] == "/"
 	if !htmlTagNames[name] || (closing && (attrs != "" || selfClose)) {
 		return false
 	}
-	if attrs != "" && htmlNoAttrTags[name] {
-		return false
-	}
-	switch {
-	case htmlVoidTags[name] || selfClose:
-	case closing:
-		if depth[name]--; depth[name] < 0 {
-			return false
-		}
-	default:
-		depth[name]++
-	}
-	return true
+	return attrs == "" || !htmlNoAttrTags[name]
 }
 
-// looksLikeHTML reports whether text is made of well-formed, whitelisted
-// Telegram/HTML tags that are balanced. Code fences and inline code are
-// ignored (their `<` is literal). Any tag-like token that is not a
-// whitelisted well-formed tag, or an unbalanced tag, disqualifies the text:
-// it is then treated as Markdown/plain, whose escaping never drops text.
-func looksLikeHTML(text string) bool {
-	text = reDetectFence.ReplaceAllString(text, "")
-	text = reDetectInline.ReplaceAllString(text, "")
-
-	depth := map[string]int{}
-	seen := false
-	for i := 0; i < len(text); i++ {
-		if !isTagLikeStart(text, i) {
+// pairTags marks unbalanced tokens bad. A closer matches the nearest open
+// tag of the same name; p/li, void and self-closing tags need no partner.
+func pairTags(toks []htmlTok, selfClosed map[int]bool) {
+	var stack []int
+	for i := range toks {
+		t := &toks[i]
+		if t.bad || htmlVoidTags[t.name] || htmlImplicitTags[t.name] || selfClosed[i] {
 			continue
 		}
-		m := reHTMLTagAt.FindStringSubmatch(text[i:])
-		if m == nil || !applyHTMLTag(m, depth) {
-			return false
+		if !t.closing {
+			stack = append(stack, i)
+			continue
 		}
-		seen = true
+		matched := false
+		for k := len(stack) - 1; k >= 0; k-- {
+			if toks[stack[k]].name == t.name {
+				stack = append(stack[:k], stack[k+1:]...)
+				matched = true
+				break
+			}
+		}
+		t.bad = !matched
+	}
+	for _, i := range stack {
+		toks[i].bad = true
+	}
+}
+
+// htmlRoute decides whether text takes the HTML path. Tag-like tokens that
+// are not whitelisted, well-formed and balanced (`a<b`, `List<int>`,
+// `<script>`, a stray `</b>`) are made literal by rewriting their `<` to
+// `&lt;`; the returned string is the text to feed SanitizeHTML. ok is true
+// when at least one genuine tag remains. Code spans are never touched.
+func htmlRoute(text string) (escaped string, ok bool) {
+	masked := maskCode(text)
+	var toks []htmlTok
+	selfClosed := map[int]bool{}
+	for i := 0; i < len(masked); i++ {
+		if !isTagLikeStart(masked, i) {
+			continue
+		}
+		m := reHTMLTagAt.FindStringSubmatch(masked[i:])
+		if m == nil {
+			toks = append(toks, htmlTok{pos: i, bad: true})
+			continue
+		}
+		toks = append(toks, htmlTok{pos: i, name: strings.ToLower(m[2]), closing: m[1] == "/", bad: !validTag(m)})
+		if m[4] == "/" {
+			selfClosed[len(toks)-1] = true
+		}
 		i += len(m[0]) - 1
 	}
-	if !seen {
-		return false
-	}
-	for _, n := range depth {
-		if n != 0 {
-			return false
+	pairTags(toks, selfClosed)
+	var b strings.Builder
+	last := 0
+	for _, t := range toks {
+		if !t.bad {
+			ok = true
+			continue
 		}
+		b.WriteString(text[last:t.pos])
+		b.WriteString("&lt;")
+		last = t.pos + 1
 	}
-	return true
+	if !ok {
+		return text, false
+	}
+	b.WriteString(text[last:])
+	return b.String(), true
 }
 
 // reMDHeuristics holds individual markdown signals, each sufficient for detection.
@@ -142,13 +214,13 @@ var reMDHeuristics = []*regexp.Regexp{
 }
 
 // Detect heuristically identifies the markup format of text.
-// Returns FormatHTML only if the text consists of well-formed, whitelisted,
-// balanced HTML tags (see looksLikeHTML); text that merely contains `<b`,
-// `<script>` or `a<b` falls through to Markdown/plain so nothing is dropped.
+// Returns FormatHTML when the text contains at least one well-formed,
+// whitelisted, balanced HTML tag (see htmlRoute); text that merely contains
+// `<b`, `<script>` or `a<b` falls through to Markdown/plain.
 // Returns FormatMarkdown if Markdown patterns are found.
 // Returns FormatPlain otherwise.
 func Detect(text string) Format {
-	if looksLikeHTML(text) {
+	if _, ok := htmlRoute(text); ok {
 		return FormatHTML
 	}
 	for _, re := range reMDHeuristics {

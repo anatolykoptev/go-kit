@@ -68,12 +68,12 @@ func TestPrepareForTelegram(t *testing.T) {
 			wantContains: "<b>",
 		},
 		{
-			// A non-whitelisted tag (<script>) disqualifies the HTML route; the
-			// whole text is escaped literally instead of being cut at the tag.
-			name:         "HTML with script is escaped, not truncated",
+			// A non-whitelisted tag (<script>) is shown as escaped text instead
+			// of cutting the message; the genuine <b> keeps its formatting.
+			name:         "script is escaped next to surviving bold",
 			in:           "<b>safe</b><script>evil()</script>",
 			wantMode:     "HTML",
-			wantContains: "&lt;script&gt;evil()&lt;/script&gt;",
+			wantContains: "<b>safe</b>&lt;script&gt;evil()&lt;/script&gt;",
 		},
 		{
 			name:         "all modes return HTML parse mode",

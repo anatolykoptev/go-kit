@@ -62,6 +62,9 @@ var (
 // extracted first via placeholders to protect from transformation.
 // Calls RepairHTMLNesting at the end.
 func MarkdownToHTML(text string) string {
+	// NUL is the placeholder delimiter below; strip it (and invalid UTF-8) so
+	// input can neither forge a placeholder nor smuggle one into a URL.
+	text = SanitizeUTF8(text)
 	if text == "" {
 		return ""
 	}
@@ -401,7 +404,9 @@ func restoreLinks(text string, data linkMatch) string {
 	for i, link := range data.links {
 		placeholder := fmt.Sprintf("\x00LK%d\x00", i)
 		formatted := formatInline(EscapeHTML(link.label))
-		if !isSafeHref(link.url) {
+		// A URL still holding a code placeholder would have raw <code> markup
+		// restored into the href attribute; treat it as unsafe.
+		if !isSafeHref(link.url) || strings.ContainsRune(link.url, 0) {
 			text = strings.ReplaceAll(text, placeholder, formatted)
 			continue
 		}
