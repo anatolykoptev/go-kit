@@ -42,7 +42,8 @@ type pluginTier struct {
 // All entries are parsed at construction time (Body or Path → parseSkill).
 // Both bare ("foo") and namespaced ("plugin:foo") lookups are supported.
 // When multiple entries share the same (PluginName, SkillName), the first
-// wins and a slog.Warn is emitted listing duplicates.
+// valid one wins and a slog.Warn is emitted listing duplicates; an entry that
+// fails to parse is skipped without claiming the pair.
 func NewPluginTier(name string, entries []PluginEntry) Tier {
 	p := &pluginTier{
 		name:   name,
@@ -62,13 +63,15 @@ func NewPluginTier(name string, entries []PluginEntry) Tier {
 				"tier", name, "plugin", e.PluginName, "skill", e.SkillName)
 			continue
 		}
-		seen[dk] = true
 
 		rec, ok := parsePluginEntry(name, e)
 		if !ok {
 			// Entry had neither Body nor Path, or parsing yielded empty body.
+			// It must not reserve the (plugin, skill) pair: a valid later
+			// entry for the same pair is the one that should serve.
 			continue
 		}
+		seen[dk] = true
 
 		p.full[fullKey] = rec
 		p.order = append(p.order, rec)
