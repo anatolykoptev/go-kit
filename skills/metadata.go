@@ -2,10 +2,12 @@ package skills
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -125,8 +127,56 @@ func parseJSONMetadata(fm string) Metadata {
 		return Metadata{}
 	}
 	m := jsonToMetadata(jm)
+	addJSONExtra(&m, fm)
 	warnLongDescription(m.Description)
 	return m
+}
+
+// jsonKnownKeys is the set of top-level JSON keys jsonMetadata maps to typed
+// fields, derived from its struct tags so a field added there cannot be
+// forgotten here. encoding/json matches keys case-insensitively, so lookups
+// go through the lower-cased form.
+var jsonKnownKeys = func() map[string]bool {
+	known := make(map[string]bool)
+	t := reflect.TypeOf(jsonMetadata{})
+	for i := 0; i < t.NumField(); i++ {
+		if tag, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); tag != "" && tag != "-" {
+			known[strings.ToLower(tag)] = true
+		}
+	}
+	return known
+}()
+
+// addJSONExtra copies the unknown top-level keys of the JSON frontmatter fm
+// into m.Extra, as the YAML parser does. A string value is stored as is, null
+// as "" (like an empty YAML value); any other value (number, bool, array,
+// object) as its compact JSON text, so nothing is dropped. Entries from the nested `metadata` object (already in
+// m.Extra) win over a top-level key of the same name.
+func addJSONExtra(m *Metadata, fm string) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(fm), &raw); err != nil {
+		return
+	}
+	for key, val := range raw {
+		if jsonKnownKeys[strings.ToLower(key)] {
+			continue
+		}
+		if _, nested := m.Extra[key]; nested {
+			continue
+		}
+		var s string
+		if json.Unmarshal(val, &s) != nil {
+			var compact bytes.Buffer
+			if json.Compact(&compact, val) != nil {
+				continue
+			}
+			s = compact.String()
+		}
+		if m.Extra == nil {
+			m.Extra = make(map[string]string)
+		}
+		m.Extra[key] = s
+	}
 }
 
 // jsonToMetadata converts the JSON helper struct to Metadata.
