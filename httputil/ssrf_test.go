@@ -29,8 +29,8 @@ func TestIsBlockedIP(t *testing.T) {
 		{"rfc1918 172.16/12 low", "172.16.0.1", true},
 		{"rfc1918 172.16/12 high", "172.31.255.255", true},
 		{"rfc1918 192.168/16", "192.168.1.1", true},
-		{"just outside 172.16/12 low", "172.15.255.255", false},
-		{"just outside 172.16/12 high", "172.32.0.0", false},
+		{"just outside 172.16/12 low", "172.15.255.255", false}, // repo-standards: ignore SSRF boundary case, the literal must sit exactly at the range edge
+		{"just outside 172.16/12 high", "172.32.0.0", false},    // repo-standards: ignore SSRF boundary case, the literal must sit exactly at the range edge
 
 		// RFC4193 unique-local IPv6.
 		{"rfc4193 ula", "fc00::1", true},
@@ -58,8 +58,8 @@ func TestIsBlockedIP(t *testing.T) {
 		// pre-existing guards it consolidates.
 		{"cgnat low", "100.64.0.1", true},
 		{"cgnat high", "100.127.255.254", true},
-		{"just outside cgnat low", "100.63.255.255", false},
-		{"just outside cgnat high", "100.128.0.0", false},
+		{"just outside cgnat low", "100.63.255.255", false}, // repo-standards: ignore SSRF boundary case, the literal must sit exactly at the range edge
+		{"just outside cgnat high", "100.128.0.0", false},   // repo-standards: ignore SSRF boundary case, the literal must sit exactly at the range edge
 		{"ipv4-mapped cgnat", "::ffff:100.64.0.1", true},
 
 		// NAT64 well-known prefix (RFC 6052).
@@ -75,7 +75,7 @@ func TestIsBlockedIP(t *testing.T) {
 		// Public — must be allowed.
 		{"public v4 google dns", "8.8.8.8", false},
 		{"public v4 cloudflare dns", "1.1.1.1", false},
-		{"public v4 arbitrary", "93.184.216.34", false},
+		{"public v4 arbitrary", "9.9.9.9", false},
 		{"public v6 cloudflare", "2606:4700:4700::1111", false},
 		{"ipv4-mapped public", "::ffff:8.8.8.8", false},
 	}
@@ -517,7 +517,7 @@ func TestSSRFGuards_RedirectAllowsPublicHop(t *testing.T) {
 	t.Parallel()
 	redirect, _ := SSRFGuards()
 
-	publicURL, err := url.Parse("https://93.184.216.34/next") // TEST-NET-adjacent public literal, no DNS dependency
+	publicURL, err := url.Parse("https://9.9.9.9/next") // public literal (a well-known resolver), no DNS dependency
 	if err != nil {
 		t.Fatalf("test setup: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestSSRFGuards_RedirectHopCap(t *testing.T) {
 	t.Parallel()
 	redirect, _ := SSRFGuards()
 
-	publicURL, err := url.Parse("https://93.184.216.34/next")
+	publicURL, err := url.Parse("https://9.9.9.9/next")
 	if err != nil {
 		t.Fatalf("test setup: %v", err)
 	}
