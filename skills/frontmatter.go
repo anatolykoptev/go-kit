@@ -1,13 +1,10 @@
 package skills
 
 import (
-	"bufio"
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
 )
-
-const scannerBufSize = 1 << 20 // 1 MiB — prevents silent truncation of large skills
 
 // StripFrontmatter removes a leading YAML or JSON frontmatter block
 // and returns the body trimmed of leading whitespace (spaces, tabs,
@@ -20,7 +17,7 @@ const scannerBufSize = 1 << 20 // 1 MiB — prevents silent truncation of large 
 // start with '-' or '{'; once a fence is detected and parsing fails
 // (e.g. "---\r\n" with no closing fence), the returned string is the
 // CRLF-normalized form. NUL bytes inside the body are silently
-// stripped (bufio.Scanner stops at NUL otherwise).
+// stripped.
 func StripFrontmatter(content string) string {
 	_, body := ParseFrontmatter(content)
 	return body
@@ -47,21 +44,42 @@ func ParseFrontmatter(content string) (frontmatter, body string) {
 	return parseYAMLFrontmatter(normalized)
 }
 
+// nextLine splits the first line off s. The line excludes its "\n" and one
+// trailing "\r" (the same lines bufio.ScanLines yields); a final line without
+// a newline counts, an empty remainder does not (ok=false).
+//
+// Lines are split by hand instead of with bufio.Scanner on purpose: a
+// Scanner caps the line length and, once a line exceeds the cap, stops without
+// any signal the caller here could see, silently dropping the rest of the
+// skill. A string already in memory has no use for such a limit.
+func nextLine(s string) (line, rest string, ok bool) {
+	if s == "" {
+		return "", "", false
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		line, rest = s[:i], s[i+1:]
+	} else {
+		line = s
+	}
+	return strings.TrimSuffix(line, "\r"), rest, true
+}
+
 // parseYAMLFrontmatter handles "---\n...\n---\nbody" format.
 func parseYAMLFrontmatter(content string) (frontmatter, body string) {
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	scanner.Buffer(make([]byte, scannerBufSize), scannerBufSize)
-
 	// First line must be exactly "---".
-	if !scanner.Scan() || scanner.Text() != "---" {
+	line, rest, ok := nextLine(content)
+	if !ok || line != "---" {
 		return "", content
 	}
 
 	var fm strings.Builder
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		line, rest, ok = nextLine(rest)
+		if !ok {
+			break
+		}
 		if line == "---" {
-			return fm.String(), collectBody(scanner)
+			return fm.String(), collectBody(rest)
 		}
 		if fm.Len() > 0 {
 			fm.WriteByte('\n')
@@ -116,18 +134,24 @@ func parseJSONFrontmatter(content string) (frontmatter, body string) {
 	return fm, body
 }
 
-// collectBody drains scanner lines into a NUL-free body string with
-// leading whitespace (spaces, tabs, newlines) stripped per the spec.
-func collectBody(scanner *bufio.Scanner) string {
+// collectBody turns the text after the closing fence into a NUL-free body
+// string with leading whitespace (spaces, tabs, newlines) stripped per the
+// spec. Lines are re-joined with "\n" and a single trailing newline is dropped.
+func collectBody(rest string) string {
 	var bodyLines []string
-	for scanner.Scan() {
-		bodyLines = append(bodyLines, scanner.Text())
+	for {
+		line, next, ok := nextLine(rest)
+		if !ok {
+			break
+		}
+		bodyLines = append(bodyLines, line)
+		rest = next
 	}
 	return stripNUL(strings.TrimLeft(strings.Join(bodyLines, "\n"), " \t\n"))
 }
 
-// stripNUL removes NUL bytes from s. bufio.Scanner stops at NUL,
-// so skill bodies with embedded NULs must be sanitized.
+// stripNUL removes NUL bytes from s so skill bodies with embedded NULs are
+// sanitized before they reach a prompt.
 func stripNUL(s string) string {
 	if !strings.ContainsRune(s, 0) {
 		return s

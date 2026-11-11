@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -190,13 +189,14 @@ func jsonToMetadata(jm jsonMetadata) Metadata {
 
 func parseYAMLMetadata(fm string) Metadata {
 	m := Metadata{}
-	scanner := bufio.NewScanner(strings.NewReader(fm))
-	scanner.Buffer(make([]byte, scannerBufSize), scannerBufSize)
-
 	inMetadataBlock := false
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for rest := fm; ; {
+		line, next, ok := nextLine(rest)
+		if !ok {
+			break
+		}
+		rest = next
 		trimmed := strings.TrimSpace(line)
 		inMetadataBlock = processYAMLLine(&m, line, trimmed, inMetadataBlock)
 	}
