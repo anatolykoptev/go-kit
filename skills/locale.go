@@ -21,20 +21,44 @@ type bodyByInfoResolver interface {
 }
 
 // skillMatchesName reports whether a SkillInfo is a candidate for the given
-// lookup name. We match on:
+// lookup name. tierName is the name of the tier being walked. We match on:
 //  1. Metadata.Name (frontmatter name field) — primary: locale variants live
 //     in differently-named subdirs (e.g. "d10-extractor-ru") but declare
 //     the same frontmatter name ("d10-extractor").
 //  2. SkillInfo.Name (subdir / SkillName) — fallback: when frontmatter name
 //     is absent or identical to the subdir name (common for non-locale skills).
 //
+// A namespaced lookup name "plugin:skill" (the form PluginTier.Find accepts)
+// is matched the same way, but only against skills whose Source identifies
+// that plugin ("<tier>:<plugin>"): the part after the plugin prefix is
+// compared with Metadata.Name and SkillInfo.Name as above. Bare lookup names
+// keep matching every skill regardless of plugin.
+//
 // Matching on Metadata.Name first makes locale variants addressable by their
 // canonical name even when the subdir name includes a locale suffix.
-func skillMatchesName(info SkillInfo, name string) bool {
+func skillMatchesName(tierName string, info SkillInfo, name string) bool {
+	if plugin, skill, namespaced := strings.Cut(name, ":"); namespaced {
+		if sourcePlugin(tierName, info.Source) != plugin {
+			return false
+		}
+		name = skill
+	}
 	if info.Metadata.Name != "" && info.Metadata.Name == name {
 		return true
 	}
 	return info.Name == name
+}
+
+// sourcePlugin extracts the plugin name from a SkillInfo.Source of the form
+// "<tier>:<plugin>". It returns "" for sources without a plugin part.
+func sourcePlugin(tierName, source string) string {
+	if rest, ok := strings.CutPrefix(source, tierName+":"); ok {
+		return rest
+	}
+	if _, rest, ok := strings.Cut(source, ":"); ok {
+		return rest
+	}
+	return ""
 }
 
 // findInTierByLocale walks the tier collecting all skills whose name (by
@@ -61,7 +85,7 @@ func findInTierByLocale(t Tier, name, locale string) (SkillInfo, string, bool) {
 	)
 
 	t.Resolver.Walk(func(info SkillInfo) {
-		if !skillMatchesName(info, name) {
+		if !skillMatchesName(t.Name, info, name) {
 			return
 		}
 		if strings.EqualFold(info.Locale, locale) {
