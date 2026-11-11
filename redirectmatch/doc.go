@@ -14,7 +14,7 @@
 //  2. Ordered tier (first-match prefix / RE2 scan) — rules sorted by
 //     (Priority ASC, ID ASC). First match wins; no chaining.
 //
-// This is the source-of-truth specification, mirrored 1:1 by the piter-now
+// This is the source-of-truth specification, mirrored 1:1 by the site's
 // TypeScript resolver. testdata/golden.json is the cross-language contract:
 // every case in that file must pass in both Go and TypeScript.
 //

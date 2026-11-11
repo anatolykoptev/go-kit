@@ -287,7 +287,7 @@ func resolveChecked(ctx context.Context, res Resolver, host string) ([]net.IPAdd
 // post-resolution address, simulating exactly what net/http passes after DNS
 // lookup, without needing a real DNS rebind) so a caller wiring a bespoke
 // Control-hook-shaped seam on an opaque transport this package does not
-// itself dial (e.g. a stealth/fingerprint-evasion client's own dialer hook)
+// itself dial (e.g. a stealth/fingerprint-masking client's own dialer hook)
 // can reuse the identical policy GuardedDialContext uses internally, rather
 // than duplicating it. See SSRFGuards for the paired redirect-guard closure.
 func DenyBlockedAddress(network, address string) error {
@@ -401,7 +401,7 @@ func WithResolver(r Resolver) SSRFOption {
 //     wrapped with the pre-request CheckURL layer (wrapTransportTier) — see
 //     wrapTransportTier's doc for why a proxy-configured Transport needs
 //     both layers, not just the dial-time one.
-//   - any other http.RoundTripper (e.g. a stealth/fingerprint-evasion
+//   - any other http.RoundTripper (e.g. a stealth/fingerprint-masking
 //     client whose Transport performs its own dial via a bespoke backend,
 //     with no DialContext/net.Dialer hook exposed at all): wrapped with
 //     ONLY the pre-request CheckURL layer — the necessarily WEAKER
@@ -449,7 +449,7 @@ func NewSSRFGuardedClient(base *http.Client, opts ...SSRFOption) *http.Client {
 // composes with ANY RoundTripper implementation — including a dial-guarded
 // *http.Transport (see wrapTransportTier, which layers this on top of the
 // *http.Transport tier too, to cover the proxy case) — it never touches the
-// wrapped one's internal dial mechanics, so a stealth/fingerprint-evasion
+// wrapped one's internal dial mechanics, so a stealth/fingerprint-masking
 // implementation is untouched on the allow path.
 type guardedRoundTripper struct {
 	next     http.RoundTripper
@@ -547,7 +547,7 @@ const maxSSRFRedirectHops = 10
 // SSRFGuards returns the pair of stdlib-typed closures an opaque-transport
 // HTTP client (one whose Transport performs its own dial/redirect via a
 // bespoke backend this package cannot reach — e.g. a stealth/
-// fingerprint-evasion client) installs to close the SAME two gaps
+// fingerprint-masking client) installs to close the SAME two gaps
 // NewSSRFGuardedClient already closes for a plain *http.Transport-backed
 // client:
 //

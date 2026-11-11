@@ -1,5 +1,5 @@
 // Package redirectmatch_test runs cross-language contract tests from testdata/golden.json.
-// The golden file is the shared contract mirrored by the piter-now TypeScript resolver.
+// The golden file is the shared contract mirrored by the site's TypeScript resolver.
 package redirectmatch_test
 
 import (

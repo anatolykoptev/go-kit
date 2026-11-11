@@ -249,7 +249,7 @@ func TestCompileTypst_ErrBinaryNotFound(t *testing.T) {
 	// binary, so we call the lower-level resolver directly.
 	t.Setenv(resolveBinaryEnvTypst, "")
 	t.Setenv(legacyEnvTypst, "")
-	// PATH still has typst on the krolik box; skip if typst is present.
+	// PATH still has typst on the build server; skip if typst is present.
 	if _, err := exec.LookPath("typst"); err == nil {
 		t.Skip("typst is on PATH — cannot test missing-binary path on this host")
 	}
