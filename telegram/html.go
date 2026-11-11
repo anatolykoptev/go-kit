@@ -247,36 +247,119 @@ func SplitMessage(text string, maxLen int) []string {
 }
 
 // splitRawChunks splits text on newline boundaries respecting maxLen
-// (in UTF-16 code units), avoiding splits inside HTML tags and never
-// halving a surrogate pair. Guarantees forward progress: every iteration
-// consumes at least one whole rune, even when maxLen is too small to fit
-// the leading rune (in which case that rune is emitted exceeding maxLen).
+// (in UTF-16 code units), avoiding splits inside HTML tags or entities and
+// never halving a surrogate pair. Guarantees forward progress: every
+// iteration consumes at least one whole rune, even when maxLen is too small
+// to fit the leading rune (in which case that rune is emitted exceeding
+// maxLen).
+//
+// The per-chunk budget reserves room for the tag overhead fixChunkTags will
+// add (reopened tags carried from the previous chunk plus closers for tags
+// still open at the cut). Without the reservation, a chunk that filled
+// maxLen with raw text overflowed after repair and trimChunkToLimit
+// discarded the tail.
 func splitRawChunks(text string, maxLen int) []string {
 	var chunks []string
+	var carry []string
 	for len(text) > 0 {
-		if strutil.UTF16Len(text) <= maxLen {
+		prefix := strings.Join(carry, "")
+		prefixLen := strutil.UTF16Len(prefix)
+		if open := unclosedTags(prefix + text); prefixLen+strutil.UTF16Len(text)+strutil.UTF16Len(buildClosers(open)) <= maxLen {
 			chunks = append(chunks, text)
 			break
 		}
-		byteOff := strutil.UTF16ByteCut(text, maxLen)
-		// Forward-progress guarantee: when the leading rune's UTF-16 unit
-		// width exceeds maxLen (e.g. maxLen==1, leading non-BMP emoji = 2
-		// units), UTF16ByteCut returns 0 and the loop would never advance.
-		// Emit the first rune as its own chunk, exceeding maxLen — the
-		// only alternative is to hang or drop it. See SplitMessage's doc
-		// comment (Unsatisfiable budget).
-		if byteOff == 0 {
-			_, byteOff = utf8.DecodeRuneInString(text)
+		budget := maxLen - prefixLen
+		if budget < 1 {
+			budget = maxLen // prefix alone fills the chunk; legacy path, trimChunkToLimit handles it
 		}
-		splitAt := strings.LastIndex(text[:byteOff], "\n")
-		if splitAt <= 0 {
-			splitAt = byteOff
+		var (
+			splitAt int
+			chunk   string
+			open    []string
+		)
+		const maxAttempts = 30
+		for range maxAttempts {
+			splitAt = pickSplit(text, budget)
+			chunk = strings.TrimRight(text[:splitAt], "\n")
+			open = unclosedTags(prefix + chunk)
+			over := prefixLen + strutil.UTF16Len(chunk) + strutil.UTF16Len(buildClosers(open)) - maxLen
+			if over <= 0 || budget <= 1 {
+				break
+			}
+			budget -= over
+			if budget < 1 {
+				budget = 1
+			}
 		}
-		splitAt = avoidTagSplit(text, splitAt)
-		chunks = append(chunks, strings.TrimRight(text[:splitAt], "\n"))
+		chunks = append(chunks, chunk)
+		carry = open
 		text = strings.TrimLeft(text[splitAt:], "\n")
 	}
 	return chunks
+}
+
+// pickSplit returns the byte offset at which to cut text so the head fits in
+// budget UTF-16 units, preferring a newline and never cutting inside an HTML
+// tag, an HTML entity or a surrogate pair. Always returns > 0 for non-empty
+// text.
+func pickSplit(text string, budget int) int {
+	byteOff := strutil.UTF16ByteCut(text, budget)
+	// Forward-progress guarantee: when the leading rune's UTF-16 unit
+	// width exceeds budget (e.g. budget==1, leading non-BMP emoji = 2
+	// units), UTF16ByteCut returns 0. Emit the first rune on its own,
+	// exceeding the budget — the only alternative is to hang or drop it.
+	// See SplitMessage's doc comment (Unsatisfiable budget).
+	if byteOff == 0 {
+		_, byteOff = utf8.DecodeRuneInString(text)
+	}
+	splitAt := strings.LastIndex(text[:byteOff], "\n")
+	if splitAt <= 0 {
+		splitAt = byteOff
+	}
+	// Tag and entity adjustments can each expose the other (an entity inside
+	// an attribute value, a tag opening right before an entity); iterate to
+	// a fixed point. Both only ever move splitAt, and the loop is bounded.
+	for range 4 {
+		next := avoidEntitySplit(text, avoidTagSplit(text, splitAt))
+		if next == splitAt {
+			break
+		}
+		splitAt = next
+	}
+	return splitAt
+}
+
+// maxEntityLen bounds how far back avoidEntitySplit looks for an `&`.
+const maxEntityLen = 40
+
+// reEntityAt matches a complete HTML entity (named, decimal or hex) at the
+// start of its input.
+var reEntityAt = regexp.MustCompile(`^&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);`)
+
+// avoidEntitySplit moves splitAt back to before the `&` when the cut would
+// fall between `&` and the `;` that closes an entity, which Telegram rejects
+// with "can't parse entities". A `&` that does not start a complete entity
+// is left alone.
+func avoidEntitySplit(text string, splitAt int) int {
+	if splitAt <= 0 || splitAt >= len(text) {
+		return splitAt
+	}
+	lo := splitAt - maxEntityLen
+	if lo < 0 {
+		lo = 0
+	}
+	amp := strings.LastIndexByte(text[lo:splitAt], '&')
+	if amp < 0 {
+		return splitAt
+	}
+	amp += lo
+	if amp == 0 {
+		return splitAt // nothing before it to move to
+	}
+	if m := reEntityAt.FindString(text[amp:]); m != "" && amp+len(m) > splitAt {
+		return amp
+	}
+	return splitAt
 }
 
 // avoidTagSplit adjusts splitAt so it doesn't fall inside an HTML tag.
@@ -380,6 +463,9 @@ func trimChunkToLimit(chunk string, maxLen int) string {
 		if lastOpen >= 0 && lastOpen > lastClose {
 			cut = cut[:lastOpen]
 		}
+
+		// Likewise never leave half an entity at the cut.
+		cut = cut[:avoidEntitySplit(chunk, len(cut))]
 
 		repaired := RepairHTMLNesting(cut)
 		if repaired == "" {
