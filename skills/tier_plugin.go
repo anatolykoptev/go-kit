@@ -35,6 +35,7 @@ type pluginTier struct {
 	bare   map[string]pluginRecord // bare name → first-seen entry
 	full   map[string]pluginRecord // "plugin:skill" → entry
 	byInfo map[string]pluginRecord // "tierName:pluginName:skillName" → entry (for ResolveByInfo)
+	order  []pluginRecord          // accepted entries in input order (Walk order)
 }
 
 // NewPluginTier creates a tier from a slice of pre-resolved entries.
@@ -70,6 +71,7 @@ func NewPluginTier(name string, entries []PluginEntry) Tier {
 		}
 
 		p.full[fullKey] = rec
+		p.order = append(p.order, rec)
 		// byInfo key: "<tierName>:<pluginName>:<skillName>" mirrors the Source
 		// field ("tierName:pluginName") plus the skill name — uniquely identifies
 		// each record for ResolveByInfo without re-parsing Source.
@@ -176,8 +178,12 @@ func (p *pluginTier) ResolveByInfo(info SkillInfo) (string, bool) {
 	return rec.body, true
 }
 
+// Walk yields every accepted entry in the order NewPluginTier received them.
+// The order is part of the contract: Catalog.List keeps the first entry per
+// bare name, and bare Find resolves to the first entry too, so a summary and
+// a Load agree on which plugin's skill a duplicated name refers to.
 func (p *pluginTier) Walk(yield func(SkillInfo)) {
-	for _, rec := range p.full {
+	for _, rec := range p.order {
 		yield(rec.info)
 	}
 }
