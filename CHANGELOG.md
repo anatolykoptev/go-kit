@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.97.21](https://github.com/anatolykoptev/go-kit/compare/v0.97.20...v0.97.21) (2026-11-11)
+
+
+### Added
+
+* **skills:** add the skills package (moved from skillkit) ([#300](https://github.com/anatolykoptev/go-kit/issues/300)) ([665f66c](https://github.com/anatolykoptev/go-kit/commit/665f66c910c20a7e4b53581b5a16fd868cf4add0))
+
+
+### Documentation
+
+* bring repository documents up to the repo-standards set ([#297](https://github.com/anatolykoptev/go-kit/issues/297)) ([18c5c93](https://github.com/anatolykoptev/go-kit/commit/18c5c93c98cb97811fb93169363e14415794d36d))
+
 ## [0.97.20](https://github.com/anatolykoptev/go-kit/compare/v0.97.19...v0.97.20) (2026-11-03)
 
 
