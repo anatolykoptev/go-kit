@@ -13,3 +13,4 @@
 | [design](design.md) | go-kit Design Rationale |
 | [CONTRIBUTING](../CONTRIBUTING.md) | Contributing to go-kit |
 | [doc/](../doc/) | Per-package guides (one Markdown file per package) |
+| [skills](../doc/skills.md) | SKILL.md loader for the agentskills.io standard |
