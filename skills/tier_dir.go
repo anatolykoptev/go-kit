@@ -57,7 +57,17 @@ func NewDirTier(name, dir string, opts ...DirTierOption) Tier {
 	return Tier{Name: name, Resolver: d}
 }
 
+// Find loads the skill called name. name must satisfy the agentskills.io name
+// rule (ValidateName): that rules out empty names, ".", "..", path
+// separators and absolute paths before any path is built, so a lookup can
+// never address anything but a direct child of the tier root. loadFile
+// re-checks containment on the resolved path as defence in depth.
 func (d *dirTier) Find(name string) (SkillInfo, string, bool) {
+	if err := ValidateName(name, ""); err != nil {
+		slog.Warn("skills.DirTier: invalid skill name, skipping",
+			"tier", d.name, "name", name, "err", err)
+		return SkillInfo{}, "", false
+	}
 	skillDir := filepath.Join(d.dir, name)
 	skillFile := filepath.Join(skillDir, d.skillFilename)
 
@@ -81,24 +91,16 @@ func (d *dirTier) Find(name string) (SkillInfo, string, bool) {
 
 // loadFile reads, validates, and (optionally) caches the contents of skillFile.
 func (d *dirTier) loadFile(skillFile string) (SkillInfo, string, bool) {
-	// Symlink traversal guard on the SKILL.md itself.
-	lfi, err := os.Lstat(skillFile)
-	if err != nil {
+	// A missing file is the ordinary "not a skill dir" case: stay quiet.
+	if _, err := os.Lstat(skillFile); err != nil {
 		return SkillInfo{}, "", false
 	}
-	if lfi.Mode()&os.ModeSymlink != 0 {
-		resolved, resolveErr := filepath.EvalSymlinks(skillFile)
-		if resolveErr != nil {
-			slog.Warn("skills.DirTier: cannot resolve symlink, skipping",
-				"path", skillFile, "err", resolveErr)
-			return SkillInfo{}, "", false
-		}
-		rel, relErr := filepath.Rel(d.dir, resolved)
-		if relErr != nil || strings.HasPrefix(rel, "..") {
-			slog.Warn("skills.DirTier: symlink escapes tier root, skipping",
-				"path", skillFile, "resolved", resolved)
-			return SkillInfo{}, "", false
-		}
+	// Containment guard: whatever the path looks like, the file it resolves
+	// to (symlinks followed, on both sides) must live inside the tier root.
+	if !d.insideRoot(skillFile) {
+		slog.Warn("skills.DirTier: skill file resolves outside tier root, skipping",
+			"path", skillFile)
+		return SkillInfo{}, "", false
 	}
 
 	if d.useMtimeCache {
@@ -137,6 +139,28 @@ func (d *dirTier) loadFile(skillFile string) (SkillInfo, string, bool) {
 	}
 
 	return si, body, true
+}
+
+// insideRoot reports whether path, once symlinks are resolved on both the
+// path and the tier root, is strictly inside the root. Resolving the root
+// matters: a root reached through a symlink (or a symlinked parent such as
+// /tmp on macOS) would otherwise never be a prefix of a resolved path.
+func (d *dirTier) insideRoot(path string) bool {
+	root, err := filepath.EvalSymlinks(d.dir)
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == "." || filepath.IsAbs(rel) {
+		return false
+	}
+	// ".." as a whole path element only: a directory legitimately named
+	// "..data" must not be mistaken for an escape.
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // cacheGet returns (info, body, true) when the cache has a fresh entry.
