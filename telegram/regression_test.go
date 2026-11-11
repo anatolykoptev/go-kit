@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"html"
+	"math/rand"
 	"regexp"
 	"strings"
 	"testing"
@@ -431,5 +432,98 @@ func TestTrimChunkToLimit_NeverLeavesHalfEntity(t *testing.T) {
 	}
 	if strutil.UTF16Len(got) > 4096 {
 		t.Errorf("over limit: %d", strutil.UTF16Len(got))
+	}
+}
+
+func TestPrepareForTelegram_OverlappingBackticksDoNotPanic(t *testing.T) {
+	// An unpaired backtick before a fence and another after it used to form
+	// an inline span containing the whole fence; the overlap made
+	// protectCode slice backwards.
+	in := "<b>x</b> ` a ```code``` b `"
+	out, _ := PrepareForTelegram(in)
+	for _, want := range []string{"<b>x</b>", `<pre><code class="language-code"></code></pre>`, " a ", " b "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q: %q", want, out)
+		}
+	}
+	spans := codeSpans(in)
+	for i := 1; i < len(spans); i++ {
+		if spans[i][0] < spans[i-1][1] {
+			t.Errorf("overlapping spans: %v", spans)
+		}
+	}
+}
+
+func TestPrepareForTelegram_FuzzNoPanicNoSplitTags(t *testing.T) {
+	parts := []string{"`", "```", "<b>", "</b>", "<code>", "</code>", "<pre>", "</pre>", "text", " ", "\n",
+		"<a href=\"x\">", "</a>", "<", "&", "<!--", "<?", "a<b", "\x00", "**", "[l](https://e.com)"}
+	rng := rand.New(rand.NewSource(1))
+	for n := 0; n < 20000; n++ {
+		var b strings.Builder
+		for k := rng.Intn(12) + 1; k > 0; k-- {
+			b.WriteString(parts[rng.Intn(len(parts))])
+		}
+		in := b.String()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic on %q: %v", in, r)
+				}
+			}()
+			out, _ := PrepareForTelegram(in)
+			SplitMessage(out, 40)
+		}()
+	}
+}
+
+func TestPrepareForTelegram_BackticksInsideTagsAreNotCode(t *testing.T) {
+	in := "<a href=\"`\"> w1 middle words </a> <a href=\"x`y`z\">w2</a>"
+	out, _ := PrepareForTelegram(in)
+	for _, want := range []string{"w1", "middle words", "w2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text %q swallowed by a backtick pair across tags: %q", want, out)
+		}
+	}
+	if spans := codeSpans(in); len(spans) != 0 {
+		t.Errorf("backticks in attributes must not form code spans: %v", spans)
+	}
+}
+
+func TestPrepareForTelegram_CommentsAndPIsDoNotDropText(t *testing.T) {
+	for name, in := range map[string]string{
+		"comment": "<b>x</b> before <!-- never closed tail text",
+		"pi":      "<b>x</b> before <?php never closed tail text",
+		"cdata":   "<b>x</b> before <![CDATA[ never closed tail text",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, _ := PrepareForTelegram(in)
+			for _, want := range []string{"<b>x</b>", "before", "tail text"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("missing %q: %q", want, out)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareForTelegram_CodeInsideCodeElementStaysLiteral(t *testing.T) {
+	for in, want := range map[string]string{
+		"<code>`a`</code>":                "<code>`a`</code>",
+		"<pre>x `a<b` y</pre>":            "<pre>x `a&lt;b` y</pre>",
+		"<b>x</b> <code>`a`</code> `c<d`": "<code>`a`</code> <code>c&lt;d</code>",
+	} {
+		out, _ := PrepareForTelegram(in)
+		if !strings.Contains(out, want) || strings.Contains(out, "<code><code>") {
+			t.Errorf("PrepareForTelegram(%q) = %q, want it to contain %q", in, out, want)
+		}
+	}
+}
+
+func TestPrepareForTelegram_StripsNULOnEveryRoute(t *testing.T) {
+	for _, in := range []string{"plain\x00text", "**bo\x00ld** x", "<b>ht\x00ml</b>"} {
+		out, _ := PrepareForTelegram(in)
+		if strings.ContainsRune(out, 0) {
+			t.Errorf("NUL survived for %q: %q", in, out)
+		}
 	}
 }

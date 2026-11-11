@@ -19,6 +19,7 @@ import (
 //   - Empty input: ("", "HTML")
 func PrepareForTelegram(text string) (out string, parseMode string) {
 	const mode = "HTML"
+	text = SanitizeUTF8(text)
 	if text == "" {
 		return "", mode
 	}
@@ -55,16 +56,25 @@ func protectCode(text string) (string, func(string) string) {
 	for strings.Contains(text, open) {
 		open += "\uE000"
 	}
+	nested := spansInCodeElement(text, spans)
 	var b strings.Builder
 	var htmlRepl, attrRepl []string
 	last := 0
 	for i, sp := range spans {
+		if sp[0] < last {
+			continue // defensive: overlapping span
+		}
 		src := text[sp[0]:sp[1]]
 		ph := open + strconv.Itoa(i) + "\uE001"
 		b.WriteString(text[last:sp[0]])
 		b.WriteString(ph)
 		last = sp[1]
-		htmlRepl = append(htmlRepl, ph, codeSpanHTML(src))
+		if nested[i] {
+			// Already inside a <code>/<pre> element: keep the span literal.
+			htmlRepl = append(htmlRepl, ph, EscapeHTML(src))
+		} else {
+			htmlRepl = append(htmlRepl, ph, codeSpanHTML(src))
+		}
 		attrRepl = append(attrRepl, ph, html.EscapeString(src))
 	}
 	b.WriteString(text[last:])
@@ -86,4 +96,33 @@ func codeSpanHTML(src string) string {
 		}
 	}
 	return "<code>" + EscapeHTML(strings.Trim(src, "`")) + "</code>"
+}
+
+var reCodeElemTag = regexp.MustCompile(`(?i)<(/?)(?:code|pre)(?:\s[^<>]*)?>`)
+
+// spansInCodeElement reports, per span, whether it sits inside an existing
+// <code>/<pre> element of text (tags inside spans are literal and ignored).
+func spansInCodeElement(text string, spans [][2]int) []bool {
+	nested := make([]bool, len(spans))
+	depth, si := 0, 0
+	for _, loc := range reCodeElemTag.FindAllStringSubmatchIndex(text, -1) {
+		for si < len(spans) && spans[si][0] < loc[0] {
+			nested[si] = depth > 0
+			si++
+		}
+		if si > 0 && loc[0] < spans[si-1][1] {
+			continue // the tag is inside a code span
+		}
+		if loc[3] > loc[2] { // closing tag
+			if depth > 0 {
+				depth--
+			}
+		} else {
+			depth++
+		}
+	}
+	for ; si < len(spans); si++ {
+		nested[si] = depth > 0
+	}
+	return nested
 }

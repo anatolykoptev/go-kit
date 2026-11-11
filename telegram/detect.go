@@ -66,22 +66,65 @@ var (
 	reDetectInline = regexp.MustCompile("`[^`\\n]+`")
 )
 
-// codeSpans returns the byte ranges of fenced and inline code in text, in
-// order. Their content is literal and never HTML.
+// maskTagBackticks returns text with every backtick that sits inside a
+// well-formed tag (`<a href="`">`) overwritten by 'x', so it can never act as
+// a code delimiter. Offsets are preserved.
+func maskTagBackticks(text string) string {
+	if !strings.Contains(text, "`") {
+		return text
+	}
+	var b []byte
+	for i := 0; i < len(text); i++ {
+		if !isTagLikeStart(text, i) {
+			continue
+		}
+		tag := reHTMLTagAt.FindString(text[i:])
+		if tag == "" {
+			continue
+		}
+		if strings.Contains(tag, "`") {
+			if b == nil {
+				b = []byte(text)
+			}
+			for k := i; k < i+len(tag); k++ {
+				if b[k] == '`' {
+					b[k] = 'x'
+				}
+			}
+		}
+		i += len(tag) - 1
+	}
+	if b == nil {
+		return text
+	}
+	return string(b)
+}
+
+// codeSpans returns the non-overlapping byte ranges of fenced and inline
+// code in text, in order. Their content is literal and never HTML. Backticks
+// inside tags are not delimiters, and an inline span never crosses a fence.
 func codeSpans(text string) [][2]int {
+	scan := maskTagBackticks(text)
 	var spans [][2]int
-	masked := []byte(text)
-	for _, loc := range reDetectFence.FindAllStringIndex(text, -1) {
+	masked := []byte(scan)
+	for _, loc := range reDetectFence.FindAllStringIndex(scan, -1) {
 		spans = append(spans, [2]int{loc[0], loc[1]})
 		for i := loc[0]; i < loc[1]; i++ {
-			masked[i] = 'x'
+			masked[i] = '\n' // inline spans cannot contain a newline
 		}
 	}
 	for _, loc := range reDetectInline.FindAllStringIndex(string(masked), -1) {
 		spans = append(spans, [2]int{loc[0], loc[1]})
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
-	return spans
+	out := spans[:0]
+	for _, sp := range spans {
+		if len(out) > 0 && sp[0] < out[len(out)-1][1] {
+			continue // defensive: callers rely on disjoint, ordered spans
+		}
+		out = append(out, sp)
+	}
+	return out
 }
 
 // maskCode returns text with every code span overwritten by 'x' (same byte
@@ -101,13 +144,14 @@ func maskCode(text string) string {
 }
 
 // isTagLikeStart reports whether text[i:] begins a tag-like token: `<`
-// followed by a letter or `/`. Comparisons (`a < b`, `x<5`, `<-`) are not.
+// followed by a letter, `/`, `!` or `?` (comments, CDATA, processing
+// instructions). Comparisons (`a < b`, `x<5`, `<-`) are not.
 func isTagLikeStart(text string, i int) bool {
 	if text[i] != '<' || i+1 >= len(text) {
 		return false
 	}
 	c := text[i+1]
-	return c == '/' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	return c == '/' || c == '!' || c == '?' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // htmlTok is one tag-like token found by htmlRoute.
