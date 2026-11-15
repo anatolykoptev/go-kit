@@ -133,3 +133,6 @@ func testDB(t *testing.T) *pgxpool.Pool {
 - A helper that creates scratch databases must name them `*_test`, otherwise
   the next guard call on that server refuses it.
 - `dbtest.Check(ctx, dsn)` is the error-returning form for `TestMain`.
+- The guard checks database NAMES, not contents: a server whose databases are
+  all named `*_test` but hold real data passes. Multi-host DSNs and servers
+  whose catalog does not list `postgres` are refused.

@@ -41,9 +41,8 @@ func TestCheck_RefusesServerWithExtraDatabase(t *testing.T) {
 
 func TestCheck_AcceptsEphemeralServer(t *testing.T) {
 	for name, dbs := range map[string][]string{
-		"only maintenance":  {"postgres"},
-		"test databases":    {"postgres", "app_test", "scratch_123_test"},
-		"no postgres in db": {"app_test"},
+		"only maintenance": {"postgres"},
+		"test databases":   {"postgres", "app_test", "scratch_123_test"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := check(context.Background(), testDSN, fakeCatalog(dbs...)); err != nil {
@@ -71,6 +70,30 @@ func TestCheck_FailsClosedWhenServerCannotBeInspected(t *testing.T) {
 	err := check(context.Background(), testDSN, list)
 	if err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("want fail-closed error wrapping the cause, got %v", err)
+	}
+}
+
+func TestCheck_RefusesUntrustworthyCatalog(t *testing.T) {
+	for name, dbs := range map[string][]string{
+		"empty":             {},
+		"no maintenance db": {"app_test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := check(context.Background(), testDSN, fakeCatalog(dbs...)); err == nil {
+				t.Fatal("catalog without the maintenance database accepted")
+			}
+		})
+	}
+}
+
+func TestCheck_RefusesMultiHostDSN(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://u:pw@a.example:5432,b.example:5432/app_test",
+		"host=a.example,b.example user=u dbname=app_test",
+	} {
+		if err := check(context.Background(), dsn, neverListed(t)); err == nil || !strings.Contains(err.Error(), "multi-host") {
+			t.Errorf("multi-host DSN %q: want multi-host refusal, got %v", dsn, err)
+		}
 	}
 }
 
@@ -179,5 +202,52 @@ func TestListDatabases_Live(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("maintenance database missing from %v", dbs)
+	}
+}
+
+// publicTB lets the public MustBeScratch run against a fake: embedding the
+// testing.TB interface satisfies its unexported method; only the calls the
+// guard makes are overridden.
+type publicTB struct {
+	testing.TB
+	skipped, fatal bool
+}
+
+func (p *publicTB) Helper()               {}
+func (p *publicTB) Skipf(string, ...any)  { p.skipped = true }
+func (p *publicTB) Fatalf(string, ...any) { p.fatal = true; panic(stopped{}) }
+
+func runPublic(dsn string) (p *publicTB) {
+	p = &publicTB{}
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(stopped); !ok {
+				panic(r)
+			}
+		}
+	}()
+	MustBeScratch(p, dsn)
+	return p
+}
+
+// unreachableDSN names a *_test database on a port nothing listens on, so the
+// REAL catalog reader runs and fails.
+const unreachableDSN = "postgres://u@127.0.0.1:1/x_test?sslmode=disable&connect_timeout=1"
+
+// TestPublicCheck_WiredToRealCatalogReader fails if Check / MustBeScratch stop
+// calling the real listDatabases (the internal tests all inject a fake).
+func TestPublicCheck_WiredToRealCatalogReader(t *testing.T) {
+	if err := Check(context.Background(), unreachableDSN); err == nil {
+		t.Fatal("Check accepted a server that cannot be inspected")
+	}
+}
+
+func TestPublicMustBeScratch_FatalsWhenServerCannotBeInspected(t *testing.T) {
+	p := runPublic(unreachableDSN)
+	if !p.fatal || p.skipped {
+		t.Fatalf("want Fatal and no Skip, got fatal=%v skipped=%v", p.fatal, p.skipped)
+	}
+	if p := runPublic(""); !p.skipped || p.fatal {
+		t.Fatalf("empty DSN: want Skip only, got fatal=%v skipped=%v", p.fatal, p.skipped)
 	}
 }

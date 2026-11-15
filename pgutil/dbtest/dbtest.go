@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,11 @@ func check(ctx context.Context, dsn string, list lister) error {
 		// pgx parse errors can quote the offending DSN text, password included.
 		return errors.New("cannot parse the test database DSN (details withheld: they may contain credentials)")
 	}
+	if len(cfg.Fallbacks) > 0 {
+		// A multi-host DSN connects to the first reachable host, so the
+		// server inspected here may not be the one the tests then use.
+		return errors.New("multi-host test database DSNs are refused: the inspected server would not be provably the one tests use")
+	}
 	if !isTestName(cfg.Database) {
 		return fmt.Errorf("database %q does not end in %q", cfg.Database, testSuffix)
 	}
@@ -106,6 +112,11 @@ func check(ctx context.Context, dsn string, list lister) error {
 // checkCatalog is the server-level policy: every non-template database must be
 // the maintenance database or end in "_test".
 func checkCatalog(dbs []string) error {
+	// A real server always lists the maintenance database; an empty or
+	// postgres-less list means the catalog read cannot be trusted.
+	if !slices.Contains(dbs, maintenanceDB) {
+		return fmt.Errorf("catalog does not list the %q database, so it cannot be trusted", maintenanceDB)
+	}
 	var foreign []string
 	for _, name := range dbs {
 		if name != maintenanceDB && !isTestName(name) {
