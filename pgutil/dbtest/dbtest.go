@@ -20,6 +20,7 @@ package dbtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -81,9 +82,13 @@ func Check(ctx context.Context, dsn string) error {
 }
 
 func check(ctx context.Context, dsn string, list lister) error {
+	if dsn == "" {
+		return errors.New("empty test database DSN")
+	}
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return fmt.Errorf("cannot parse DSN: %w", err)
+		// pgx parse errors can quote the offending DSN text, password included.
+		return errors.New("cannot parse the test database DSN (details withheld: they may contain credentials)")
 	}
 	if !isTestName(cfg.Database) {
 		return fmt.Errorf("database %q does not end in %q", cfg.Database, testSuffix)
@@ -118,6 +123,10 @@ func isTestName(name string) bool {
 	return len(name) > len(testSuffix) && strings.HasSuffix(name, testSuffix)
 }
 
+// listSQL schema-qualifies the catalog: a DSN can carry search_path=public,...
+// and a spoofed public.pg_database would otherwise be read instead.
+const listSQL = `SELECT datname FROM pg_catalog.pg_database WHERE NOT datistemplate`
+
 // listDatabases connects to the maintenance database (the target may not exist
 // yet) and reads the cluster-wide catalog.
 func listDatabases(ctx context.Context, cfg *pgx.ConnConfig) ([]string, error) {
@@ -128,7 +137,7 @@ func listDatabases(ctx context.Context, cfg *pgx.ConnConfig) ([]string, error) {
 		return nil, err
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	rows, err := conn.Query(ctx, `SELECT datname FROM pg_database WHERE NOT datistemplate`)
+	rows, err := conn.Query(ctx, listSQL)
 	if err != nil {
 		return nil, err
 	}

@@ -75,8 +75,26 @@ func TestCheck_FailsClosedWhenServerCannotBeInspected(t *testing.T) {
 }
 
 func TestCheck_RejectsUnparsableDSN(t *testing.T) {
-	if err := check(context.Background(), "postgres://u@h:notaport/x_test", neverListed(t)); err == nil {
+	err := check(context.Background(), "postgres://u:hunter2secret@h:notaport/x_test", neverListed(t))
+	if err == nil {
 		t.Fatal("unparsable DSN accepted")
+	}
+	if strings.Contains(err.Error(), "hunter2secret") {
+		t.Errorf("parse error leaks the password: %q", err)
+	}
+}
+
+func TestCheck_RejectsEmptyDSNEvenWithEnvDatabase(t *testing.T) {
+	// pgx falls back to PG* env vars for an empty DSN; that must not pass.
+	t.Setenv("PGDATABASE", "app_test")
+	if err := check(context.Background(), "", fakeCatalog("postgres")); err == nil {
+		t.Fatal("empty DSN accepted")
+	}
+}
+
+func TestListSQL_IsSchemaQualified(t *testing.T) {
+	if !strings.Contains(listSQL, "pg_catalog.pg_database") {
+		t.Fatalf("catalog query must be schema-qualified against search_path shadowing: %s", listSQL)
 	}
 }
 
