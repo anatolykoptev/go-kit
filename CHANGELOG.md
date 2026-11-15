@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.97.23](https://github.com/anatolykoptev/go-kit/compare/v0.97.22...v0.97.23) (2026-11-15)
+
+
+### Added
+
+* **pacing:** add Spread, a heavy-tailed human-like gap distribution ([#310](https://github.com/anatolykoptev/go-kit/issues/310)) ([b9d016d](https://github.com/anatolykoptev/go-kit/commit/b9d016dae760844f43b6b3db7a509f78b9e88320))
+* **pgutil/dbtest:** refuse DB tests on a server that holds real data ([#308](https://github.com/anatolykoptev/go-kit/issues/308)) ([6cdc2cd](https://github.com/anatolykoptev/go-kit/commit/6cdc2cd1de4647b597e71378a61f566ef408d0c9))
+
 ## [0.97.22](https://github.com/anatolykoptev/go-kit/compare/v0.97.21...v0.97.22) (2026-11-11)
 
 
