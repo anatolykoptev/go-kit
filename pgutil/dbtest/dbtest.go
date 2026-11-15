@@ -91,7 +91,7 @@ func check(ctx context.Context, dsn string, list lister) error {
 		// pgx parse errors can quote the offending DSN text, password included.
 		return errors.New("cannot parse the test database DSN (details withheld: they may contain credentials)")
 	}
-	if len(cfg.Fallbacks) > 0 {
+	if isMultiHost(cfg) {
 		// A multi-host DSN connects to the first reachable host, so the
 		// server inspected here may not be the one the tests then use.
 		return errors.New("multi-host test database DSNs are refused: the inspected server would not be provably the one tests use")
@@ -107,6 +107,19 @@ func check(ctx context.Context, dsn string, list lister) error {
 		return fmt.Errorf("server %s:%d is not a scratch server: %w", cfg.Host, cfg.Port, err)
 	}
 	return nil
+}
+
+// isMultiHost reports whether cfg can connect to a server other than
+// cfg.Host:cfg.Port. pgx also fills Fallbacks for TLS fallback (sslmode prefer
+// and allow, the default when unset); those share the primary's host and port
+// and are not a different server.
+func isMultiHost(cfg *pgx.ConnConfig) bool {
+	for _, fb := range cfg.Fallbacks {
+		if fb.Host != cfg.Host || fb.Port != cfg.Port {
+			return true
+		}
+	}
+	return false
 }
 
 // checkCatalog is the server-level policy: every non-template database must be
@@ -134,9 +147,11 @@ func isTestName(name string) bool {
 	return len(name) > len(testSuffix) && strings.HasSuffix(name, testSuffix)
 }
 
-// listSQL schema-qualifies the catalog: a DSN can carry search_path=public,...
+// listSQL filters the built-in templates by name, not by datistemplate: any
+// database can be flagged IS_TEMPLATE, which would hide it from the guard.
+// It schema-qualifies the catalog: a DSN can carry search_path=public,...
 // and a spoofed public.pg_database would otherwise be read instead.
-const listSQL = `SELECT datname FROM pg_catalog.pg_database WHERE NOT datistemplate`
+const listSQL = `SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ('template0', 'template1')`
 
 // listDatabases connects to the maintenance database (the target may not exist
 // yet) and reads the cluster-wide catalog.

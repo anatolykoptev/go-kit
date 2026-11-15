@@ -136,3 +136,6 @@ func testDB(t *testing.T) *pgxpool.Pool {
 - The guard checks database NAMES, not contents: a server whose databases are
   all named `*_test` but hold real data passes. Multi-host DSNs and servers
   whose catalog does not list `postgres` are refused.
+- The check inspects the server the DSN resolves to at check time. A pooler
+  (pgbouncer) mapping databases to different backends, a hostname with several
+  A/AAAA records, or a database created after the check are not covered.

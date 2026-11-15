@@ -88,11 +88,36 @@ func TestCheck_RefusesUntrustworthyCatalog(t *testing.T) {
 
 func TestCheck_RefusesMultiHostDSN(t *testing.T) {
 	for _, dsn := range []string{
-		"postgres://u:pw@a.example:5432,b.example:5432/app_test",
-		"host=a.example,b.example user=u dbname=app_test",
+		"postgres://u@a.example,b.example/app_test?sslmode=disable",
+		"host=a.example,b.example user=u dbname=app_test sslmode=disable",
+		// same host, different port is still a different server
+		"host=a.example,a.example port=5432,5433 user=u dbname=app_test sslmode=disable",
 	} {
 		if err := check(context.Background(), dsn, neverListed(t)); err == nil || !strings.Contains(err.Error(), "multi-host") {
 			t.Errorf("multi-host DSN %q: want multi-host refusal, got %v", dsn, err)
+		}
+	}
+}
+
+// TLS fallback (sslmode prefer/allow, and the unset default) makes pgx add a
+// Fallback entry for a single host; that must not read as multi-host.
+func TestIsMultiHost_SingleHostTLSFallbackIsNot(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://u:pw@localhost:5432/app_test",
+		"postgres://u:pw@localhost:5432/app_test?sslmode=prefer",
+		"postgres://u:pw@localhost:5432/app_test?sslmode=allow",
+		"host=localhost user=u dbname=app_test",
+	} {
+		cfg, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isMultiHost(cfg) {
+			t.Errorf("single-host DSN %q judged multi-host (fallbacks=%d)", dsn, len(cfg.Fallbacks))
+		}
+		err = check(context.Background(), dsn, fakeCatalog("postgres", "app_test"))
+		if err != nil {
+			t.Errorf("single-host DSN %q refused: %v", dsn, err)
 		}
 	}
 }
