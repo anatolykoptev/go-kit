@@ -177,7 +177,13 @@ func Middleware(reg *metrics.Registry, subsystem string, opts ...Option) func(ht
 			reg.Gauge(metrics.Label(durName, "method", r.Method, "path", path)).Set(elapsed)
 
 			if histVec != nil {
-				histVec.WithLabelValues(r.Method, path).Observe(elapsed)
+				// Same label value as the Label-built series above; a value
+				// the vec rejects (invalid UTF-8) is dropped and counted.
+				if h, err := histVec.GetMetricWithLabelValues(r.Method, metrics.SanitizeLabelValue(path)); err == nil {
+					h.Observe(elapsed)
+				} else {
+					metrics.RecordDroppedSample()
+				}
 			}
 
 			if cfg.responseSize && rw.written > 0 {

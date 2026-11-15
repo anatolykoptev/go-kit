@@ -68,10 +68,12 @@ func TestPrepareForTelegram(t *testing.T) {
 			wantContains: "<b>",
 		},
 		{
-			name:         "HTML script stripped",
+			// A non-whitelisted tag (<script>) is shown as escaped text instead
+			// of cutting the message; the genuine <b> keeps its formatting.
+			name:         "script is escaped next to surviving bold",
 			in:           "<b>safe</b><script>evil()</script>",
 			wantMode:     "HTML",
-			wantContains: "<b>safe</b>",
+			wantContains: "<b>safe</b>&lt;script&gt;evil()&lt;/script&gt;",
 		},
 		{
 			name:         "all modes return HTML parse mode",
@@ -104,8 +106,13 @@ func TestPrepareForTelegram_ScriptNeverLeaks(t *testing.T) {
 	if mode != "HTML" {
 		t.Errorf("mode = %q, want HTML", mode)
 	}
-	if strings.Contains(out, "document.cookie") {
-		t.Errorf("script content leaked: %q", out)
+	// Text is never silently dropped: the script source stays as inert,
+	// escaped text, and no raw <script> tag may reach Telegram.
+	if strings.Contains(out, "<script") || strings.Contains(out, "</script") {
+		t.Errorf("raw script tag leaked: %q", out)
+	}
+	if !strings.Contains(out, "document.cookie") {
+		t.Errorf("script text silently dropped: %q", out)
 	}
 	if !strings.Contains(out, "text") {
 		t.Errorf("legitimate content lost: %q", out)

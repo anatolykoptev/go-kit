@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.97.22](https://github.com/anatolykoptev/go-kit/compare/v0.97.21...v0.97.22) (2026-11-11)
+
+
+### Fixed
+
+* **telegram:** entity-safe split, strict HTML detection, safe Markdown links ([#302](https://github.com/anatolykoptev/go-kit/issues/302)) ([b191f1a](https://github.com/anatolykoptev/go-kit/commit/b191f1a41e0a058bf690739c73a8ed29408e1af6))
+
+## [0.97.21](https://github.com/anatolykoptev/go-kit/compare/v0.97.20...v0.97.21) (2026-11-11)
+
+
+### Added
+
+* **skills:** add the skills package (moved from skillkit) ([#300](https://github.com/anatolykoptev/go-kit/issues/300)) ([665f66c](https://github.com/anatolykoptev/go-kit/commit/665f66c910c20a7e4b53581b5a16fd868cf4add0))
+
+
+### Documentation
+
+* bring repository documents up to the repo-standards set ([#297](https://github.com/anatolykoptev/go-kit/issues/297)) ([18c5c93](https://github.com/anatolykoptev/go-kit/commit/18c5c93c98cb97811fb93169363e14415794d36d))
+
+## [0.97.20](https://github.com/anatolykoptev/go-kit/compare/v0.97.19...v0.97.20) (2026-11-03)
+
+
+### Fixed
+
+* **deps:** move to Go 1.27.3 and update dependencies ([#293](https://github.com/anatolykoptev/go-kit/issues/293)) ([7723b80](https://github.com/anatolykoptev/go-kit/commit/7723b80f8fe60f56bb8d006869fa10ff8d0bf313))
+* **httputil:** close the gaps in the SSRF guard ([#292](https://github.com/anatolykoptev/go-kit/issues/292)) ([b7b184f](https://github.com/anatolykoptev/go-kit/commit/b7b184fad0af91efd2c97f3b5df0d8e8315292dd))
+* **tracing:** send traces to /v1/traces when the endpoint has no path ([#290](https://github.com/anatolykoptev/go-kit/issues/290)) ([99bb7ac](https://github.com/anatolykoptev/go-kit/commit/99bb7ac45d93646e3e1e542ab694cd94eb5f945e))
+
+## [0.97.19](https://github.com/anatolykoptev/go-kit/compare/v0.97.18...v0.97.19) (2026-10-12)
+
+
+### Added
+
+* **httputil:** TrustedProxyClientIP — peer-gated, rightmost-untrusted XFF ([#285](https://github.com/anatolykoptev/go-kit/issues/285)) ([b2e63e5](https://github.com/anatolykoptev/go-kit/commit/b2e63e58283f9811994fa7907a0d90007d784efa))
+
+## [0.97.18](https://github.com/anatolykoptev/go-kit/compare/v0.97.17...v0.97.18) (2026-10-10)
+
+
+### Added
+
+* **svcauth:** destination-scoped X-Internal-Secret transport ([#282](https://github.com/anatolykoptev/go-kit/issues/282)) ([001cdff](https://github.com/anatolykoptev/go-kit/commit/001cdff70dcb7a051c704e89f387487efdf458b9))
+
+
+### Fixed
+
+* **metrics:** sanitize Label delimiters; never panic on a rejected label set ([#284](https://github.com/anatolykoptev/go-kit/issues/284)) ([01c9bad](https://github.com/anatolykoptev/go-kit/commit/01c9bad3ec4d964b6f9cd5a32fda07db308e68aa))
+
+## [0.97.17](https://github.com/anatolykoptev/go-kit/compare/v0.97.16...v0.97.17) (2026-10-03)
+
+
+### Added
+
+* **telegram:** scrub bot tokens out of errors and SDK logs (tgsafe, NewSafeBotAPI) ([#279](https://github.com/anatolykoptev/go-kit/issues/279)) ([150112f](https://github.com/anatolykoptev/go-kit/commit/150112fbf80511363a8ae1edab333b16f280c6bf))
+
+## [0.97.16](https://github.com/anatolykoptev/go-kit/compare/v0.97.15...v0.97.16) (2026-10-03)
+
+
+### Added
+
+* **voice/stt:** add OpenAI-compatible speech-to-text client ([#276](https://github.com/anatolykoptev/go-kit/issues/276)) ([6d4155d](https://github.com/anatolykoptev/go-kit/commit/6d4155d98a80d16037c1c74dcf14dbbf5e07972f))
+
+## [0.97.15](https://github.com/anatolykoptev/go-kit/compare/v0.97.14...v0.97.15) (2026-10-03)
+
+
+### Added
+
+* **voice:** add TTS package (edge-tts, Gemini, fallback) ([#274](https://github.com/anatolykoptev/go-kit/issues/274)) ([82690a3](https://github.com/anatolykoptev/go-kit/commit/82690a37c0d05a84ae61983f3b5abd076cdab572))
+
+
+### Fixed
+
+* **redirectmatch:** a capture can no longer choose where a redirect goes ([#272](https://github.com/anatolykoptev/go-kit/issues/272)) ([62e8b76](https://github.com/anatolykoptev/go-kit/commit/62e8b76b0c2498651cb0ae824a18c0cc683a7898))
+
 ## [0.97.14](https://github.com/anatolykoptev/go-kit/compare/v0.97.13...v0.97.14) (2026-09-23)
 
 

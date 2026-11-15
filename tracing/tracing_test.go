@@ -3,6 +3,9 @@ package tracing
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -122,3 +125,72 @@ func TestRecordError_SetsStatus(t *testing.T) {
 // Endpoint URL parsing is now delegated to otlptracehttp.WithEndpointURL.
 // We rely on the canonical OTel SDK behaviour (full URL with scheme) instead
 // of the legacy WithEndpoint(host:port) which couldn't tell scheme from path.
+
+// Silent-failure guard: with otlptracehttp >= 1.45, WithEndpointURL no longer
+// appends the signal path, so a pathless endpoint ("http://jaeger:4318", the
+// documented form) used to POST every span to "/" and lose them without any
+// warning. Goes through the real Setup -> exporter -> HTTP path.
+func TestSetup_PathlessEndpoint_PostsToV1Traces(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		posts []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if r.Method == http.MethodPost {
+			posts = append(posts, r.URL.Path)
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	prevTP, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+	t.Setenv(envEndpoint, "")
+
+	shutdown, err := Setup(context.Background(), "path-svc", WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	_, span := otel.Tracer("path-test").Start(context.Background(), "op")
+	span.End()
+	if err := shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(posts) == 0 {
+		t.Fatalf("no POST reached the collector; spans were dropped")
+	}
+	for _, p := range posts {
+		if p != "/v1/traces" {
+			t.Errorf("POST path = %q, want %q (all paths: %v)", p, "/v1/traces", posts)
+		}
+	}
+}
+
+func TestWithTracesPath(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"pathless", "http://jaeger:4318", "http://jaeger:4318/v1/traces"},
+		{"trailing slash", "http://jaeger:4318/", "http://jaeger:4318/v1/traces"},
+		{"existing path kept", "http://gw:4318/otlp/v1/traces", "http://gw:4318/otlp/v1/traces"},
+		{"other path kept", "http://gw:4318/custom", "http://gw:4318/custom"},
+		{"bare host:port untouched", "jaeger:4318", "jaeger:4318"},
+		{"bare ip:port untouched", "127.0.0.1:4318", "127.0.0.1:4318"},
+		{"https", "https://otel.example:4318", "https://otel.example:4318/v1/traces"},
+		{"query kept", "https://otel.example:4318?x=1", "https://otel.example:4318/v1/traces?x=1"},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := withTracesPath(tc.in); got != tc.want {
+				t.Errorf("withTracesPath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

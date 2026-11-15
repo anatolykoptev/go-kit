@@ -26,7 +26,6 @@ See also: [architecture.md](architecture.md) | [design.md](design.md)
 | go-job | cache, env, llm, metrics, strutil | — |
 | go-wp | cache, env, llm, metrics, strutil | — |
 | go-code | cache, env, llm | — |
-| go-hully | cache, env, llm, metrics, strutil | — |
 | go-startup | cache, env, llm, metrics, retry, strutil | — |
 | go-nerv | env, llm, metrics | — |
 | gigiena-teksta | env, llm, metrics | — |
@@ -170,7 +169,7 @@ Set/Delete to maintain the index.
 ```
 March 2026 (done):
   W2-1..W2-6  All Wave 2 items complete
-  Migration   go-nerv, gigiena-teksta, go-hully, go-startup migrated
+  Migration   go-nerv, gigiena-teksta, go-startup migrated
 
 April 2026 (done):
   W3-1  Schema constraint tags     — DONE
