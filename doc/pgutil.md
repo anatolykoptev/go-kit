@@ -106,3 +106,36 @@ query inside the connect function is preserved unmodified.
   whether or not the value was ever Ready.
 - For pool lifecycle inside a service, prefer one `Connect`+`defer Close` per
   database; don't share a `Lazy` between unrelated features.
+
+## dbtest: refuse to run tests on a shared server
+
+`pgutil/dbtest` guards Postgres-backed tests. A `_test` database name proves
+nothing, because such a database can be created on any server, including one
+that holds real data. `dbtest.MustBeScratch(t, dsn)` instead connects and
+refuses unless the server holds no database other than `postgres`, the
+templates and names ending in `_test`, and the target database name ends in
+`_test`.
+
+```go
+func testDB(t *testing.T) *pgxpool.Pool {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	dbtest.MustBeScratch(t, dsn) // skips on empty dsn, t.Fatal on refusal
+	...
+}
+```
+
+- An empty DSN skips, so a plain `go test` stays green without a database.
+- A set DSN that fails the check calls `t.Fatal`, never `t.Skip`, so a refusal
+  cannot hide.
+- A server that cannot be inspected is refused (fail closed).
+- There is no "role is not a superuser" escape: a restricted role sees the same
+  catalog, so the catalog is the only check that holds regardless of role.
+- A helper that creates scratch databases must name them `*_test`, otherwise
+  the next guard call on that server refuses it.
+- `dbtest.Check(ctx, dsn)` is the error-returning form for `TestMain`.
+- The guard checks database NAMES, not contents: a server whose databases are
+  all named `*_test` but hold real data passes. Multi-host DSNs and servers
+  whose catalog does not list `postgres` are refused.
+- The check inspects the server the DSN resolves to at check time. A pooler
+  (pgbouncer) mapping databases to different backends, a hostname with several
+  A/AAAA records, or a database created after the check are not covered.
