@@ -24,7 +24,9 @@ const (
 	// OpenAI-family 404 model_not_found (param is JSON null).
 	openAIModelNotFound404 = `{"error":{"message":"The model ` + "`gpt-5-x`" + ` does not exist or you do not have access to it.","type":"invalid_request_error","param":null,"code":"model_not_found"}}`
 	// A wrong base URL: every model answers the same routing 404.
-	htmlRouting404 = `<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1></body></html>`
+	// Codex review: route retirement (HTML), not model retirement. Must abort.
+	htmlRouteRetired404 = `<html>This API route is no longer available</html>`
+	htmlRouting404      = `<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1></body></html>`
 )
 
 // hitCountingHandler serves status+body and counts hits.
@@ -103,24 +105,34 @@ func TestChain_AdvancesOn400ModelIsUnavailable(t *testing.T) {
 	deadThenLive(t, http.StatusBadRequest, zenModelUnavailable400)
 }
 
-// A 404 without a model marker (wrong base URL) recurs on every model: abort on
-// the first instead of burning the chain.
-func TestChain_404WithoutModelMarkerAborts(t *testing.T) {
-	var hits1, hits2 atomic.Int32
-	s1 := httptest.NewServer(hitCountingHandler(&hits1, http.StatusNotFound, htmlRouting404))
-	defer s1.Close()
-	s2 := httptest.NewServer(hitCountingHandler(&hits2, http.StatusNotFound, htmlRouting404))
-	defer s2.Close()
+// A 404 without model-specific evidence recurs on every model: abort on the
+// first instead of burning the chain. Phrase markers count only inside a JSON
+// error object; HTML / plain text never qualify on phrases alone.
+func TestChain_404WithoutModelEvidenceAborts(t *testing.T) {
+	for name, body := range map[string]string{
+		"html_routing":       htmlRouting404,
+		"html_route_retired": htmlRouteRetired404,
+		"plain_text_model":   "model not found",
+		"json_no_model":      `{"error":{"message":"route not found"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var hits1, hits2 atomic.Int32
+			s1 := httptest.NewServer(hitCountingHandler(&hits1, http.StatusNotFound, body))
+			defer s1.Close()
+			s2 := httptest.NewServer(hitCountingHandler(&hits2, http.StatusNotFound, body))
+			defer s2.Close()
 
-	c := llm.NewClient("", "", "", llm.WithEndpoints([]llm.Endpoint{
-		{URL: s1.URL, Key: "k", Model: "first"},
-		{URL: s2.URL, Key: "k", Model: "second"},
-	}))
-	if _, err := c.Complete(context.Background(), "", "test"); err == nil {
-		t.Fatal("expected a marker-less 404 to abort the chain")
-	}
-	if hits1.Load() != 1 || hits2.Load() != 0 {
-		t.Errorf("hits = (%d, %d), want (1, 0): abort on first", hits1.Load(), hits2.Load())
+			c := llm.NewClient("", "", "", llm.WithEndpoints([]llm.Endpoint{
+				{URL: s1.URL, Key: "k", Model: "first"},
+				{URL: s2.URL, Key: "k", Model: "second"},
+			}))
+			if _, err := c.Complete(context.Background(), "", "test"); err == nil {
+				t.Fatal("expected a 404 without model evidence to abort the chain")
+			}
+			if hits1.Load() != 1 || hits2.Load() != 0 {
+				t.Errorf("hits = (%d, %d), want (1, 0): abort on first", hits1.Load(), hits2.Load())
+			}
+		})
 	}
 }
 
@@ -230,9 +242,50 @@ func TestCooldown_AllDeadStillSurfacesError(t *testing.T) {
 		llm.WithModelCooldown(llm.CooldownConfig{FailThreshold: 1}),
 	)
 	for i := range 3 {
+		before := hits.Load()
 		out, err := c.Complete(context.Background(), "", "test")
 		if err == nil {
 			t.Fatalf("call %d: expected error, got %q", i, out)
 		}
+		var ae *llm.APIError
+		if !errors.As(err, &ae) || ae.StatusCode != http.StatusGone {
+			t.Fatalf("call %d: err = %v, want the real upstream 410", i, err)
+		}
+		if hits.Load() == before {
+			t.Fatalf("call %d: no HTTP attempt made (fail-closed without probing upstream)", i)
+		}
+	}
+}
+
+// Proxy-local death must not skip the same model on another proxy: A's 502
+// "unknown provider for model m" cools (A, m) only; B still serves m.
+func TestCooldown_ProxyLocalDeathDoesNotSkipOtherProxy(t *testing.T) {
+	var aHits, bHits atomic.Int32
+	a := httptest.NewServer(hitCountingHandler(&aHits, http.StatusBadGateway, unknownProvider502))
+	defer a.Close()
+	var okB http.HandlerFunc = okChatHandler(t, "from-proxy-b")
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bHits.Add(1)
+		okB(w, r)
+	}))
+	defer b.Close()
+
+	c := llm.NewClient("", "", "",
+		llm.WithEndpoints(llm.BuildMultiProxyEndpoints(
+			[]llm.ProxySpec{{URL: a.URL, Key: "k"}, {URL: b.URL, Key: "k"}}, "m", nil)),
+		llm.WithModelCooldown(llm.CooldownConfig{FailThreshold: 1}),
+	)
+	for i := range 3 {
+		out, err := c.Complete(context.Background(), "", "test")
+		if err != nil || out != "from-proxy-b" {
+			t.Fatalf("call %d: got (%q, %v), want from-proxy-b (healthy proxy B must be tried)", i, out, err)
+		}
+	}
+	if got := bHits.Load(); got != 3 {
+		t.Errorf("B hits = %d, want 3", got)
+	}
+	// (A, m) is cooled after call 1 and skipped on calls 2 and 3.
+	if got := aHits.Load(); got != 1 {
+		t.Errorf("A hits = %d, want 1 (cooled for its own death)", got)
 	}
 }

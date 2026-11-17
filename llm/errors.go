@@ -160,11 +160,12 @@ var model404Terms = []string{
 // plain text) on every model, and the chain must abort on that rather than burn
 // every endpoint. Signals, any of:
 //   - error.param == "model" or error.code == "model_not_found" (OpenAI family);
-//   - error.type == "not_found_error" with the word "model" in the body
+//   - error.type == "not_found_error" with the word "model" in error.message
 //     (Anthropic: "model: claude-x");
-//   - the word "model" plus a model404Terms entry in the body;
-//   - "no longer available" / "end of life" alone (retirement phrases that no
-//     routing 404 emits; the OpenRouter body names the id, not the word "model").
+//   - in a JSON error object only: the word "model" plus a model404Terms entry
+//     in error.message, or "no longer available" / "end of life" alone (the
+//     OpenRouter body names the id, not the word "model"). HTML/plain-text
+//     bodies never qualify on phrases.
 func isModelNotFound404(apiErr *APIError) bool {
 	if apiErr.StatusCode != http.StatusNotFound {
 		return false
@@ -172,22 +173,45 @@ func isModelNotFound404(apiErr *APIError) bool {
 	if apiErr.Param == "model" || apiErr.Code == "model_not_found" {
 		return true
 	}
-	body := strings.ToLower(apiErr.Body)
-	if strings.Contains(body, "no longer available") || strings.Contains(body, "end of life") {
+	// Phrase markers need model-specific evidence: a structured JSON error
+	// object (the real OpenRouter/NVIDIA bodies are all `{"error":{"message":..}}`)
+	// whose message carries the phrase. HTML or plain-text 404s never qualify on
+	// phrases alone — "This API route is no longer available" is route
+	// retirement, not model retirement.
+	msg, ok := jsonErrorMessage(apiErr.Body)
+	if !ok {
+		return false
+	}
+	msg = strings.ToLower(msg)
+	if strings.Contains(msg, "no longer available") || strings.Contains(msg, "end of life") {
 		return true
 	}
-	if !strings.Contains(body, "model") {
+	if !strings.Contains(msg, "model") {
 		return false
 	}
 	if apiErr.Type == "not_found_error" {
 		return true
 	}
 	for _, t := range model404Terms {
-		if strings.Contains(body, t) {
+		if strings.Contains(msg, t) {
 			return true
 		}
 	}
 	return false
+}
+
+// jsonErrorMessage extracts error.message from a `{"error":{"message":"..."}}`
+// body. ok is false for HTML, plain text, or JSON without that shape.
+func jsonErrorMessage(body string) (msg string, ok bool) {
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &parsed) != nil || parsed.Error.Message == "" {
+		return "", false
+	}
+	return parsed.Error.Message, true
 }
 
 // isUnknownProvider reports whether a 502 body is the proxy's answer for an
