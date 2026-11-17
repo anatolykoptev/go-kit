@@ -150,7 +150,7 @@ func (c *Client) cooldownCandidates() (endpoints []Endpoint, skipCooled bool) {
 }
 
 // recordCooldownOutcome feeds an attempt result to the cooldown bookkeeping: a
-// success clears the model's cooldown; a quota-class failure drives it. No-op
+// success clears the model's cooldown; a quota-class or dead-model failure drives it. No-op
 // when cooldown is disabled.
 func (c *Client) recordCooldownOutcome(ep Endpoint, err error) {
 	if c.cooldown == nil {
@@ -160,9 +160,13 @@ func (c *Client) recordCooldownOutcome(ep Endpoint, err error) {
 		c.cooldown.recordSuccess(ep.Model)
 		return
 	}
-	if isQuotaError(err) {
-		var apiErr *APIError
-		_ = errors.As(err, &apiErr)
+	var apiErr *APIError
+	_ = errors.As(err, &apiErr)
+	// Quota-class failures and dead-model failovers both cool the model, so a
+	// retired/withdrawn model is skipped for the window instead of failing (and
+	// being failed over from) on every request. Request-shaped failovers (413,
+	// context overflow, empty completion) are not model health and do not cool.
+	if isQuotaError(err) || (apiErr != nil && isModelGone(apiErr)) {
 		var retryAfter time.Duration
 		if apiErr != nil {
 			retryAfter = apiErr.RetryAfter
