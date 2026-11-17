@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.24](https://github.com/anatolykoptev/go-kit/compare/v0.97.23...v0.97.24) (2026-11-17)
+
+
+### Fixed
+
+* **llm:** fail over and cool on dead models (404/410/502 unknown provider) ([#312](https://github.com/anatolykoptev/go-kit/issues/312)) ([0b75c69](https://github.com/anatolykoptev/go-kit/commit/0b75c690cf38c93b4c6aafaf984702ab5e8502eb))
+
 ## [0.97.23](https://github.com/anatolykoptev/go-kit/compare/v0.97.22...v0.97.23) (2026-11-15)
 
 
