@@ -263,7 +263,7 @@ func TestCooldown_ProxyLocalDeathDoesNotSkipOtherProxy(t *testing.T) {
 	var aHits, bHits atomic.Int32
 	a := httptest.NewServer(hitCountingHandler(&aHits, http.StatusBadGateway, unknownProvider502))
 	defer a.Close()
-	var okB http.HandlerFunc = okChatHandler(t, "from-proxy-b")
+	okB := okChatHandler(t, "from-proxy-b")
 	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bHits.Add(1)
 		okB(w, r)
