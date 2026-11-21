@@ -58,7 +58,7 @@ func NewChainMetrics(reg prometheus.Registerer) *ChainMetrics {
 	}, []string{"model", "outcome", "error_type"})
 	cooldown := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "llm_model_cooldown_active",
-		Help: "1 while a model is in quota cooldown (free-tier quota exhausted), 0 otherwise. A 1 is expected, not an alert.",
+		Help: "1 while a model is cooling on at least one endpoint (free-tier quota exhausted, or the model is gone upstream), 0 once every endpoint's window has lapsed. A 1 is expected, not an alert.",
 	}, []string{"model"})
 
 	reg.MustRegister(served, attempt, cooldown)

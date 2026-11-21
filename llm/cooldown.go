@@ -150,11 +150,16 @@ func (m *modelCooldown) cooling(model string) bool {
 	// Still our expired entry — clean it and fire the recovery edge.
 	delete(m.until, model)
 	delete(m.fails, model)
+	label := labelOf(model)
+	// The gauge is labelled by model only, so a sibling key (the same model on
+	// another endpoint) may still hold a live window: clearing the gauge here
+	// would claim the model recovered when only this key did (issue #313).
+	siblingCooling := m.siblingCoolingLocked(label, model)
 	onChange := m.onChange
 	m.mu.Unlock()
 
-	if onChange != nil {
-		fireCooldownObserver(onChange, labelOf(model), false, 0)
+	if onChange != nil && !siblingCooling {
+		fireCooldownObserver(onChange, label, false, 0)
 	}
 	return false
 }
@@ -190,6 +195,11 @@ func (m *modelCooldown) recordFailure(model string, retryAfter time.Duration) {
 	// fails long.
 	until, present := m.until[model]
 	wasActivelyCooling := present && m.now().Before(until)
+	// A second endpoint's window for the same model is not a model-level entry:
+	// the gauge is already 1, and a duplicate entry edge only adds a goroutine
+	// that can be scheduled after the model's final recovery edge (issue #313).
+	label := labelOf(model)
+	siblingCooling := m.siblingCoolingLocked(label, model)
 	if reached {
 		m.until[model] = m.now().Add(d)
 	}
@@ -199,8 +209,8 @@ func (m *modelCooldown) recordFailure(model string, retryAfter time.Duration) {
 	// Fire onChange on the transition INTO an active cooldown window (entry).
 	// Run async + recover so a misbehaving observer (panic/block) cannot stall or
 	// crash the request path. Mirrors CircuitBreaker.doTransition (circuit.go).
-	if reached && !wasActivelyCooling && onChange != nil {
-		fireCooldownObserver(onChange, labelOf(model), true, d)
+	if reached && !wasActivelyCooling && !siblingCooling && onChange != nil {
+		fireCooldownObserver(onChange, label, true, d)
 	}
 }
 
@@ -214,11 +224,15 @@ func (m *modelCooldown) recordSuccess(model string) {
 	_, wasCooling := m.until[model]
 	delete(m.fails, model)
 	delete(m.until, model)
+	label := labelOf(model)
+	// A 200 from one endpoint says nothing about the same model on another: keep
+	// the gauge at 1 while any sibling key still holds a live window (issue #313).
+	siblingCooling := m.siblingCoolingLocked(label, model)
 	onChange := m.onChange
 	m.mu.Unlock()
 
-	if wasCooling && onChange != nil {
-		fireCooldownObserver(onChange, labelOf(model), false, 0)
+	if wasCooling && !siblingCooling && onChange != nil {
+		fireCooldownObserver(onChange, label, false, 0)
 	}
 }
 
@@ -301,6 +315,26 @@ func deadCooldownKey(ep Endpoint) string {
 func labelOf(key string) string {
 	model, _, _ := strings.Cut(key, "\x00")
 	return model
+}
+
+// siblingCoolingLocked reports whether a cooldown key OTHER than except still
+// holds an UNEXPIRED window for the same model. Cooldown state is keyed by bare
+// model (quota) and by (URL, model) (dead model), but the active gauge is
+// labelled by model only: one key recovering — or lapsing — is not the model
+// recovering, so the recovery edge has to wait for the last live window across
+// the model's keys (issue #313). Expired siblings are ignored; their own
+// cooling() read sweeps them. Caller must hold m.mu.
+func (m *modelCooldown) siblingCoolingLocked(model, except string) bool {
+	now := m.now()
+	for key, until := range m.until {
+		if key == except || labelOf(key) != model {
+			continue
+		}
+		if now.Before(until) {
+			return true
+		}
+	}
+	return false
 }
 
 // endpointCooling reports whether ep is skipped: either its model is in quota
