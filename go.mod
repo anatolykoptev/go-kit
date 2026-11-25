@@ -3,7 +3,7 @@ module github.com/anatolykoptev/go-kit
 go 1.27.3
 
 require (
-	github.com/OvyFlash/telegram-bot-api v0.0.0-20260826195316-83c4eada97a1
+	github.com/OvyFlash/telegram-bot-api v0.0.0-20261109145030-db575b9b8ee0
 	github.com/RadhiFadlillah/whatlanggo v0.0.0-20240916001553-aac1f0f737fc
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/alicebob/miniredis/v2 v2.40.0

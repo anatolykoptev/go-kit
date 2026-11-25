@@ -2,8 +2,8 @@ github.com/LarsArtmann/gogenfilter/v3 v3.6.1 h1:0I3czhazOGPifqV0EpO+drXwsNNO+ZLg
 github.com/LarsArtmann/gogenfilter/v3 v3.6.1/go.mod h1:jiJIptVE+7HYYkCPJ03buhyT2jd44jPlNr5xsRZe56Y=
 github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
-github.com/OvyFlash/telegram-bot-api v0.0.0-20260826195316-83c4eada97a1 h1:mqNSQIrF/wfAj4yJfeVWJPXqk+XqMwDYB1zHbVfltj0=
-github.com/OvyFlash/telegram-bot-api v0.0.0-20260826195316-83c4eada97a1/go.mod h1:2nRUdsKyWhvezqW/rBGWEQdcTQeTtnbSNd2dgx76WYA=
+github.com/OvyFlash/telegram-bot-api v0.0.0-20261109145030-db575b9b8ee0 h1:uTq4maEd/1P+MZDusFMoEz0ezd1wxDFHAzD+vGRPuII=
+github.com/OvyFlash/telegram-bot-api v0.0.0-20261109145030-db575b9b8ee0/go.mod h1:2nRUdsKyWhvezqW/rBGWEQdcTQeTtnbSNd2dgx76WYA=
 github.com/RadhiFadlillah/whatlanggo v0.0.0-20240916001553-aac1f0f737fc h1:6aA31zw7fnfJ/G1ebisIesCDl44slkIVFqk3YTSadd8=
 github.com/RadhiFadlillah/whatlanggo v0.0.0-20240916001553-aac1f0f737fc/go.mod h1:PgrPWaMBxL1lyq1k5DEMqC0Y67R3pG1vEsHzxFXeDxc=
 github.com/alecthomas/assert/v2 v2.11.0 h1:2Q9r3ki8+JYXvGsDyBXwH3LcJ+WK5D0gc5E8vS6K3D0=
