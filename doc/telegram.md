@@ -66,6 +66,7 @@ Companion helpers:
 | `telegram/broadcast` | Bulk-message pacer with RPS budget + dead-letter callback |
 | `telegram/miniapp` | Mini App helpers: `ValidateInitData`, invoices, prepared inline messages |
 | `telegram/tgapi5` | Thin adapters over `tgbotapi.BotAPI` to satisfy the small `Sender`/`Answerer`/`Deleter` interfaces other subpackages depend on |
+| `telegram/files` | Download voice notes, photos and documents by `file_id`; the token-bearing file URL is built internally and never reaches callers, errors or logs |
 | `telegram/ops` | Operator-notifier with coalescing and on-demand probes |
 
 ## Command router (`telegram/cmd`)
@@ -226,6 +227,20 @@ prepared:= tgapi5.NewPreparedSender(bot)
 
 This indirection means the rest of `telegram/*` is testable without spinning
 up an actual bot — pass a fake implementing the interface.
+
+## Downloading files: never build the file URL yourself
+
+A Bot API file link (`https://api.telegram.org/file/bot<TOKEN>/<path>`) contains
+the bot token, and `net/http` prints it in every `*url.Error`. **Never build
+Telegram file URLs yourself** (no `bot.GetFileDirectURL`, no `File.Link`). Give
+`telegram/files` the `file_id`; it does `getFile`, builds the URL internally,
+bounds the size and returns an error that cannot carry the token:
+
+```go
+d, err := tgapi5.NewFileDownloader(bot, files.WithMaxSize(10<<20)) // or files.New(token, ...)
+rc, info, err := d.Download(ctx, msg.Voice.FileID)            // io.ReadCloser, Info{FileID, FileUniqueID, Size, MimeType}
+path, cleanup, err := d.DownloadToTemp(ctx, msg.Voice.FileID, dir)
+```
 
 ## Notes
 
