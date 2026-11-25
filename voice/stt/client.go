@@ -22,6 +22,7 @@ type Client struct {
 	diarizeSpeakers int
 	keywords        []string
 	customSpelling  map[string]string
+	prompt          string
 	retry           *retryConfig
 	cb              *circuitBreaker
 	apiKey          string
@@ -40,6 +41,25 @@ func WithLanguage(lang string) Option {
 // WithModel sets the model name (default: "moonshine-v2").
 func WithModel(model string) Option {
 	return func(c *Client) { c.model = model }
+}
+
+// WithPrompt sets the optional "prompt" form field (OpenAI/Groq): context text
+// such as names, tickers or domain words that steers recognition. Keep it short
+// (Whisper reads at most about 224 tokens of it) and free of secrets: it is sent
+// to the STT provider. An empty string sends no field.
+func WithPrompt(prompt string) Option {
+	return func(c *Client) { c.prompt = prompt }
+}
+
+// With returns a copy of the client with opts applied on top, for per-call
+// settings such as a prompt built from the current context. The copy shares the
+// HTTP client, retry config and circuit breaker; the original is unchanged.
+func (c *Client) With(opts ...Option) *Client {
+	cp := *c
+	for _, opt := range opts {
+		opt(&cp)
+	}
+	return &cp
 }
 
 // WithFormat sets the response format: "json" or "verbose_json" (default: "json").
