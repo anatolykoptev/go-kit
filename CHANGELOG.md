@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.97.25](https://github.com/anatolykoptev/go-kit/compare/v0.97.24...v0.97.25) (2026-11-25)
+
+
+### Added
+
+* **telegram/files:** download Telegram files by file_id without exposing the bot token ([#316](https://github.com/anatolykoptev/go-kit/issues/316)) ([56ef638](https://github.com/anatolykoptev/go-kit/commit/56ef638ce35ff81177cc49fc8d37f28b616b727e))
+* **voice/stt:** WithPrompt option and Client.With for per-call settings ([#318](https://github.com/anatolykoptev/go-kit/issues/318)) ([8c0205b](https://github.com/anatolykoptev/go-kit/commit/8c0205ba06641ed630368dfbda8c521dff670ca9))
+
+
+### Dependencies
+
+* **telegram:** bump OvyFlash telegram-bot-api to Bot API 10.4 ([#317](https://github.com/anatolykoptev/go-kit/issues/317)) ([bd9d3ac](https://github.com/anatolykoptev/go-kit/commit/bd9d3ac69b15dfa7ecbdfdddc6fee87cc08aa565))
+
 ## [0.97.24](https://github.com/anatolykoptev/go-kit/compare/v0.97.23...v0.97.24) (2026-11-17)
 
 
