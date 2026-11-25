@@ -81,6 +81,9 @@ func (c *Client) writeOptionalFields(w *multipart.Writer) error {
 		}
 		fields = append(fields, [2]string{"custom_spelling", string(b)})
 	}
+	if c.prompt != "" {
+		fields = append(fields, [2]string{"prompt", c.prompt})
+	}
 	for _, f := range fields {
 		if err := writeField(w, f[0], f[1]); err != nil {
 			return err
