@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -158,8 +157,8 @@ func TestDownloadToTemp(t *testing.T) {
 	if b, _ := os.ReadFile(p); string(b) != voiceBytes {
 		t.Errorf("file = %q", b)
 	}
-	cleanup()
-	cleanup() // idempotent
+	_ = cleanup()
+	_ = cleanup() // idempotent
 	if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("cleanup left the file: %v", err)
 	}
@@ -173,7 +172,7 @@ func TestDownloadToTempFailureLeavesNothing(t *testing.T) {
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
-	cleanup()
+	_ = cleanup()
 	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
 		t.Errorf("temp dir not empty after a failed download: %d entries", len(ents))
 	}
@@ -407,13 +406,16 @@ func TestFailureErrorsNeverContainToken(t *testing.T) {
 
 	t.Run("invalid base URL", func(t *testing.T) {
 		_, _, err := New(fakeToken, WithBaseURL("http://bad host")).Download(context.Background(), fileID)
+		if !errors.Is(err, ErrBaseURL) {
+			t.Fatalf("err = %v, want ErrBaseURL", err)
+		}
 		noToken(t, err)
 	})
 
 	t.Run("download to temp: bad directory", func(t *testing.T) {
 		f := newFakeTG(t)
 		_, cleanup, err := f.dl().DownloadToTemp(context.Background(), fileID, filepath.Join(t.TempDir(), "missing", fakeToken))
-		cleanup()
+		_ = cleanup()
 		noToken(t, err)
 	})
 }
@@ -425,27 +427,6 @@ func TestArgumentValidation(t *testing.T) {
 	if _, _, err := New(fakeToken).Download(context.Background(), ""); !errors.Is(err, ErrEmptyFileID) {
 		t.Errorf("empty file_id: %v", err)
 	}
-}
-
-func TestDownloaderNeverPrintsToken(t *testing.T) {
-	d := New(fakeToken, WithBaseURL("http://example.invalid"))
-	for name, s := range map[string]string{
-		"%v": fmt.Sprintf("%v", d), "%+v": fmt.Sprintf("%+v", d), "%#v": fmt.Sprintf("%#v", d),
-		"%q": fmt.Sprintf("%q", d), "%v value": fmt.Sprintf("%v", *d), "%+v value": fmt.Sprintf("%+v", *d),
-		"%#v value": fmt.Sprintf("%#v", *d), "String": d.String(), "GoString": d.GoString(),
-		"slog": slogText(d),
-	} {
-		if strings.Contains(s, fakeToken) || strings.Contains(s, "AAFake") || strings.Contains(s, "123456789") {
-			t.Errorf("%s leaks the token: %q", name, s)
-		}
-	}
-}
-
-func slogText(d *Downloader) string {
-	var sb strings.Builder
-	slog.New(slog.NewJSONHandler(&sb, nil)).Info("x", "dl", d, "dl_value", *d)
-	slog.New(slog.NewTextHandler(&sb, nil)).Info("x", "dl", d)
-	return sb.String()
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

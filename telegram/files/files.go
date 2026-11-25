@@ -7,12 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"io/fs"
+	"math"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anatolykoptev/go-kit/telegram/tgsafe"
@@ -28,7 +32,8 @@ const (
 	DefaultTimeout = 60 * time.Second
 
 	maxAPIResponse = 1 << 20 // getFile answers are a few hundred bytes
-	snippetLen     = 160
+	descLen        = 160     // cap on any server text placed in an error
+	maxExtLen      = 12
 	tempPattern    = "tgfile-*"
 )
 
@@ -40,6 +45,10 @@ var (
 	ErrNoToken = errors.New("telegram files: empty bot token")
 	// ErrEmptyFileID is returned for an empty file_id.
 	ErrEmptyFileID = errors.New("telegram files: empty file_id")
+	// ErrBaseURL is returned when the base URL is unusable: it must be https, or
+	// http on a loopback host (a local Bot API server or a test), and carry no
+	// credentials. The URL itself is never echoed.
+	ErrBaseURL = errors.New("telegram files: base URL must be https, or http on a loopback host, without credentials")
 )
 
 // Error is an HTTP or Bot API failure. It never contains the token or a URL.
@@ -47,6 +56,7 @@ type Error struct {
 	Op          string // "getFile" or "download"
 	StatusCode  int    // HTTP status, or the Bot API error_code when the HTTP status was 200
 	Description string // Bot API description or a short body snippet, scrubbed
+	cause       error  // e.g. the context error that cut the body read short
 }
 
 func (e *Error) Error() string {
@@ -56,6 +66,10 @@ func (e *Error) Error() string {
 	}
 	return s
 }
+
+// Unwrap returns the underlying read failure, if any, so errors.Is still sees
+// context.DeadlineExceeded when a timeout cut an error body short.
+func (e *Error) Unwrap() error { return e.cause }
 
 // Info describes a downloaded file. It deliberately has no path or URL field.
 type Info struct {
@@ -68,15 +82,15 @@ type Info struct {
 	MimeType string
 }
 
-// Downloader fetches Telegram files by file_id. Build it with [New]; it is safe
-// for concurrent use.
-type Downloader struct {
-	token   string
-	base    string
-	max     int64
-	timeout time.Duration
-	hc      *tgsafe.HTTPClient
+// Doer is the part of *http.Client the downloader needs.
+type Doer interface {
+	Do(*http.Request) (*http.Response, error)
 }
+
+// Downloader fetches Telegram files by file_id. Build it with [New]; it is safe
+// for concurrent use. The token lives behind an unexported pointer and every
+// fmt verb prints a redacted form.
+type Downloader struct{ s *state }
 
 // Option configures a [Downloader].
 type Option func(*config)
@@ -85,28 +99,33 @@ type config struct {
 	base    string
 	max     int64
 	timeout time.Duration
-	client  *http.Client
+	client  Doer
 }
 
 // WithMaxSize sets the size limit in bytes. A value <= 0 keeps [DefaultMaxSize]:
-// the limit cannot be switched off by accident.
+// the limit cannot be switched off by accident. Values above MaxInt64-1 are
+// clamped.
 func WithMaxSize(n int64) Option { return func(c *config) { c.max = n } }
 
 // WithTimeout bounds getFile plus the whole download, body included, on top of
 // the caller's ctx. A value <= 0 keeps [DefaultTimeout].
 func WithTimeout(d time.Duration) Option { return func(c *config) { c.timeout = d } }
 
-// WithHTTPClient supplies the transport (proxy, TLS settings). The client is
-// copied and wrapped, so its errors are scrubbed and redirects are refused; its
-// own Timeout still applies.
-func WithHTTPClient(hc *http.Client) Option { return func(c *config) { c.client = hc } }
+// WithHTTPClient supplies the transport (proxy, TLS settings, a bot's own
+// client). An *http.Client (or *tgsafe.HTTPClient) is copied with redirects
+// refused; any other Doer is used as is, and a Doer that follows redirects or
+// logs requests is outside this package's guarantees. Errors are scrubbed
+// either way.
+func WithHTTPClient(hc Doer) Option { return func(c *config) { c.client = hc } }
 
 // WithBaseURL points the downloader at a self-hosted Bot API server (or a test
 // server) instead of [DefaultBaseURL]. The bot<token> segments are appended.
+// The URL must be https, or http on a loopback host; anything else makes every
+// call return [ErrBaseURL].
 func WithBaseURL(u string) Option { return func(c *config) { c.base = u } }
 
 // New returns a Downloader for the bot token. An empty token is reported by the
-// first call as [ErrNoToken].
+// first call as [ErrNoToken], an unusable base URL as [ErrBaseURL].
 func New(token string, opts ...Option) *Downloader {
 	cfg := config{base: DefaultBaseURL, max: DefaultMaxSize, timeout: DefaultTimeout}
 	for _, o := range opts {
@@ -115,116 +134,197 @@ func New(token string, opts ...Option) *Downloader {
 	if cfg.max <= 0 {
 		cfg.max = DefaultMaxSize
 	}
+	cfg.max = min(cfg.max, math.MaxInt64-1) // max+1 is the read bound: no overflow
 	if cfg.timeout <= 0 {
 		cfg.timeout = DefaultTimeout
 	}
 	if cfg.base == "" {
 		cfg.base = DefaultBaseURL
 	}
-	base := http.Client{}
-	if cfg.client != nil {
-		base = *cfg.client
-	}
-	base.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Downloader{
-		token:   token,
-		base:    strings.TrimRight(cfg.base, "/"),
-		max:     cfg.max,
-		timeout: cfg.timeout,
-		hc:      tgsafe.NewHTTPClient(&base, token),
-	}
+	s := &state{token: token, max: cfg.max, timeout: cfg.timeout}
+	s.base, s.cfgErr = checkBase(cfg.base)
+	s.hc = buildDoer(cfg.client, token)
+	return &Downloader{s: s}
 }
 
-// String, GoString and LogValue keep the token out of every formatting path
-// (%v, %+v, %#v, slog).
-func (d Downloader) String() string { return "files.Downloader{token: <redacted>}" }
+// checkBase accepts https URLs and http URLs on a loopback host, without
+// credentials.
+func checkBase(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return "", ErrBaseURL
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return "", ErrBaseURL
+		}
+	default:
+		return "", ErrBaseURL
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
 
-// GoString implements fmt.GoStringer; see [Downloader.String].
-func (d Downloader) GoString() string { return d.String() }
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-// LogValue implements slog.LogValuer; see [Downloader.String].
-func (d Downloader) LogValue() slog.Value { return slog.StringValue(d.String()) }
+func buildDoer(c Doer, token string) Doer {
+	var hc *http.Client
+	switch v := c.(type) {
+	case nil:
+		hc = &http.Client{}
+	case *http.Client:
+		if v == nil {
+			hc = &http.Client{}
+			break
+		}
+		cp := *v
+		hc = &cp
+	case *tgsafe.HTTPClient:
+		cp := *v.Client()
+		hc = &cp
+	default:
+		return safeDoer{inner: c, token: token}
+	}
+	hc.CheckRedirect = noRedirect
+	return tgsafe.NewHTTPClient(hc, token)
+}
 
-// redact is the single exit gate for every error the package returns.
-func (d *Downloader) redact(err error) error { return tgsafe.Error(err, d.token) }
+// safeDoer scrubs the errors of a caller-supplied Doer.
+type safeDoer struct {
+	inner Doer
+	token string
+}
 
-// scrub cleans text that came from the network. It runs where an *Error is
-// built, so the typed error survives (tgsafe.Error would replace a typed error
-// whose text holds the token with a message-only one and break errors.As); the
-// exit gate in redact is the second line.
-func (d *Downloader) scrub(s string) string { return tgsafe.Scrub(s, d.token) }
-
-func (d *Downloader) apiError(op string, code int, desc string) *Error {
-	return &Error{Op: op, StatusCode: code, Description: d.scrub(desc)}
+func (d safeDoer) Do(req *http.Request) (*http.Response, error) {
+	resp, err := d.inner.Do(req)
+	return resp, tgsafe.Error(err, d.token)
 }
 
 // Download resolves fileID with getFile, fetches it and returns the body. The
 // caller closes it; the reader enforces the size limit and the timeout while it
 // is read. Every error is free of the token and of the URL.
 func (d *Downloader) Download(ctx context.Context, fileID string) (io.ReadCloser, Info, error) {
-	rc, info, _, err := d.open(ctx, fileID)
+	rc, info, _, err := d.s.open(ctx, fileID)
 	if err != nil {
-		return nil, Info{}, d.redact(err)
+		return nil, Info{}, d.s.redact(err)
 	}
 	return rc, info, nil
 }
 
 // DownloadToTemp downloads fileID into a new file in dir ("" means os.TempDir())
-// and returns its path. cleanup removes the file; it is never nil and safe to
-// call more than once, including after an error. The file name keeps the
-// extension Telegram reported (".oga", ".jpg"), which ffmpeg and STT servers
-// use to sniff the format.
-func (d *Downloader) DownloadToTemp(ctx context.Context, fileID, dir string) (string, func(), error) {
-	noop := func() {}
-	rc, _, ext, err := d.open(ctx, fileID)
+// and returns its path. cleanup removes the file; it is never nil, idempotent,
+// and removes only the file this call created (a replacement placed at the same
+// path is left alone). The file is also removed on every failure path, panic
+// included. The name keeps the extension Telegram reported (".oga", ".jpg"),
+// which ffmpeg and STT servers use to sniff the format.
+func (d *Downloader) DownloadToTemp(ctx context.Context, fileID, dir string) (string, func() error, error) {
+	noop := func() error { return nil }
+	rc, _, ext, err := d.s.open(ctx, fileID)
 	if err != nil {
-		return "", noop, d.redact(err)
+		return "", noop, d.s.redact(err)
 	}
 	defer rc.Close()
 	f, err := os.CreateTemp(dir, tempPattern+ext)
 	if err != nil {
-		return "", noop, d.redact(fmt.Errorf("telegram files: create temp file: %w", err))
+		return "", noop, d.s.redact(fmt.Errorf("telegram files: create temp file: %w", err))
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", noop, d.s.redact(fmt.Errorf("telegram files: stat temp file: %w", err))
 	}
 	name := f.Name()
-	cleanup := func() { _ = os.Remove(name) }
+	remove := newRemover(name, fi)
+	cleanup := func() error { return d.s.redact(remove()) }
+	done := false
+	defer func() {
+		if !done { // error return or panic
+			_ = f.Close()
+			_ = remove()
+		}
+	}()
 	_, err = io.Copy(f, rc)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		cleanup()
-		return "", noop, d.redact(fmt.Errorf("telegram files: write temp file: %w", err))
+		return "", noop, d.s.redact(fmt.Errorf("telegram files: write temp file: %w", err))
 	}
+	done = true
 	return name, cleanup, nil
+}
+
+// newRemover returns an idempotent remover for the file name that was created as
+// fi: it unlinks only if the path still holds that very file.
+func newRemover(name string, fi fs.FileInfo) func() error {
+	var (
+		once sync.Once
+		rerr error
+	)
+	return func() error {
+		once.Do(func() {
+			cur, err := os.Lstat(name)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+			case err != nil:
+				rerr = err
+			case !os.SameFile(fi, cur):
+			default:
+				if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					rerr = err
+				}
+			}
+		})
+		return rerr
+	}
 }
 
 // open does getFile and starts the download. Errors are raw: the exported
 // callers redact them.
-func (d *Downloader) open(ctx context.Context, fileID string) (io.ReadCloser, Info, string, error) {
-	if d.token == "" {
+func (s *state) open(ctx context.Context, fileID string) (io.ReadCloser, Info, string, error) {
+	switch {
+	case s.cfgErr != nil:
+		return nil, Info{}, "", s.cfgErr
+	case s.token == "":
 		return nil, Info{}, "", ErrNoToken
-	}
-	if fileID == "" {
+	case fileID == "":
 		return nil, Info{}, "", ErrEmptyFileID
 	}
-	ctx, cancel := context.WithTimeout(ctx, d.timeout)
-	info, filePath, err := d.getFile(ctx, fileID)
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	info, filePath, err := s.getFile(ctx, fileID)
 	if err != nil {
 		cancel()
 		return nil, Info{}, "", err
 	}
-	if info.Size > d.max {
+	if info.Size > s.max {
 		cancel()
-		return nil, Info{}, "", fmt.Errorf("%w: declared %d bytes, limit %d", ErrTooLarge, info.Size, d.max)
+		return nil, Info{}, "", fmt.Errorf("%w: declared %d bytes, limit %d", ErrTooLarge, info.Size, s.max)
 	}
-	body, contentType, err := d.fetch(ctx, filePath)
+	body, contentType, err := s.fetch(ctx, filePath)
 	if err != nil {
 		cancel()
 		return nil, Info{}, "", err
 	}
-	ext := path.Ext(filePath)
-	info.MimeType = resolveMime(contentType, ext)
-	return &limitedBody{rc: body, lr: io.LimitReader(body, d.max+1), max: d.max, cancel: cancel, d: d}, info, ext, nil
+	ext := safeExt(path.Ext(filePath))
+	info.MimeType = s.scrub(resolveMime(contentType, ext))
+	return &limitedBody{rc: body, lr: io.LimitReader(body, s.max+1), max: s.max, cancel: cancel, s: s}, info, ext, nil
+}
+
+// safeExt keeps a file extension usable in a temp-file pattern: short, with
+// letters, digits and dots only.
+func safeExt(ext string) string {
+	if len(ext) > maxExtLen {
+		return ""
+	}
+	for _, r := range ext {
+		if r != '.' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return ""
+		}
+	}
+	return ext
 }
 
 type getFileResponse struct {
@@ -239,17 +339,26 @@ type getFileResponse struct {
 	} `json:"result"`
 }
 
-func (d *Downloader) getFile(ctx context.Context, fileID string) (Info, string, error) {
+// apiError builds a typed error whose text is scrubbed in full and only then
+// cut to descLen. Scrubbing first matters: a token straddling the cut would
+// otherwise survive as an unrecognisable fragment.
+func (s *state) apiError(op string, code int, desc string) *Error {
+	return &Error{Op: op, StatusCode: code, Description: truncate(s.scrub(desc), descLen)}
+}
+
+func collapse(raw []byte) string { return strings.Join(strings.Fields(string(raw)), " ") }
+
+func (s *state) getFile(ctx context.Context, fileID string) (Info, string, error) {
 	body, err := json.Marshal(map[string]string{"file_id": fileID})
 	if err != nil {
 		return Info{}, "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.base+"/bot"+d.token+"/getFile", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+"/bot"+s.token+"/getFile", bytes.NewReader(body))
 	if err != nil {
 		return Info{}, "", fmt.Errorf("telegram files: getFile: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := d.hc.Do(req)
+	resp, err := s.hc.Do(req)
 	if err != nil {
 		return Info{}, "", fmt.Errorf("telegram files: getFile: %w", err)
 	}
@@ -262,55 +371,53 @@ func (d *Downloader) getFile(ctx context.Context, fileID string) (Info, string, 
 	jerr := json.Unmarshal(raw, &r)
 	switch {
 	case jerr != nil:
-		return Info{}, "", d.apiError("getFile", resp.StatusCode, "unreadable response: "+snippet(raw))
+		return Info{}, "", s.apiError("getFile", resp.StatusCode, "unreadable response: "+collapse(raw))
 	case resp.StatusCode != http.StatusOK || !r.OK:
 		code := resp.StatusCode
 		if code == http.StatusOK {
 			code = r.ErrorCode
 		}
-		return Info{}, "", d.apiError("getFile", code, r.Description)
+		return Info{}, "", s.apiError("getFile", code, r.Description)
 	case r.Result.FilePath == "":
-		return Info{}, "", d.apiError("getFile", resp.StatusCode, "response has no file_path: "+snippet(raw))
+		return Info{}, "", s.apiError("getFile", resp.StatusCode, "response has no file_path: "+collapse(raw))
 	}
-	return Info{FileID: r.Result.FileID, FileUniqueID: r.Result.FileUniqueID, Size: r.Result.FileSize}, r.Result.FilePath, nil
+	return Info{
+		FileID:       truncate(s.scrub(r.Result.FileID), descLen),
+		FileUniqueID: truncate(s.scrub(r.Result.FileUniqueID), descLen),
+		Size:         r.Result.FileSize,
+	}, r.Result.FilePath, nil
 }
 
-func (d *Downloader) fetch(ctx context.Context, filePath string) (io.ReadCloser, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.base+"/file/bot"+d.token+"/"+strings.TrimLeft(filePath, "/"), nil)
+func (s *state) fetch(ctx context.Context, filePath string) (io.ReadCloser, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.base+"/file/bot"+s.token+"/"+strings.TrimLeft(filePath, "/"), nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("telegram files: download: build request: %w", err)
 	}
-	resp, err := d.hc.Do(req)
+	resp, err := s.hc.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("telegram files: download: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponse))
-		return nil, "", d.apiError("download", resp.StatusCode, describe(raw))
+		raw, rerr := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponse))
+		e := s.apiError("download", resp.StatusCode, describe(raw))
+		e.cause = rerr // keeps errors.Is(ctx errors) when the read was cut short
+		return nil, "", e
 	}
-	if resp.ContentLength > d.max {
+	if resp.ContentLength > s.max {
 		resp.Body.Close()
-		return nil, "", fmt.Errorf("%w: Content-Length %d, limit %d", ErrTooLarge, resp.ContentLength, d.max)
+		return nil, "", fmt.Errorf("%w: Content-Length %d, limit %d", ErrTooLarge, resp.ContentLength, s.max)
 	}
 	return resp.Body, resp.Header.Get("Content-Type"), nil
 }
 
-// describe returns the Bot API description of an error body, else a snippet.
+// describe returns the Bot API description of an error body, else the body.
 func describe(raw []byte) string {
 	var r getFileResponse
 	if json.Unmarshal(raw, &r) == nil && r.Description != "" {
 		return r.Description
 	}
-	return snippet(raw)
-}
-
-func snippet(raw []byte) string {
-	s := strings.Join(strings.Fields(string(raw)), " ")
-	if len(s) > snippetLen {
-		s = s[:snippetLen] + "..."
-	}
-	return s
+	return collapse(raw)
 }
 
 func resolveMime(contentType, ext string) string {
@@ -325,14 +432,15 @@ func resolveMime(contentType, ext string) string {
 
 // limitedBody enforces the size limit while reading and releases the timeout
 // context on Close. It reads max+1 bytes at most, so a stream that overshoots is
-// detected and cut off with ErrTooLarge instead of being delivered.
+// detected and cut off with ErrTooLarge instead of being delivered. Every error
+// it returns, Close included, goes through the redaction gate.
 type limitedBody struct {
 	rc     io.ReadCloser
 	lr     io.Reader
 	max    int64
 	n      int64
 	cancel context.CancelFunc
-	d      *Downloader
+	s      *state
 }
 
 func (b *limitedBody) Read(p []byte) (int, error) {
@@ -340,15 +448,18 @@ func (b *limitedBody) Read(p []byte) (int, error) {
 	b.n += int64(n)
 	if b.n > b.max {
 		n -= int(b.n - b.max) // the one byte past the limit is not delivered
-		return max(n, 0), b.d.redact(fmt.Errorf("%w: stream exceeded %d bytes", ErrTooLarge, b.max))
+		return max(n, 0), b.s.redact(fmt.Errorf("%w: stream exceeded %d bytes", ErrTooLarge, b.max))
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		err = b.d.redact(fmt.Errorf("telegram files: download: read: %w", err))
+	if err != nil && err != io.EOF { //nolint:errorlint // only a bare io.EOF is the clean end; anything else is redacted
+		err = b.s.redact(fmt.Errorf("telegram files: download: read: %w", err))
 	}
 	return n, err
 }
 
 func (b *limitedBody) Close() error {
 	defer b.cancel()
-	return b.rc.Close()
+	if err := b.rc.Close(); err != nil {
+		return b.s.redact(fmt.Errorf("telegram files: download: close: %w", err))
+	}
+	return nil
 }

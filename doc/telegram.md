@@ -237,7 +237,7 @@ Telegram file URLs yourself** (no `bot.GetFileDirectURL`, no `File.Link`). Give
 bounds the size and returns an error that cannot carry the token:
 
 ```go
-d := tgapi5.NewFileDownloader(bot, files.WithMaxSize(10<<20)) // or files.New(token, ...)
+d, err := tgapi5.NewFileDownloader(bot, files.WithMaxSize(10<<20)) // or files.New(token, ...)
 rc, info, err := d.Download(ctx, msg.Voice.FileID)            // io.ReadCloser, Info{FileID, FileUniqueID, Size, MimeType}
 path, cleanup, err := d.DownloadToTemp(ctx, msg.Voice.FileID, dir)
 ```
