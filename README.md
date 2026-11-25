@@ -45,7 +45,7 @@ These packages have no section below; the linked guide or the package documentat
 | [`session`](doc/session.md) | Conversation memory for chat agents with memory, file and Redis stores |
 | [`skills`](doc/skills.md) | agentskills.io `SKILL.md` loader — frontmatter parsing, tiered catalog (dir/embed.FS/plugin), env-override hot-reload, observer/tracer hooks, locale routing |
 | [`svcauth`](svcauth) | Destination-scoped service-to-service credential for outbound requests |
-| [`telegram`](doc/telegram.md) | Telegram formatting, keyboards, FSM, broadcast and safe-logging helpers |
+| [`telegram`](doc/telegram.md) | Telegram formatting, keyboards, FSM, broadcast and safe-logging helpers; file downloads by `file_id` (`telegram/files`): never build Telegram file URLs yourself, they carry the bot token |
 | [`toolutil`](doc/toolutil.md) | Argument extraction helpers for MCP tool handlers |
 | [`tracing`](doc/tracing.md) | One-call OpenTelemetry bootstrap |
 | [`uploads`](doc/uploads.md) | Canonical filesystem layout for files a service produces |
